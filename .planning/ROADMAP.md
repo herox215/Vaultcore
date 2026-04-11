@@ -34,7 +34,13 @@ VaultCore v0.1 delivers a local, Markdown-first note app built on Tauri 2 + Rust
   3. User opens a `.md` file and the CodeMirror 6 editor renders it with Markdown syntax highlighting and inline live-preview (bold/italic/headings/inline code/lists), and keystrokes respond at 60 fps
   4. User edits the file, waits ~2 seconds, and sees the change on disk without pressing save; Cmd/Ctrl+B, Cmd/Ctrl+I, Cmd/Ctrl+K wrap selections as expected
   5. If the last-opened vault path is no longer reachable the app returns to the Welcome screen without crashing and surfaces a toast carrying a `VaultError` variant
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 01-00-scaffold-test-infra-PLAN.md — Wave 0: Tauri + Svelte 5 scaffold, Tailwind v4 + CSS variables, strict tsconfig, Vitest + jsdom, every REQ-ID test skeleton (it.todo), Rust module tree + #[ignore] cargo test stubs, RC-02 decision locked
+- [ ] 01-01-backend-spine-PLAN.md — Wave 1: Full VaultError enum (ERR-01), vault.rs commands (open_vault/get_recent_vaults/get_vault_stats) with canonicalize + FsExt runtime scope, recent-vaults JSON with FIFO-10 + dedupe, files.rs (read_file UTF-8 guard, write_file vault-scope guard, SHA-256 hash return), every Wave 0 cargo stub filled in and green
+- [ ] 01-02-frontend-welcome-PLAN.md — Wave 2: Typed VaultError TS interface, src/ipc/commands.ts wrappers, four classic writable stores (vault/editor/toast/progress) per D-06/RC-01, UI-SPEC Welcome screen + RecentVaultRow + ToastContainer, App.svelte auto-load flow with VAULT-05 fallback, 21+ Vitest assertions green
+- [ ] 01-03-editor-autosave-PLAN.md — Wave 3: CodeMirror 6 wrapper with RC-02 explicit extension list (no basicSetup/lineNumbers/foldGutter), theme.ts CSS-variable HighlightStyle (H1=26/H2=22/H3=18), wrapSelection helper with toggle-off for Mod+B/I/K, autoSaveExtension 2s idle debounce on docChanged, CMEditor.svelte storing EditorView in plain `let` (RC-01/Risk-3 mitigation), 10 new EDIT-04/EDIT-09 assertions green
+- [ ] 01-04-progress-filelist-wireup-PLAN.md — Wave 4: open_vault two-pass walk with throttled vault://index_progress emit and sorted file_list return, typed listenIndexProgress wrapper, UI-SPEC ProgressBar, D-14 flat VaultView + FileListRow with click-to-open, CMEditor onSave → writeFile with toast fallback, end-to-end wire-up, Phase 1 manual verification checkpoint against every ROADMAP success criterion
 **UI hint**: yes
 
 ### Phase 2: Vault

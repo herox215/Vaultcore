@@ -4,8 +4,8 @@ milestone: v0.1
 milestone_name: milestone
 status: executing
 stopped_at: Phase 1 UI-SPEC approved
-last_updated: "2026-04-11T19:44:35.513Z"
-last_activity: 2026-04-11 -- Phase 01 planning complete
+last_updated: "2026-04-11T19:52:29.425Z"
+last_activity: 2026-04-11 -- Phase 01 execution started
 progress:
   total_phases: 6
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Stay fluid at 100,000+ notes — open, search, link, and edit a vault of that size without perceptible lag.
-**Current focus:** Phase 1 — Skeleton (Tauri 2 + CM6 scaffold, open a vault, edit and auto-save a single `.md` file)
+**Current focus:** Phase 01 — skeleton
 
 ## Current Position
 
-Phase: 1 of 6 (Skeleton)
-Plan: 0 of TBD in current phase
-Status: Ready to execute
-Last activity: 2026-04-11 -- Phase 01 planning complete
+Phase: 01 (skeleton) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 01
+Last activity: 2026-04-11 -- Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
