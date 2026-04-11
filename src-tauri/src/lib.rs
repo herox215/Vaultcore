@@ -1,3 +1,9 @@
+pub mod error;
+pub mod commands;
+
+#[cfg(test)]
+mod tests;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
