@@ -49,21 +49,27 @@ Exceptions: touch targets for clickable file-list rows use a minimum height of 3
 
 ## Typography
 
+**App-chrome typography** (4 declared sizes, 2 weights):
+
 | Role | Size | Weight | Line Height | Usage |
 |------|------|--------|-------------|-------|
 | Body | 14px | 400 | 1.5 | File list paths, recent-vault items, toast messages, progress file name |
-| Label | 12px | 500 | 1.4 | Progress counter ("12,483 / 100,000"), secondary UI labels |
-| Heading | 20px | 600 | 1.2 | Welcome screen app name "VaultCore" |
+| Label | 12px | 400 | 1.4 | Progress counter ("12,483 / 100,000"), secondary UI labels, recent-vault timestamps |
+| Heading | 20px | 700 | 1.2 | Welcome screen app name "VaultCore" |
 | Display | 28px | 700 | 1.1 | Not used in Phase 1 (reserved for Phase 5 onboarding) |
 
-**Editor typography (CodeMirror 6 — separate from app chrome):**
+**Weights:** 2 weights — 400 (body, label, secondary text) and 700 (headings, bold marks).
+
+**Editor typography (CodeMirror 6 — document-content typography, not app-chrome):**
+
+The CM6 heading sizes below govern Markdown document content rendered inside the editor. They are driven by Markdown heading semantics, not the app-chrome size system, and are excluded from the 4-size app-chrome cap.
 
 | Element | Size | Weight | Notes |
 |---------|------|--------|-------|
 | Editor body | 15px | 400 | CM6 default; comfortable prose reading size |
 | H1 | 26px | 700 | Scaled via CM6 theme extension |
-| H2 | 22px | 600 | Scaled via CM6 theme extension |
-| H3 | 18px | 600 | Scaled via CM6 theme extension |
+| H2 | 22px | 700 | Scaled via CM6 theme extension |
+| H3 | 18px | 700 | Scaled via CM6 theme extension |
 | Inline code | 13px | 400 | Monospace: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace |
 
 **Font family (app chrome):** `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
@@ -120,18 +126,18 @@ All values declared as Tailwind CSS variables. The CSS variable name is the sour
 **Layout:** Centered card — single column, vertically centered in the viewport, max-width 480px, 32px horizontal padding, 48px vertical padding inside the card. Card has `--color-surface` background, 1px `--color-border` border, 8px border-radius, subtle box-shadow (`0 1px 3px rgba(0,0,0,0.08)`).
 
 **Structure (top to bottom):**
-1. App wordmark "VaultCore" — Heading role (20px/600), color `--color-text`
+1. App wordmark "VaultCore" — Heading role (20px/700), color `--color-text`
 2. Tagline — Body role (14px/400), color `--color-text-muted`: "A faster Markdown workspace for large vaults."
 3. "Open vault" button — accent background, white text, 16px horizontal padding, 8px vertical padding, 6px border-radius, full width of card
 4. Divider line — `--color-border`, 1px, 24px vertical margin
-5. Recent vaults section heading — Label role (12px/500), `--color-text-muted`, uppercase tracking: "RECENT VAULTS"
+5. Recent vaults section heading — Label role (12px/400), `--color-text-muted`, uppercase tracking: "RECENT VAULTS"
 6. Recent vaults list — scrollable, max 10 items, each item is a clickable row (see below)
 7. Empty state (when list is empty) — see copywriting contract
 
 **Recent vault list item:**
 - Full width clickable row, 32px min-height, 8px vertical padding, 16px horizontal padding
 - Path displayed: truncated in the **middle** using CSS `direction: rtl; text-overflow: ellipsis` — preserves the filename at the end, hides the long middle path. Visible: `/Users/.../my-vault` becomes `/Users/…/my-vault`
-- Last-opened timestamp: right-aligned, Label role (12px/500), `--color-text-muted`, relative format ("2 days ago")
+- Last-opened timestamp: right-aligned, Label role (12px/400), `--color-text-muted`, relative format ("2 days ago")
 - Hover state: background `--color-accent-bg`, left border 2px `--color-accent`
 - No icon (no icon library in Phase 1)
 
@@ -160,8 +166,8 @@ All values declared as Tailwind CSS variables. The CSS variable name is the sour
 - `.cm-cursor`: `border-left-color: var(--color-accent)`
 - `.cm-selectionBackground`: `background: var(--color-accent-bg)`
 - `h1` (via HighlightStyle): `font-size: 26px`, `font-weight: 700`, color `--color-text`
-- `h2`: `font-size: 22px`, `font-weight: 600`
-- `h3`: `font-size: 18px`, `font-weight: 600`
+- `h2`: `font-size: 22px`, `font-weight: 700`
+- `h3`: `font-size: 18px`, `font-weight: 700`
 - Inline code: `font-family` monospace stack, `font-size: 13px`, background `#F3F4F6`, border-radius 3px, padding `1px 4px`
 - Bold marks: `font-weight: 700` (markers `**` remain visible)
 - Italic marks: `font-style: italic` (markers `*` remain visible)
@@ -198,7 +204,7 @@ All values declared as Tailwind CSS variables. The CSS variable name is the sour
 
 **Layout:** Centered modal-style card — 400px wide, same card style as welcome card. Contains:
 1. Label: "Scanning vault…" — Body (14px/400), `--color-text-muted`
-2. Counter: `12,483 / 100,000` — Label (12px/500), `--color-text-muted`, right-aligned
+2. Counter: `12,483 / 100,000` — Label (12px/400), `--color-text-muted`, right-aligned
 3. Determinate progress bar — full width, 8px height, 4px border-radius, background `--color-border`, fill `--color-accent`. Width driven by `(current / total) * 100%`, updated on each Tauri event.
 4. Current file: truncated filename (middle-truncate, same CSS as path display), 12px/400, `--color-text-muted`
 
