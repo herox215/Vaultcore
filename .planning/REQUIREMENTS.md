@@ -9,17 +9,17 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Vault
 
-- [ ] **VAULT-01**: User can open a vault folder via a native OS folder picker
-- [ ] **VAULT-02**: Recent-vaults list is persisted as JSON in the Tauri app-data directory
-- [ ] **VAULT-03**: On startup, the last opened vault is loaded automatically if still reachable
-- [ ] **VAULT-04**: When no vault is open, a Welcome screen is shown with an "Open vault" button and the recent list
-- [ ] **VAULT-05**: If the last vault is no longer reachable, the app falls back to the Welcome screen without crashing
-- [ ] **VAULT-06**: A `VaultInfo` / `VaultStats` command surfaces vault path and note count
+- [x] **VAULT-01**: User can open a vault folder via a native OS folder picker
+- [x] **VAULT-02**: Recent-vaults list is persisted as JSON in the Tauri app-data directory
+- [x] **VAULT-03**: On startup, the last opened vault is loaded automatically if still reachable
+- [x] **VAULT-04**: When no vault is open, a Welcome screen is shown with an "Open vault" button and the recent list
+- [x] **VAULT-05**: If the last vault is no longer reachable, the app falls back to the Welcome screen without crashing
+- [x] **VAULT-06**: A `VaultInfo` / `VaultStats` command surfaces vault path and note count
 
 ### Indexing
 
 - [ ] **IDX-01**: Opening a vault indexes all `.md` files into Tantivy and into the in-memory metadata index
-- [ ] **IDX-02**: A progress bar with filename and counter ("12,483 / 100,000") is shown during indexing, fed by Tauri events
+- [x] **IDX-02**: A progress bar with filename and counter ("12,483 / 100,000") is shown during indexing, fed by Tauri events
 - [ ] **IDX-03**: Incremental re-indexing uses SHA-256 hash comparison; only changed files are re-parsed
 - [ ] **IDX-04**: The in-memory index (FileIndex, LinkGraph, TagIndex) is rebuilt from disk on every cold start
 - [ ] **IDX-05**: Tantivy index stores an `index_version.json` sidecar; on schema mismatch the index is deleted and rebuilt with progress UI
@@ -30,15 +30,15 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Editor
 
-- [ ] **EDIT-01**: CodeMirror 6 renders Markdown with syntax highlighting (headings, bold, italic, code, lists, tables GFM)
-- [ ] **EDIT-02**: Inline live-preview of bold, italic, headings, inline code, and lists
+- [x] **EDIT-01**: CodeMirror 6 renders Markdown with syntax highlighting (headings, bold, italic, code, lists, tables GFM)
+- [x] **EDIT-02**: Inline live-preview of bold, italic, headings, inline code, and lists
 - [ ] **EDIT-03**: Fenced code blocks render with per-language syntax highlighting
-- [ ] **EDIT-04**: Keyboard shortcuts work: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link)
+- [x] **EDIT-04**: Keyboard shortcuts work: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link)
 - [ ] **EDIT-05**: Multi-tab: user can open multiple notes simultaneously and switch with Cmd/Ctrl+Tab
 - [ ] **EDIT-06**: Split-view: two notes can be displayed and edited side-by-side
 - [ ] **EDIT-07**: Undo/redo work within each tab (provided by CM6)
 - [ ] **EDIT-08**: There is no file-size limit — a 10,000-line note opens without degradation
-- [ ] **EDIT-09**: Auto-save writes the active note to disk every 2 seconds (no manual save, no dirty indicator)
+- [x] **EDIT-09**: Auto-save writes the active note to disk every 2 seconds (no manual save, no dirty indicator)
 - [ ] **EDIT-10**: Before each auto-save, the on-disk hash is compared to the expected hash; mismatch triggers the merge path
 - [ ] **EDIT-11**: New note creation via Cmd/Ctrl+N
 
@@ -98,13 +98,13 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [ ] **UI-01**: Dark mode and Light mode are implemented and can be toggled at runtime
 - [ ] **UI-02**: Font family and font size are configurable
 - [ ] **UI-03**: Sidebar can be collapsed/expanded with Cmd/Ctrl+\
-- [ ] **UI-04**: Toast component supports error, clean-merge, and conflict variants, auto-dismisses after 5 s, and is manually dismissable
+- [x] **UI-04**: Toast component supports error, clean-merge, and conflict variants, auto-dismisses after 5 s, and is manually dismissable
 - [ ] **UI-05**: All MVP keyboard shortcuts from spec Section 13 are wired up
 - [ ] **UI-06**: All user-facing surfaces (errors, merge notices, rename prompt) use the unified toast / dialog components
 
 ### Errors
 
-- [ ] **ERR-01**: `VaultError` enum exists in Rust with all variants from spec Section 5 (FileNotFound, PermissionDenied, DiskFull, IndexCorrupt, VaultUnavailable, MergeConflict, InvalidEncoding, Io)
+- [x] **ERR-01**: `VaultError` enum exists in Rust with all variants from spec Section 5 (FileNotFound, PermissionDenied, DiskFull, IndexCorrupt, VaultUnavailable, MergeConflict, InvalidEncoding, Io)
 - [ ] **ERR-02**: Index-corrupt detection triggers an automatic rebuild with progress UI
 - [ ] **ERR-03**: If the vault folder becomes unreachable, the app stays open but disables editing and shows a toast
 - [ ] **ERR-04**: Disk-full failures during auto-save surface a toast but do not lose editor content
@@ -187,14 +187,14 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| VAULT-01 | Phase 1 — Skeleton | Pending |
-| VAULT-02 | Phase 1 — Skeleton | Pending |
-| VAULT-03 | Phase 1 — Skeleton | Pending |
-| VAULT-04 | Phase 1 — Skeleton | Pending |
-| VAULT-05 | Phase 1 — Skeleton | Pending |
-| VAULT-06 | Phase 1 — Skeleton | Pending |
+| VAULT-01 | Phase 1 — Skeleton | Complete |
+| VAULT-02 | Phase 1 — Skeleton | Complete |
+| VAULT-03 | Phase 1 — Skeleton | Complete |
+| VAULT-04 | Phase 1 — Skeleton | Complete |
+| VAULT-05 | Phase 1 — Skeleton | Complete |
+| VAULT-06 | Phase 1 — Skeleton | Complete |
 | IDX-01 | Phase 3 — Search | Pending |
-| IDX-02 | Phase 1 — Skeleton | Pending |
+| IDX-02 | Phase 1 — Skeleton | Complete |
 | IDX-03 | Phase 3 — Search | Pending |
 | IDX-04 | Phase 3 — Search | Pending |
 | IDX-05 | Phase 3 — Search | Pending |
@@ -202,15 +202,15 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | IDX-07 | Phase 2 — Vault | Pending |
 | IDX-08 | Phase 3 — Search | Pending |
 | IDX-09 | Phase 3 — Search | Pending |
-| EDIT-01 | Phase 1 — Skeleton | Pending |
-| EDIT-02 | Phase 1 — Skeleton | Pending |
+| EDIT-01 | Phase 1 — Skeleton | Complete |
+| EDIT-02 | Phase 1 — Skeleton | Complete |
 | EDIT-03 | Phase 5 — Polish | Pending |
-| EDIT-04 | Phase 1 — Skeleton | Pending |
+| EDIT-04 | Phase 1 — Skeleton | Complete |
 | EDIT-05 | Phase 2 — Vault | Pending |
 | EDIT-06 | Phase 2 — Vault | Pending |
 | EDIT-07 | Phase 5 — Polish | Pending |
 | EDIT-08 | Phase 5 — Polish | Pending |
-| EDIT-09 | Phase 1 — Skeleton | Pending |
+| EDIT-09 | Phase 1 — Skeleton | Complete |
 | EDIT-10 | Phase 5 — Polish | Pending |
 | EDIT-11 | Phase 5 — Polish | Pending |
 | SRCH-01 | Phase 3 — Search | Pending |
@@ -252,10 +252,10 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | UI-01 | Phase 5 — Polish | Pending |
 | UI-02 | Phase 5 — Polish | Pending |
 | UI-03 | Phase 5 — Polish | Pending |
-| UI-04 | Phase 1 — Skeleton | Pending |
+| UI-04 | Phase 1 — Skeleton | Complete |
 | UI-05 | Phase 5 — Polish | Pending |
 | UI-06 | Phase 5 — Polish | Pending |
-| ERR-01 | Phase 1 — Skeleton | Pending |
+| ERR-01 | Phase 1 — Skeleton | Complete |
 | ERR-02 | Phase 3 — Search | Pending |
 | ERR-03 | Phase 2 — Vault | Pending |
 | ERR-04 | Phase 2 — Vault | Pending |

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 UI-SPEC approved
-last_updated: "2026-04-11T19:52:29.425Z"
-last_activity: 2026-04-11 -- Phase 01 execution started
+stopped_at: Completed 01-00-scaffold-test-infra-PLAN.md
+last_updated: "2026-04-11T20:22:34.118Z"
+last_activity: 2026-04-11
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 5
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 20
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 01 (skeleton) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 01
-Last activity: 2026-04-11 -- Phase 01 execution started
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-04-11
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 01-skeleton P00 | 18min | 4 tasks | 45 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Recent decisions affecting current work:
 - Metadata store = pure in-memory, no SQLite (Phase 3)
 - Auto-save = fixed 2 s, no manual save (Phase 1)
 - Error UI = unified toast (Phase 1)
+- [Phase 01-skeleton]: Vite+plain-Svelte scaffold substituted for pnpm create tauri-app (D-02: NOT SvelteKit)
+- [Phase 01-skeleton]: RC-02: Explicit CodeMirror 6 extension list, NOT basicSetup (no lineNumbers/foldGutter)
+- [Phase 01-skeleton]: fs:scope locked to $APPDATA only in Wave 0 — user vault paths granted per-call via FsExt in Wave 1 (T-01-00-01 mitigation)
 
 ### Pending Todos
 
@@ -82,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-11T19:01:29.591Z
-Stopped at: Phase 1 UI-SPEC approved
-Resume file: .planning/phases/01-skeleton/01-UI-SPEC.md
+Last session: 2026-04-11T20:22:22.189Z
+Stopped at: Completed 01-00-scaffold-test-infra-PLAN.md
+Resume file: None
