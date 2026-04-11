@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-00-scaffold-test-infra-PLAN.md
-last_updated: "2026-04-11T20:22:34.118Z"
+stopped_at: Completed 01-01-backend-spine-PLAN.md
+last_updated: "2026-04-11T20:34:17.454Z"
 last_activity: 2026-04-11
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
-  percent: 20
+  completed_plans: 2
+  percent: 40
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 01 (skeleton) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-04-11
 
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 | Phase 01-skeleton P00 | 18min | 4 tasks | 45 files |
+| Phase 01-skeleton P01-01 | 25min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 01-skeleton]: Vite+plain-Svelte scaffold substituted for pnpm create tauri-app (D-02: NOT SvelteKit)
 - [Phase 01-skeleton]: RC-02: Explicit CodeMirror 6 extension list, NOT basicSetup (no lineNumbers/foldGutter)
 - [Phase 01-skeleton]: fs:scope locked to $APPDATA only in Wave 0 — user vault paths granted per-call via FsExt in Wave 1 (T-01-00-01 mitigation)
+- [Phase 01-skeleton]: Hand-rolled ISO-8601 formatter (Howard Hinnant civil_from_days) instead of chrono/time dep — D-19 compliance
+- [Phase 01-skeleton]: VaultError manual serde::Serialize emits { kind, message, data } IPC contract (decoupled from thiserror Display)
+- [Phase 01-skeleton]: Vault-scope guard: canonicalize target (or parent for write) then starts_with(vault) before any fs touch — T-02 mitigation at Rust boundary, not plugin-fs
 
 ### Pending Todos
 
@@ -86,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-11T20:22:22.189Z
-Stopped at: Completed 01-00-scaffold-test-infra-PLAN.md
+Last session: 2026-04-11T20:34:17.452Z
+Stopped at: Completed 01-01-backend-spine-PLAN.md
 Resume file: None
