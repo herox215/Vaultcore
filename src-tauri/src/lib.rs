@@ -26,7 +26,8 @@ pub fn run() {
             commands::vault::open_vault,
             commands::vault::get_recent_vaults,
             commands::vault::get_vault_stats,
-            // files::read_file / files::write_file registered in Task 3
+            commands::files::read_file,
+            commands::files::write_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
