@@ -1,0 +1,129 @@
+# Roadmap: VaultCore
+
+**Version:** v0.1 (MVP)
+**Created:** 2026-04-11
+**Granularity:** standard
+**Source spec:** `VaultCore_MVP_Spezifikation_v3.md` (Section 15 milestones M1–M6)
+
+## Overview
+
+VaultCore v0.1 delivers a local, Markdown-first note app built on Tauri 2 + Rust + CodeMirror 6 that stays fluid on vaults of 100,000+ notes. The roadmap maps ~1:1 to the six spec milestones: start with a Tauri skeleton that can open, edit, and auto-save a single file (Phase 1), grow into a full multi-tab vault with a file browser and three-way merge file-watcher (Phase 2), add Tantivy full-text search and a Quick Switcher (Phase 3), layer on the Obsidian-compatible wiki-link graph with backlinks and rename-cascade (Phase 4), polish tags, shortcuts, themes, and the remaining editor quality bits (Phase 5), and finally prove the core value by running all performance budgets against a generated 100k-note vault and producing cross-platform alpha builds (Phase 6). Every phase from 1 to 5 leaves the performance budgets as non-blocking guardrails; Phase 6 is where they become the gate.
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+- [ ] **Phase 1: Skeleton** - Tauri 2 + CM6 scaffold, open a vault, edit and auto-save a single `.md` file
+- [ ] **Phase 2: Vault** - File browser tree, multi-tab, split-view, file watcher with three-way merge
+- [ ] **Phase 3: Search** - Tantivy full-text index with AND/OR/NOT, Quick Switcher, versioned rebuild
+- [ ] **Phase 4: Links** - Wiki-link parsing, 3-stage resolution, backlinks panel, rename-cascade
+- [ ] **Phase 5: Polish** - Tags, themes, fonts, remaining shortcuts, editor quality-of-life
+- [ ] **Phase 6: Benchmark & Release** - 100k-note benchmarks, 24h soak, cross-platform alpha builds
+
+## Phase Details
+
+### Phase 1: Skeleton
+**Goal**: User can launch VaultCore, open a Markdown vault via native folder dialog, and edit a single `.md` file with auto-save — the entire foundation needed for every later phase.
+**Depends on**: Nothing (first phase)
+**Requirements**: VAULT-01, VAULT-02, VAULT-03, VAULT-04, VAULT-05, VAULT-06, IDX-02, EDIT-01, EDIT-02, EDIT-04, EDIT-09, UI-04, ERR-01
+**Success Criteria** (what must be TRUE):
+  1. User launches `tauri dev` (or a packaged build) and sees a Welcome screen with an "Open vault" button and an (initially empty) recent-vaults list
+  2. User picks a folder through the native OS dialog and the Welcome screen transitions into the vault view; the chosen path appears in the recent list on the next launch and auto-loads by default
+  3. User opens a `.md` file and the CodeMirror 6 editor renders it with Markdown syntax highlighting and inline live-preview (bold/italic/headings/inline code/lists), and keystrokes respond at 60 fps
+  4. User edits the file, waits ~2 seconds, and sees the change on disk without pressing save; Cmd/Ctrl+B, Cmd/Ctrl+I, Cmd/Ctrl+K wrap selections as expected
+  5. If the last-opened vault path is no longer reachable the app returns to the Welcome screen without crashing and surfaces a toast carrying a `VaultError` variant
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 2: Vault
+**Goal**: User can navigate, create, rename, delete, and move files inside a real vault with multi-tab and split-view editing, and the app safely reconciles external edits via a three-way merge driven by the file watcher.
+**Depends on**: Phase 1
+**Requirements**: FILE-01, FILE-02, FILE-03, FILE-04, FILE-05, FILE-08, FILE-09, EDIT-05, EDIT-06, SYNC-01, SYNC-02, SYNC-03, SYNC-04, SYNC-05, SYNC-06, SYNC-07, SYNC-08, IDX-07, ERR-03, ERR-04
+**Success Criteria** (what must be TRUE):
+  1. User sees a lazy-loaded folder/file tree for the open vault; `.obsidian/` is hidden, symlinks are displayed but not followed, and non-UTF-8 files appear but show a toast when the user tries to open them
+  2. User can create, rename, delete-to-`.trash/`, and drag-drop-move files from the sidebar; a rename that would touch wiki-links surfaces a confirmation prompt showing the affected count (the actual link rewrite lands in Phase 4, but the prompt path is wired now)
+  3. User can open multiple files in tabs (Cmd/Ctrl+Tab cycles) and arrange two tabs side-by-side in a split view, editing each independently
+  4. When an external tool (e.g. Syncthing) rewrites an open file, the change is merged in cleanly and the user sees a "Externe Änderungen wurden eingebunden" toast; when the same region was edited locally, the local state is kept and a "Konflikt in <file> – lokale Version behalten" toast is shown
+  5. The app's own writes (auto-save, rename, delete, move) never trigger external-change toasts, and bulk external changes of >500 files raise the indexing progress UI instead of toast-spamming
+  6. If the vault folder is unmounted while the app is open, editing is disabled and a toast explains the state without the app crashing; a disk-full write attempt surfaces a toast without losing the in-editor buffer
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 3: Search
+**Goal**: User can find any note in the vault within tens of milliseconds via either a Tantivy full-text search panel or a fuzzy filename Quick Switcher, backed by an incremental hash-driven indexer.
+**Depends on**: Phase 2
+**Requirements**: IDX-01, IDX-03, IDX-04, IDX-05, IDX-06, IDX-08, IDX-09, SRCH-01, SRCH-02, SRCH-03, SRCH-04, SRCH-05, SRCH-06, ERR-02
+**Success Criteria** (what must be TRUE):
+  1. Opening a vault indexes every `.md` file into Tantivy and the in-memory metadata store, with a live progress bar showing filename and `12,483 / 100,000`-style counter; non-UTF-8 files are skipped silently
+  2. User presses Cmd/Ctrl+Shift+F, types a query using AND/OR/NOT and `"exact phrase"` syntax, and sees ranked results with contextual snippets; clicking a result opens the note at the match location
+  3. User presses Cmd/Ctrl+P and a fuzzy filename Quick Switcher responds to every keystroke without perceptible lag (budget < 10 ms on 100k files, proven in Phase 6)
+  4. Re-opening the vault on a subsequent launch uses the cached Tantivy index and only re-parses files whose SHA-256 hash has changed; a schema bump in `index_version.json` triggers an automatic delete-and-rebuild with the same progress UI, and a manual `rebuild_index` command is available
+  5. Index writes are serialized through a single central queue — two concurrent changes to the same file never race each other — and an IndexCorrupt detection path kicks off the automatic rebuild without user intervention
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 4: Links
+**Goal**: User experiences a fully Obsidian-compatible wiki-link graph — clickable `[[links]]`, backlinks, unresolved-link highlighting, `[[` autocomplete, and rename-cascade that rewrites every link to a moved note.
+**Depends on**: Phase 3
+**Requirements**: LINK-01, LINK-02, LINK-03, LINK-04, LINK-05, LINK-06, LINK-07, LINK-08, LINK-09
+**Success Criteria** (what must be TRUE):
+  1. `[[Note]]` and `[[Note|alias]]` are rendered as clickable links in the editor; unresolved targets are styled in a distinct color; clicking a resolved link opens the target note in a new tab
+  2. Link resolution follows the spec's 3-stage rule (same folder → shortest relative path → alphabetical tiebreak) and matches what Obsidian would resolve on the same vault
+  3. Typing `[[` opens an autocomplete list that filters filenames as the user types, and the backlinks panel for the active note lists every other note that links into it
+  4. Renaming or moving a file through the sidebar prompts "X links will be updated. Continue?" and, on confirm, rewrites every wiki-link pointing at the old path so nothing becomes unresolved after the rename
+  5. The `get_unresolved_links` command returns a complete list of dangling links for the vault, and the link graph stays accurate as notes are created, edited, and deleted (no full rescan required)
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 5: Polish
+**Goal**: User experiences VaultCore as a polished daily driver — tag panel, dark/light themes, configurable typography, full keyboard-shortcut coverage, persistent sort/expand state, and all remaining editor niceties.
+**Depends on**: Phase 4
+**Requirements**: TAG-01, TAG-02, TAG-03, TAG-04, UI-01, UI-02, UI-03, UI-05, UI-06, EDIT-03, EDIT-07, EDIT-08, EDIT-10, EDIT-11, FILE-06, FILE-07
+**Success Criteria** (what must be TRUE):
+  1. Inline `#tag` / `#parent/child` and YAML frontmatter `tags: [a, b]` are extracted into a tag panel in the sidebar with usage counts; clicking a tag runs a search that shows every note carrying it
+  2. User can toggle dark and light mode at runtime, pick a font family and size, and collapse/expand the sidebar with Cmd/Ctrl+\; the choices persist across restarts
+  3. Every keyboard shortcut listed in spec Section 13 (including Cmd/Ctrl+N for new note, undo/redo inside each tab, fenced-code-block language highlighting visible in the editor) works end-to-end
+  4. Before each auto-save the on-disk hash is compared to the expected hash; a mismatch cleanly routes through the Phase 2 merge path instead of clobbering the external change
+  5. File browser sort order (name / modified / created) and folder expand/collapse state are remembered across sessions, and opening a 10,000-line note remains smooth with no size-based degradation
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 6: Benchmark & Release
+**Goal**: Prove VaultCore's core value — fluid at 100,000 notes — by hitting every spec Section 7 performance budget on a generated 100k-note vault, passing a 24-hour soak, and shipping cross-platform alpha builds with clean test suites and verified zero-network behavior.
+**Depends on**: Phase 5
+**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04, PERF-05, PERF-06, PERF-07, PERF-08, PERF-09, PERF-10, PERF-11, PERF-12, PERF-13, REL-01, REL-02, REL-03, REL-04, SEC-01, SEC-02, SEC-03, ERR-05
+**Success Criteria** (what must be TRUE):
+  1. A reproducible generator produces a 100,000-note vault (~500 words/file) in CI, and against that vault VaultCore hits every performance budget from spec Section 7: cold start < 3 s, warm start < 5 s, open note < 100 ms, keystroke < 16 ms, full-text search < 50 ms, Quick Switcher < 10 ms, backlinks < 20 ms, link autocomplete < 10 ms, initial indexing < 60 s, incremental update < 5 ms, RAM idle < 100 MB, RAM active < 250 MB
+  2. A 24-hour soak test runs against an open 100k vault with no crash, no memory leak beyond budget, and at most 2 seconds of unsaved content recoverable after a forced kill
+  3. Alpha builds are produced for macOS (Intel + Apple Silicon), Windows 10/11, and Linux (Ubuntu 22.04+ and Fedora 38+), all of which boot, open a vault, and search successfully on their respective platforms
+  4. All unit tests (parser, indexer, link graph, merge engine, write-ignore-list), the 100k-vault integration/benchmark gate, and frontend component tests (editor, sidebar, welcome screen) are green in CI
+  5. A security audit of the built binaries confirms zero network syscalls, zero telemetry code, and that nothing under the vault ever leaves the local filesystem
+**Plans**: TBD
+**UI hint**: no
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Skeleton | 0/TBD | Not started | - |
+| 2. Vault | 0/TBD | Not started | - |
+| 3. Search | 0/TBD | Not started | - |
+| 4. Links | 0/TBD | Not started | - |
+| 5. Polish | 0/TBD | Not started | - |
+| 6. Benchmark & Release | 0/TBD | Not started | - |
+
+## Coverage
+
+- v1 requirements in REQUIREMENTS.md: 93 total (VAULT 6, IDX 9, EDIT 11, SRCH 6, LINK 9, FILE 9, TAG 4, SYNC 8, UI 6, ERR 5, PERF 13, REL 4, SEC 3)
+- Mapped across 6 phases: 93 / 93
+- Orphaned: 0
+- Duplicates: 0
+
+**Note on requirement count:** The initiating prompt referenced "84 requirements"; the authoritative `REQUIREMENTS.md` file actually contains 93 v1 REQ-IDs. The roadmap maps all 93.
+
+**Non-blocking guardrails:** Performance budgets (PERF-01..13) are formally validated in Phase 6 but must be watched as non-blocking indicators in Phases 1–5 — if Phase 3 search routinely takes 500 ms on a 10k vault, Phase 6 will not hit 50 ms on 100k.

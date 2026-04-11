@@ -183,17 +183,120 @@ Acknowledged and architecture-prepared but not in the v0.1 roadmap.
 
 ## Traceability
 
-Populated by the roadmapper. Empty until ROADMAP.md is created.
+Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (to be filled by gsd-roadmapper) | | |
+| VAULT-01 | Phase 1 — Skeleton | Pending |
+| VAULT-02 | Phase 1 — Skeleton | Pending |
+| VAULT-03 | Phase 1 — Skeleton | Pending |
+| VAULT-04 | Phase 1 — Skeleton | Pending |
+| VAULT-05 | Phase 1 — Skeleton | Pending |
+| VAULT-06 | Phase 1 — Skeleton | Pending |
+| IDX-01 | Phase 3 — Search | Pending |
+| IDX-02 | Phase 1 — Skeleton | Pending |
+| IDX-03 | Phase 3 — Search | Pending |
+| IDX-04 | Phase 3 — Search | Pending |
+| IDX-05 | Phase 3 — Search | Pending |
+| IDX-06 | Phase 3 — Search | Pending |
+| IDX-07 | Phase 2 — Vault | Pending |
+| IDX-08 | Phase 3 — Search | Pending |
+| IDX-09 | Phase 3 — Search | Pending |
+| EDIT-01 | Phase 1 — Skeleton | Pending |
+| EDIT-02 | Phase 1 — Skeleton | Pending |
+| EDIT-03 | Phase 5 — Polish | Pending |
+| EDIT-04 | Phase 1 — Skeleton | Pending |
+| EDIT-05 | Phase 2 — Vault | Pending |
+| EDIT-06 | Phase 2 — Vault | Pending |
+| EDIT-07 | Phase 5 — Polish | Pending |
+| EDIT-08 | Phase 5 — Polish | Pending |
+| EDIT-09 | Phase 1 — Skeleton | Pending |
+| EDIT-10 | Phase 5 — Polish | Pending |
+| EDIT-11 | Phase 5 — Polish | Pending |
+| SRCH-01 | Phase 3 — Search | Pending |
+| SRCH-02 | Phase 3 — Search | Pending |
+| SRCH-03 | Phase 3 — Search | Pending |
+| SRCH-04 | Phase 3 — Search | Pending |
+| SRCH-05 | Phase 3 — Search | Pending |
+| SRCH-06 | Phase 3 — Search | Pending |
+| LINK-01 | Phase 4 — Links | Pending |
+| LINK-02 | Phase 4 — Links | Pending |
+| LINK-03 | Phase 4 — Links | Pending |
+| LINK-04 | Phase 4 — Links | Pending |
+| LINK-05 | Phase 4 — Links | Pending |
+| LINK-06 | Phase 4 — Links | Pending |
+| LINK-07 | Phase 4 — Links | Pending |
+| LINK-08 | Phase 4 — Links | Pending |
+| LINK-09 | Phase 4 — Links | Pending |
+| FILE-01 | Phase 2 — Vault | Pending |
+| FILE-02 | Phase 2 — Vault | Pending |
+| FILE-03 | Phase 2 — Vault | Pending |
+| FILE-04 | Phase 2 — Vault | Pending |
+| FILE-05 | Phase 2 — Vault | Pending |
+| FILE-06 | Phase 5 — Polish | Pending |
+| FILE-07 | Phase 5 — Polish | Pending |
+| FILE-08 | Phase 2 — Vault | Pending |
+| FILE-09 | Phase 2 — Vault | Pending |
+| TAG-01 | Phase 5 — Polish | Pending |
+| TAG-02 | Phase 5 — Polish | Pending |
+| TAG-03 | Phase 5 — Polish | Pending |
+| TAG-04 | Phase 5 — Polish | Pending |
+| SYNC-01 | Phase 2 — Vault | Pending |
+| SYNC-02 | Phase 2 — Vault | Pending |
+| SYNC-03 | Phase 2 — Vault | Pending |
+| SYNC-04 | Phase 2 — Vault | Pending |
+| SYNC-05 | Phase 2 — Vault | Pending |
+| SYNC-06 | Phase 2 — Vault | Pending |
+| SYNC-07 | Phase 2 — Vault | Pending |
+| SYNC-08 | Phase 2 — Vault | Pending |
+| UI-01 | Phase 5 — Polish | Pending |
+| UI-02 | Phase 5 — Polish | Pending |
+| UI-03 | Phase 5 — Polish | Pending |
+| UI-04 | Phase 1 — Skeleton | Pending |
+| UI-05 | Phase 5 — Polish | Pending |
+| UI-06 | Phase 5 — Polish | Pending |
+| ERR-01 | Phase 1 — Skeleton | Pending |
+| ERR-02 | Phase 3 — Search | Pending |
+| ERR-03 | Phase 2 — Vault | Pending |
+| ERR-04 | Phase 2 — Vault | Pending |
+| ERR-05 | Phase 6 — Benchmark & Release | Pending |
+| PERF-01 | Phase 6 — Benchmark & Release | Pending |
+| PERF-02 | Phase 6 — Benchmark & Release | Pending |
+| PERF-03 | Phase 6 — Benchmark & Release | Pending |
+| PERF-04 | Phase 6 — Benchmark & Release | Pending |
+| PERF-05 | Phase 6 — Benchmark & Release | Pending |
+| PERF-06 | Phase 6 — Benchmark & Release | Pending |
+| PERF-07 | Phase 6 — Benchmark & Release | Pending |
+| PERF-08 | Phase 6 — Benchmark & Release | Pending |
+| PERF-09 | Phase 6 — Benchmark & Release | Pending |
+| PERF-10 | Phase 6 — Benchmark & Release | Pending |
+| PERF-11 | Phase 6 — Benchmark & Release | Pending |
+| PERF-12 | Phase 6 — Benchmark & Release | Pending |
+| PERF-13 | Phase 6 — Benchmark & Release | Pending |
+| REL-01 | Phase 6 — Benchmark & Release | Pending |
+| REL-02 | Phase 6 — Benchmark & Release | Pending |
+| REL-03 | Phase 6 — Benchmark & Release | Pending |
+| REL-04 | Phase 6 — Benchmark & Release | Pending |
+| SEC-01 | Phase 6 — Benchmark & Release | Pending |
+| SEC-02 | Phase 6 — Benchmark & Release | Pending |
+| SEC-03 | Phase 6 — Benchmark & Release | Pending |
 
 **Coverage:**
-- v1 requirements: 84 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 84 ⚠️ (will be resolved in Step 8)
+- v1 requirements: 93 total
+- Mapped to phases: 93
+- Unmapped: 0
+
+**Per-phase requirement counts:**
+- Phase 1 — Skeleton: 13 (VAULT-01..06, IDX-02, EDIT-01, EDIT-02, EDIT-04, EDIT-09, UI-04, ERR-01)
+- Phase 2 — Vault: 20 (FILE-01..05, FILE-08, FILE-09, EDIT-05, EDIT-06, SYNC-01..08, IDX-07, ERR-03, ERR-04)
+- Phase 3 — Search: 14 (IDX-01, IDX-03..06, IDX-08, IDX-09, SRCH-01..06, ERR-02)
+- Phase 4 — Links: 9 (LINK-01..09)
+- Phase 5 — Polish: 16 (TAG-01..04, UI-01..03, UI-05, UI-06, EDIT-03, EDIT-07, EDIT-08, EDIT-10, EDIT-11, FILE-06, FILE-07)
+- Phase 6 — Benchmark & Release: 21 (PERF-01..13, REL-01..04, SEC-01..03, ERR-05)
+- Total: 93 ✓
+
+**Note on the requirement count:** the initiating prompt referenced "84 requirements across VAULT, IDX, EDIT, SRCH, LINK, FILE, TAG, SYNC, UI, ERR, PERF, REL, SEC categories". This file as written contains 93 v1 REQ-IDs (6+9+11+6+9+9+4+8+6+5+13+4+3). The roadmap maps all 93 to avoid orphans; if any of the extra 9 were meant to be deferred to v2, that decision needs an explicit edit here before Phase 1 planning.
 
 ---
 *Requirements defined: 2026-04-11*
-*Last updated: 2026-04-11 after initial definition*
+*Last updated: 2026-04-11 — traceability filled by gsd-roadmapper*
