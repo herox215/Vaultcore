@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-02-frontend-welcome-PLAN.md
-last_updated: "2026-04-11T20:43:10.197Z"
-last_activity: 2026-04-11
+stopped_at: Completed 01-03-editor-autosave-PLAN.md
+last_updated: "2026-04-12T05:56:33.434Z"
+last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
-  percent: 60
+  completed_plans: 4
+  percent: 80
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 01 (skeleton) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
-Last activity: 2026-04-11
+Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-skeleton P00 | 18min | 4 tasks | 45 files |
 | Phase 01-skeleton P01-01 | 25min | 3 tasks | 12 files |
 | Phase 01-skeleton P02 | 12min | 3 tasks | 15 files |
+| Phase 01-skeleton P01-03-editor-autosave | 4min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,9 @@ Recent decisions affecting current work:
 - [Phase 01-skeleton]: Frontend IPC layer funnels every Tauri invoke through src/ipc/commands.ts with VaultError normalization (T-02-01 mitigation)
 - [Phase 01-skeleton]: Phase 1 uses classic svelte/store writable action-object pattern (D-06/RC-01) — no $state class wrappers in src/store/
 - [Phase 01-skeleton]: vaultErrorCopy renders static copy strings per VaultErrorKind — never interpolates raw filesystem paths (T-02-03)
+- [Phase 01-skeleton]: RC-02 enforced: buildExtensions uses 13 explicit CM6 extensions, no basicSetup
+- [Phase 01-skeleton]: RC-01 enforced: EditorView in plain let, not $state — prevents Svelte Proxy breaking CM6
+- [Phase 01-skeleton]: autoSaveExtension uses EditorView.updateListener (not ViewPlugin) for 2000ms idle debounce
 
 ### Pending Todos
 
@@ -94,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-11T20:43:10.194Z
-Stopped at: Completed 01-02-frontend-welcome-PLAN.md
+Last session: 2026-04-12T05:56:33.432Z
+Stopped at: Completed 01-03-editor-autosave-PLAN.md
 Resume file: None
