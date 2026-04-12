@@ -18,14 +18,14 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Indexing
 
-- [ ] **IDX-01**: Opening a vault indexes all `.md` files into Tantivy and into the in-memory metadata index
+- [x] **IDX-01**: Opening a vault indexes all `.md` files into Tantivy and into the in-memory metadata index
 - [x] **IDX-02**: A progress bar with filename and counter ("12,483 / 100,000") is shown during indexing, fed by Tauri events
-- [ ] **IDX-03**: Incremental re-indexing uses SHA-256 hash comparison; only changed files are re-parsed
-- [ ] **IDX-04**: The in-memory index (FileIndex, LinkGraph, TagIndex) is rebuilt from disk on every cold start
-- [ ] **IDX-05**: Tantivy index stores an `index_version.json` sidecar; on schema mismatch the index is deleted and rebuilt with progress UI
-- [ ] **IDX-06**: All Tantivy writes go through a single central queue (never two concurrent writes for the same file)
+- [x] **IDX-03**: Incremental re-indexing uses SHA-256 hash comparison; only changed files are re-parsed
+- [x] **IDX-04**: The in-memory index (FileIndex, LinkGraph, TagIndex) is rebuilt from disk on every cold start
+- [x] **IDX-05**: Tantivy index stores an `index_version.json` sidecar; on schema mismatch the index is deleted and rebuilt with progress UI
+- [x] **IDX-06**: All Tantivy writes go through a single central queue (never two concurrent writes for the same file)
 - [x] **IDX-07**: The `.obsidian/` folder is ignored by both the file browser and the indexer
-- [ ] **IDX-08**: Non-UTF-8 files are shown in the browser but skipped by the indexer
+- [x] **IDX-08**: Non-UTF-8 files are shown in the browser but skipped by the indexer
 - [ ] **IDX-09**: User can trigger a manual index rebuild via `rebuild_index` command
 
 ### Editor
@@ -105,7 +105,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 ### Errors
 
 - [x] **ERR-01**: `VaultError` enum exists in Rust with all variants from spec Section 5 (FileNotFound, PermissionDenied, DiskFull, IndexCorrupt, VaultUnavailable, MergeConflict, InvalidEncoding, Io)
-- [ ] **ERR-02**: Index-corrupt detection triggers an automatic rebuild with progress UI
+- [x] **ERR-02**: Index-corrupt detection triggers an automatic rebuild with progress UI
 - [x] **ERR-03**: If the vault folder becomes unreachable, the app stays open but disables editing and shows a toast
 - [x] **ERR-04**: Disk-full failures during auto-save surface a toast but do not lose editor content
 - [ ] **ERR-05**: Crash recovery loses at most 2 s of unsaved content (matches auto-save cadence)
@@ -193,14 +193,14 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | VAULT-04 | Phase 1 — Skeleton | Complete |
 | VAULT-05 | Phase 1 — Skeleton | Complete |
 | VAULT-06 | Phase 1 — Skeleton | Complete |
-| IDX-01 | Phase 3 — Search | Pending |
+| IDX-01 | Phase 3 — Search | Complete |
 | IDX-02 | Phase 1 — Skeleton | Complete |
-| IDX-03 | Phase 3 — Search | Pending |
-| IDX-04 | Phase 3 — Search | Pending |
-| IDX-05 | Phase 3 — Search | Pending |
-| IDX-06 | Phase 3 — Search | Pending |
+| IDX-03 | Phase 3 — Search | Complete |
+| IDX-04 | Phase 3 — Search | Complete |
+| IDX-05 | Phase 3 — Search | Complete |
+| IDX-06 | Phase 3 — Search | Complete |
 | IDX-07 | Phase 2 — Vault | Complete |
-| IDX-08 | Phase 3 — Search | Pending |
+| IDX-08 | Phase 3 — Search | Complete |
 | IDX-09 | Phase 3 — Search | Pending |
 | EDIT-01 | Phase 1 — Skeleton | Complete |
 | EDIT-02 | Phase 1 — Skeleton | Complete |
@@ -256,7 +256,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | UI-05 | Phase 5 — Polish | Pending |
 | UI-06 | Phase 5 — Polish | Pending |
 | ERR-01 | Phase 1 — Skeleton | Complete |
-| ERR-02 | Phase 3 — Search | Pending |
+| ERR-02 | Phase 3 — Search | Complete |
 | ERR-03 | Phase 2 — Vault | Complete |
 | ERR-04 | Phase 2 — Vault | Complete |
 | ERR-05 | Phase 6 — Benchmark & Release | Pending |
