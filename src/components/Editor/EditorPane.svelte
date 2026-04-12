@@ -7,11 +7,12 @@
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
-  import { readFile, writeFile, mergeExternalChange } from "../../ipc/commands";
+  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, createFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
   import { scrollToMatch } from "./flashHighlight";
   import { scrollStore } from "../../store/scrollStore";
+  import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -74,6 +75,79 @@
   // Subscribe to vaultStore for vault reachability (ERR-03)
   const unsubVault = vaultStore.subscribe((state) => {
     vaultReachable = state.vaultReachable;
+  });
+
+  // ─── Wiki-link resolution map ──────────────────────────────────────────────
+
+  /**
+   * Reload the stem->relPath resolution map from the Rust backend.
+   * Called on vault open and after click-to-create so the new file resolves.
+   */
+  async function reloadResolvedLinks(): Promise<void> {
+    try {
+      const map = await getResolvedLinks();
+      setResolvedLinks(map);
+      // Refresh decorations on all mounted views in this pane
+      for (const view of viewMap.values()) {
+        refreshWikiLinks(view);
+      }
+    } catch {
+      // Soft-fail: all links render as unresolved until next reload
+      setResolvedLinks(new Map());
+    }
+  }
+
+  /**
+   * Handle wiki-link-click CustomEvent dispatched by the CM6 wikiLink plugin.
+   * Resolved clicks open the target in a tab (zero IPC at click time).
+   * Unresolved clicks create the note, open it, and refresh the resolution map.
+   */
+  function handleWikiLinkClick(event: Event): void {
+    const detail = (event as CustomEvent).detail as { target: string; resolved: boolean };
+    let vault: string | null = null;
+    const u = vaultStore.subscribe((s) => { vault = s.currentPath; });
+    u();
+    if (!vault) return;
+
+    if (detail.resolved) {
+      // LINK-03: synchronous lookup — zero IPC at click time
+      const relPath = resolveTarget(detail.target);
+      if (!relPath) {
+        // Map out of sync (rare: file deleted between decoration and click)
+        void reloadResolvedLinks();
+        return;
+      }
+      tabStore.openTab(`${vault}/${relPath}`);
+    } else {
+      // LINK-04, D-08: click-to-create at vault root
+      const filename = detail.target.endsWith(".md")
+        ? detail.target
+        : `${detail.target}.md`;
+      const vaultPath = vault as string;
+      createFile(vaultPath, filename)
+        .then(async (newAbsPath) => {
+          tabStore.openTab(newAbsPath);
+          // Refresh map so the new file now resolves in future decorations
+          await reloadResolvedLinks();
+        })
+        .catch(() =>
+          toastStore.push({
+            kind: "error",
+            message: "Notiz konnte nicht erstellt werden.",
+          })
+        );
+    }
+  }
+
+  // Track vault open transitions to reload the resolution map
+  let prevVaultPath: string | null = null;
+  const unsubVaultPath = vaultStore.subscribe((state) => {
+    if (state.currentPath !== prevVaultPath) {
+      prevVaultPath = state.currentPath;
+      if (state.currentPath) {
+        void reloadResolvedLinks();
+      }
+    }
   });
 
   // Subscribe to scrollStore — execute scroll-to-match when a request targets a file in this pane.
@@ -244,6 +318,9 @@
 
     viewMap.set(tab.id, view);
 
+    // Attach wiki-link-click listener to the CM6 DOM
+    view.dom.addEventListener("wiki-link-click", handleWikiLinkClick);
+
     // Sync editorStore if this is the active tab
     if (tab.id === paneActiveTabId) {
       editorStore.syncFromTab(tab.filePath, content, null);
@@ -357,12 +434,16 @@
   onMount(async () => {
     unlistenFileChange = await listenFileChange(handleExternalFileChange);
     unlistenVaultStatus = await listenVaultStatus(handleVaultStatus);
+    // Populate the resolution map once when the pane first mounts
+    // (vault may already be open from a prior navigation)
+    void reloadResolvedLinks();
   });
 
   onDestroy(() => {
     unsubTab();
     unsubVault();
     unsubScroll();
+    unsubVaultPath();
     unlistenFileChange?.();
     unlistenVaultStatus?.();
     for (const view of viewMap.values()) {
