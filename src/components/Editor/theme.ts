@@ -44,7 +44,7 @@ export const markdownTheme = EditorView.theme({
   },
   // Monospace inline code (styled by HighlightStyle fontFamily; add bg here)
   ".cm-content .tok-monospace": {
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "var(--color-code-bg)",
     borderRadius: "3px",
     padding: "1px 4px",
     fontSize: "13px",
