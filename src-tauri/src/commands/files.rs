@@ -417,6 +417,45 @@ pub async fn move_file(
     move_file_impl(&state, from, to_folder)
 }
 
+// ─── get_file_hash ───────────────────────────────────────────────────────────
+
+/// EDIT-10 support: read a file's current bytes and return the SHA-256 hex.
+///
+/// Used by the frontend auto-save loop: before each write, we compare the
+/// on-disk hash to editorStore.lastSavedHash. Mismatch → route through the
+/// Phase 2 three-way merge engine instead of clobbering external edits.
+///
+/// Security:
+/// - T-05-06-01 (path traversal): canonicalize then enforce starts_with(vault);
+///   identical guard to read_file.
+/// - T-05-06-02 (TOCTOU with write_file): the hash is compared in the frontend
+///   immediately before write; the gap between read and write is under 50ms
+///   in practice. A concurrent external write landing inside that window is
+///   indistinguishable from one that arrives during write_file itself; the
+///   watcher's merge path remains the fallback for that rarer case.
+pub fn get_file_hash_impl(state: &VaultState, path: String) -> Result<String, VaultError> {
+    let target = std::path::PathBuf::from(&path);
+    let canonical = ensure_inside_vault(state, &target)?;
+    let bytes = std::fs::read(&canonical).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound {
+            path: canonical.display().to_string(),
+        },
+        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied {
+            path: canonical.display().to_string(),
+        },
+        _ => VaultError::Io(e),
+    })?;
+    Ok(hash_bytes(&bytes))
+}
+
+#[tauri::command]
+pub async fn get_file_hash(
+    state: tauri::State<'_, VaultState>,
+    path: String,
+) -> Result<String, VaultError> {
+    get_file_hash_impl(&state, path)
+}
+
 // ─── count_wiki_links ────────────────────────────────────────────────────────
 
 /// Testable implementation body for count_wiki_links.
