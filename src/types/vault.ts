@@ -6,6 +6,7 @@
 export interface VaultInfo {
   path: string;
   file_count: number;
+  file_list: string[];
 }
 
 export interface VaultStats {
