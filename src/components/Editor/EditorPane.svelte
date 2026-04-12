@@ -2,7 +2,6 @@
   import { onMount, onDestroy } from "svelte";
   import { EditorView } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
-  import { get } from "svelte/store";
   import TabBar from "../Tabs/TabBar.svelte";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
@@ -23,10 +22,7 @@
   // CRITICAL (Pitfall 4 from RESEARCH): EditorView instances MUST NOT be
   // wrapped in $state — store them in a module-level Map keyed by tab ID.
   // This preserves undo history across tab switches without remounting.
-  // Using display: none / block to hide/show each EditorView's container div.
   const viewMap = new Map<string, EditorView>();
-  // Map from tab ID to container div element
-  const containerMap = new Map<string, HTMLDivElement>();
 
   // Local reactive state driven by store subscription
   let paneTabIds = $state<string[]>([]);
@@ -42,8 +38,6 @@
 
   // EditorPane host element for drag-to-split detection
   let paneEl = $state<HTMLDivElement | undefined>();
-  // Inner content area where EditorView containers are appended
-  let contentEl = $state<HTMLDivElement | undefined>();
 
   // Drag-to-split visual state
   let splitIndicatorSide = $state<"left" | "right" | null>(null);
@@ -51,6 +45,9 @@
   // ERR-04: Disk-full toast debounce — max one toast per 30 seconds
   let lastDiskFullToast = 0;
   const DISK_FULL_DEBOUNCE_MS = 30_000;
+
+  // Track the previously active tab for scroll save/restore
+  let prevActiveTabId: string | null = null;
 
   const paneTabs = $derived(
     paneTabIds
@@ -64,72 +61,20 @@
       : paneTabIds[0] ?? null
   );
 
-  let prevActiveTabId: string | null = null;
-
   // Subscribe to tabStore for our pane's tabs and active state
   const unsubTab = tabStore.subscribe((state) => {
     paneTabIds = state.splitState[paneId];
     allTabs = state.tabs;
     activeTabId = state.activeTabId;
     activePane = state.splitState.activePane;
-    // Sync visibility using values directly from the store state —
-    // $derived (paneActiveTabId) may not have recomputed yet after
-    // setting $state variables above.
-    const paneIds = state.splitState[paneId];
-    const activeForPane = (state.splitState.activePane === paneId
-      && state.activeTabId !== null
-      && paneIds.includes(state.activeTabId))
-        ? state.activeTabId
-        : paneIds[0] ?? null;
-    syncVisibility(activeForPane, state.tabs);
   });
 
-  /**
-   * Show only the active tab's container, hide all others.
-   * Takes the active ID and tabs as parameters to avoid relying on
-   * $derived which may be stale when called from the store subscription.
-   */
-  function syncVisibility(activeId: string | null, tabs: Tab[]) {
-    for (const [id, container] of containerMap) {
-      container.style.display = id === activeId ? "block" : "none";
-    }
+  // Subscribe to vaultStore for vault reachability (ERR-03)
+  const unsubVault = vaultStore.subscribe((state) => {
+    vaultReachable = state.vaultReachable;
+  });
 
-    // Save scroll/cursor when switching away from a tab
-    if (prevActiveTabId && prevActiveTabId !== activeId) {
-      const prevView = viewMap.get(prevActiveTabId);
-      if (prevView) {
-        try {
-          const scrollTop = prevView.scrollDOM.scrollTop;
-          const cursor = prevView.state.selection.main.head;
-          tabStore.updateScrollPos(prevActiveTabId, scrollTop, cursor);
-        } catch (_) { /* view may have been destroyed */ }
-      }
-    }
-
-    // Restore scroll/cursor when switching to a tab
-    if (activeId && activeId !== prevActiveTabId) {
-      const activeView = viewMap.get(activeId);
-      const activeTab = tabs.find((t) => t.id === activeId);
-      if (activeView && activeTab) {
-        if (activeTab.cursorPos > 0) {
-          const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
-          activeView.dispatch({ selection: { anchor: pos } });
-        }
-        requestAnimationFrame(() => {
-          activeView.scrollDOM.scrollTop = activeTab.scrollPos;
-        });
-        editorStore.syncFromTab(
-          activeTab.filePath,
-          activeView.state.doc.toString(),
-          activeTab.lastSaved ? String(activeTab.lastSaved) : null
-        );
-      }
-    }
-
-    prevActiveTabId = activeId;
-  }
-
-  // Manage EditorView lifecycle — create/destroy views when tabs change
+  // Manage EditorView lifecycle — create views for new tabs, destroy for removed
   $effect(() => {
     const currentIds = new Set(paneTabIds);
 
@@ -138,38 +83,67 @@
       if (!currentIds.has(id)) {
         view.destroy();
         viewMap.delete(id);
-        const container = containerMap.get(id);
-        if (container) container.remove();
-        containerMap.delete(id);
       }
     }
 
-    // Open new tabs (create EditorView if not yet in viewMap)
+    // Create views for new tabs (async — the container div is already in the DOM
+    // via the Svelte template, so we just need to mount the EditorView into it)
     for (const tabId of paneTabIds) {
       if (!viewMap.has(tabId)) {
         const tab = allTabs.find((t) => t.id === tabId);
         if (tab) {
-          createEditorView(tab);
+          mountEditorView(tab);
         }
       }
     }
-
-    // Also sync here for when the effect runs after containerMap changes
-    syncVisibility(paneActiveTabId, allTabs);
   });
 
-  // Subscribe to vaultStore for vault reachability (ERR-03)
-  const unsubVault = vaultStore.subscribe((state) => {
-    vaultReachable = state.vaultReachable;
+  // Handle scroll save/restore on tab switch — separate effect to avoid
+  // coupling with the lifecycle effect above
+  $effect(() => {
+    const newActiveId = paneActiveTabId;
+    if (newActiveId !== prevActiveTabId) {
+      // Save scroll/cursor on deactivated tab
+      if (prevActiveTabId) {
+        const prevView = viewMap.get(prevActiveTabId);
+        if (prevView) {
+          try {
+            tabStore.updateScrollPos(
+              prevActiveTabId,
+              prevView.scrollDOM.scrollTop,
+              prevView.state.selection.main.head
+            );
+          } catch (_) { /* view may have been destroyed */ }
+        }
+      }
+      // Restore scroll/cursor on activated tab
+      if (newActiveId) {
+        const activeView = viewMap.get(newActiveId);
+        const activeTab = allTabs.find((t) => t.id === newActiveId);
+        if (activeView && activeTab) {
+          if (activeTab.cursorPos > 0) {
+            const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
+            activeView.dispatch({ selection: { anchor: pos } });
+          }
+          requestAnimationFrame(() => {
+            activeView.scrollDOM.scrollTop = activeTab.scrollPos;
+          });
+          editorStore.syncFromTab(
+            activeTab.filePath,
+            activeView.state.doc.toString(),
+            activeTab.lastSaved ? String(activeTab.lastSaved) : null
+          );
+        }
+      }
+      prevActiveTabId = newActiveId;
+    }
   });
 
   /**
-   * Create a new EditorView for the given tab and mount it into a new container div.
-   * The container is appended to the pane host element.
-   * Initially hidden unless it's the active tab.
+   * Mount an EditorView into the container div rendered by Svelte's template.
+   * The container is found via data-tab-id attribute in the DOM.
    */
-  async function createEditorView(tab: Tab) {
-    if (!contentEl) return;
+  async function mountEditorView(tab: Tab) {
     if (viewMap.has(tab.id)) return;
 
     let content = "";
@@ -180,15 +154,17 @@
       return;
     }
 
+    // Find the container div rendered by Svelte's {#each} block
+    const container = document.querySelector(
+      `.vc-editor-pane [data-tab-id="${tab.id}"]`
+    ) as HTMLDivElement | null;
+    if (!container) return; // tab was closed before async completed
+
+    // Guard against double-mount (async race)
+    if (viewMap.has(tab.id)) return;
+
     // Initialize lastSavedContent snapshot for three-way merge base
     tabStore.setLastSavedContent(tab.id, content);
-
-    const container = document.createElement("div");
-    container.style.position = "absolute";
-    container.style.inset = "0";
-    container.style.display = "none"; // syncVisibility() will show it if active
-    container.setAttribute("data-tab-id", tab.id);
-    contentEl.appendChild(container);
 
     const onSave = async (text: string) => {
       // ERR-03: skip auto-save when vault is unreachable
@@ -210,7 +186,6 @@
             lastDiskFullToast = now;
             toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
           }
-          // Keep tab dirty so auto-save retries; do NOT clear editor buffer
           tabStore.setDirty(tab.id, true);
         } else {
           toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
@@ -218,19 +193,21 @@
       }
     };
 
-    // Mark dirty on doc change
     const onDirty = () => {
       tabStore.setDirty(tab.id, true);
     };
 
     const extensions = buildExtensions(onSave);
-    // Add dirty listener via EditorView.updateListener
     const { EditorView: EV } = await import("@codemirror/view");
     const dirtyListener = EV.updateListener.of((update) => {
       if (update.docChanged) {
         onDirty();
       }
     });
+
+    // Final guard — tab may have been closed during second await
+    if (!document.querySelector(`.vc-editor-pane [data-tab-id="${tab.id}"]`)) return;
+    if (viewMap.has(tab.id)) return;
 
     const view = new EditorView({
       state: EditorState.create({
@@ -241,16 +218,6 @@
     });
 
     viewMap.set(tab.id, view);
-    containerMap.set(tab.id, container);
-
-    // Now that the container and view are in the maps, sync visibility.
-    // This is the critical call — the $effect that triggered createEditorView
-    // ran before the async work finished, so it couldn't show this container.
-    // Compute activeId inline from $state vars (same logic as paneActiveTabId).
-    const currentActiveId = (activePane === paneId && activeTabId !== null && paneTabIds.includes(activeTabId))
-      ? activeTabId
-      : paneTabIds[0] ?? null;
-    syncVisibility(currentActiveId, allTabs);
 
     // Sync editorStore if this is the active tab
     if (tab.id === paneActiveTabId) {
@@ -260,15 +227,10 @@
 
   // ─── Watcher event handling ────────────────────────────────────────────────
 
-  /**
-   * Handle external file changes detected by the Rust file watcher.
-   * Only processes events for files open in THIS pane's EditorView Map.
-   */
   async function handleExternalFileChange(payload: FileChangePayload) {
     const { path, kind, new_path } = payload;
 
     if (kind === "modify") {
-      // Check if this pane has an EditorView for the modified file
       const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
       if (!tabWithPath || !viewMap.has(tabWithPath.id)) return;
 
@@ -281,18 +243,15 @@
         const result = await mergeExternalChange(path, editorContent, lastSavedContent);
 
         if (result.outcome === "clean") {
-          // Replace editor content with merged result
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: result.merged_content },
           });
-          // Update lastSavedContent to the merged result
           tabStore.setLastSavedContent(tabWithPath.id, result.merged_content);
           toastStore.push({
             variant: "clean-merge",
             message: `Externe Änderungen wurden in ${filename} eingebunden.`,
           });
         } else {
-          // Conflict: keep editor content as-is, update base snapshot
           tabStore.setLastSavedContent(tabWithPath.id, editorContent);
           toastStore.push({
             variant: "conflict",
@@ -300,11 +259,9 @@
           });
         }
       } catch (_err) {
-        // If merge command fails (e.g. file deleted between watcher event and read),
-        // silently ignore — the delete event will handle cleanup
+        // silently ignore — delete event handles cleanup
       }
     } else if (kind === "delete") {
-      // If the deleted file is open in this pane, destroy its EditorView and remove from Map
       const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
       if (tabWithPath) {
         const view = viewMap.get(tabWithPath.id);
@@ -312,26 +269,12 @@
           view.destroy();
           viewMap.delete(tabWithPath.id);
         }
-        const container = containerMap.get(tabWithPath.id);
-        if (container) {
-          container.remove();
-          containerMap.delete(tabWithPath.id);
-        }
-        // tabStore.closeByPath is called by Sidebar — don't double-close
       }
     } else if (kind === "rename" && new_path) {
-      // Update the Map key from old path to new path
-      const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
-      if (tabWithPath) {
-        // The tabStore.updateFilePath() call from Sidebar will update tab.filePath.
-        // The viewMap is keyed by tabId, not filePath, so no Map rekeying needed.
-      }
+      // viewMap is keyed by tabId, not filePath — no rekeying needed
     }
   }
 
-  /**
-   * Handle vault status events (ERR-03: vault unmount/reconnect).
-   */
   function handleVaultStatus(payload: { reachable: boolean }) {
     if (!payload.reachable) {
       vaultStore.setVaultReachable(false);
@@ -375,7 +318,6 @@
     }
     e.preventDefault();
 
-    // T-02-11 mitigation: check MIME type before accepting
     if (!e.dataTransfer.types.includes("text/vaultcore-tab")) {
       splitIndicatorSide = null;
       return;
@@ -388,9 +330,7 @@
   }
 
   onMount(async () => {
-    // Subscribe to file-change events for merge logic (SYNC-01)
     unlistenFileChange = await listenFileChange(handleExternalFileChange);
-    // Subscribe to vault status events for ERR-03 handling
     unlistenVaultStatus = await listenVaultStatus(handleVaultStatus);
   });
 
@@ -399,12 +339,10 @@
     unsubVault();
     unlistenFileChange?.();
     unlistenVaultStatus?.();
-    // Destroy all EditorView instances in this pane
     for (const view of viewMap.values()) {
       view.destroy();
     }
     viewMap.clear();
-    containerMap.clear();
   });
 </script>
 
@@ -422,24 +360,29 @@
     activeTabId={paneActiveTabId}
   />
 
-  <!-- Editor content area — EditorView containers are appended here via JS -->
-  <div class="vc-editor-content" bind:this={contentEl}>
+  <!-- Editor content area -->
+  <div class="vc-editor-content">
     {#if paneTabs.length === 0}
-      <!-- Empty pane state -->
       <div class="vc-editor-empty">
         <p class="vc-editor-empty-heading">No file open</p>
         <p class="vc-editor-empty-body">Select a file from the sidebar, or drag a tab here to split the view.</p>
       </div>
     {/if}
-    <!-- EditorView DOM containers are inserted here by createEditorView() -->
+    <!-- Svelte renders one container per tab. Visibility is driven by
+         style:display reacting to paneActiveTabId — no manual DOM needed. -->
+    {#each paneTabs as tab (tab.id)}
+      <div
+        class="vc-editor-container"
+        data-tab-id={tab.id}
+        style:display={tab.id === paneActiveTabId ? "block" : "none"}
+      ></div>
+    {/each}
   </div>
 
-  <!-- ERR-03 readonly overlay — shown when vault is unreachable -->
   {#if !vaultReachable}
     <div class="vc-editor-readonly-overlay"></div>
   {/if}
 
-  <!-- Drag-to-split indicator -->
   {#if splitIndicatorSide !== null}
     <div
       class="vc-split-indicator"
@@ -464,6 +407,11 @@
     flex: 1 1 0;
     position: relative;
     overflow: hidden;
+  }
+
+  .vc-editor-container {
+    position: absolute;
+    inset: 0;
   }
 
   .vc-editor-empty {
@@ -492,9 +440,6 @@
     max-width: 280px;
   }
 
-  /* ERR-03 readonly overlay — covers the editor area when vault is unreachable.
-     pointer-events: none so text is still readable (no interaction possible).
-     auto-save is also disabled in JS (double protection per T-02-21). */
   .vc-editor-readonly-overlay {
     pointer-events: none;
     background: rgba(255, 255, 255, 0.6);
@@ -503,7 +448,6 @@
     z-index: 10;
   }
 
-  /* Drag-to-split indicator */
   .vc-split-indicator {
     position: absolute;
     top: 0;
@@ -522,7 +466,6 @@
     right: 0;
   }
 
-  /* Split fill overlay at 20% opacity */
   .vc-split-indicator::after {
     content: "";
     position: absolute;
