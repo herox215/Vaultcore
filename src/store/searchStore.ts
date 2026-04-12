@@ -26,7 +26,7 @@ export interface SearchStoreState {
   /** True while a rebuild_index IPC call is in-flight. */
   isRebuilding: boolean;
   /** Controls which sidebar panel is visible (D-01). */
-  activeTab: "files" | "search";
+  activeTab: "files" | "search" | "tags";
 }
 
 const initial: SearchStoreState = {
@@ -69,8 +69,8 @@ function createSearchStore() {
     setRebuilding: (isRebuilding: boolean) =>
       update((s) => ({ ...s, isRebuilding })),
 
-    /** Switch the sidebar between the file browser and search results panels. */
-    setActiveTab: (tab: "files" | "search") =>
+    /** Switch the sidebar between the file browser, search results, and tags panels. */
+    setActiveTab: (tab: "files" | "search" | "tags") =>
       update((s) => ({ ...s, activeTab: tab })),
 
     /** Clear results and query — called on vault close or explicit dismiss. */
