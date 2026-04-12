@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { FilePlus, FolderPlus } from "lucide-svelte";
+  import { FilePlus, FolderPlus, ArrowUpDown } from "lucide-svelte";
   import { listDirectory, createFile, createFolder } from "../../ipc/commands";
+  import SortMenu from "./SortMenu.svelte";
+  import {
+    loadTreeState,
+    saveTreeState,
+    sortEntries,
+    type TreeState,
+    type SortBy,
+    DEFAULT_TREE_STATE,
+  } from "../../lib/treeState";
   import { vaultStore } from "../../store/vaultStore";
   import { toastStore } from "../../store/toastStore";
   import { progressStore } from "../../store/progressStore";
@@ -38,6 +47,8 @@
   let loading = $state(false);
   let bulkActive = $state(false);
   let bulkCount = $state(0);
+  let treeState = $state<TreeState>({ ...DEFAULT_TREE_STATE });
+  let sortMenuOpen = $state(false);
 
   // Watcher unlisten handles — cleaned up on destroy
   let unlistenFileChange: UnlistenFn | null = null;
@@ -50,6 +61,15 @@
       : "No vault"
   );
 
+  /** Compute vault-relative path from an absolute path. */
+  function vaultRel(absPath: string): string {
+    const vaultPath = $vaultStore.currentPath ?? "";
+    if (absPath.startsWith(vaultPath + "/")) {
+      return absPath.slice(vaultPath.length + 1).replace(/\\/g, "/");
+    }
+    return absPath.replace(/\\/g, "/");
+  }
+
   async function loadRoot() {
     const vaultPath = $vaultStore.currentPath;
     if (!vaultPath) return;
@@ -60,7 +80,8 @@
     if (isInitialLoad) loading = true;
     loadError = null;
     try {
-      rootEntries = await listDirectory(vaultPath);
+      const raw = await listDirectory(vaultPath);
+      rootEntries = sortEntries(raw, treeState.sortBy);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       loadError = vaultErrorCopy(ve);
@@ -117,7 +138,19 @@
   let prevRefreshToken: string | null = null;
   let unsubTreeRefresh: (() => void) | null = null;
 
+  async function onExpandToggle(relPath: string, isExpanded: boolean) {
+    const expanded = new Set(treeState.expanded);
+    if (isExpanded) expanded.add(relPath);
+    else expanded.delete(relPath);
+    treeState = { ...treeState, expanded: Array.from(expanded) };
+    await saveTreeState($vaultStore.currentPath ?? "", treeState);
+  }
+
   onMount(async () => {
+    // Load persisted tree state BEFORE first render so sort + expanded are applied
+    if ($vaultStore.currentPath) {
+      treeState = await loadTreeState($vaultStore.currentPath);
+    }
     void loadRoot();
 
     // Subscribe to watcher events (SYNC-01, SYNC-05)
@@ -187,6 +220,13 @@
   function handlePathChanged(_oldPath: string, _newPath: string) {
     void loadRoot();
   }
+
+  async function handleSortSelect(next: SortBy) {
+    treeState = { ...treeState, sortBy: next };
+    sortMenuOpen = false;
+    await saveTreeState($vaultStore.currentPath ?? "", treeState);
+    rootEntries = sortEntries(rootEntries, next);
+  }
 </script>
 
 <aside class="vc-sidebar" data-testid="sidebar">
@@ -241,7 +281,7 @@
       <span class="vc-sidebar-vaultname" title={$vaultStore.currentPath ?? ""}>
         {vaultName}
       </span>
-      <div class="vc-sidebar-actions">
+      <div class="vc-sidebar-actions" style="position: relative;">
         <button
           class="vc-sidebar-action-btn"
           onclick={handleNewFile}
@@ -258,6 +298,25 @@
         >
           <FolderPlus size={16} strokeWidth={1.5} />
         </button>
+        <button
+          type="button"
+          class="vc-sidebar-action-btn"
+          class:vc-sidebar-action-btn--active={sortMenuOpen}
+          onclick={() => (sortMenuOpen = !sortMenuOpen)}
+          aria-label="Sortierung"
+          aria-haspopup="menu"
+          aria-expanded={sortMenuOpen}
+          title="Sortierung"
+        >
+          <ArrowUpDown size={16} strokeWidth={1.5} />
+        </button>
+        {#if sortMenuOpen}
+          <SortMenu
+            value={treeState.sortBy}
+            onSelect={handleSortSelect}
+            onDismiss={() => (sortMenuOpen = false)}
+          />
+        {/if}
       </div>
     {/if}
   </header>
@@ -281,6 +340,9 @@
             {onOpenFile}
             onRefreshParent={loadRoot}
             onPathChanged={handlePathChanged}
+            {onExpandToggle}
+            initiallyExpanded={treeState.expanded.includes(vaultRel(entry.path))}
+            sortBy={treeState.sortBy}
           />
         {/each}
       </ul>
@@ -344,6 +406,10 @@
 
   .vc-sidebar-action-btn:hover {
     background: var(--color-accent-bg);
+    color: var(--color-accent);
+  }
+
+  .vc-sidebar-action-btn--active {
     color: var(--color-accent);
   }
 

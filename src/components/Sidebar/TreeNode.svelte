@@ -8,6 +8,8 @@
   import InlineRename from "./InlineRename.svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
+  import { sortEntries, type SortBy } from "../../lib/treeState";
+  import { onMount } from "svelte";
 
   interface Props {
     entry: DirEntry;
@@ -17,6 +19,9 @@
     onOpenFile: (path: string) => void;
     onRefreshParent: () => void;
     onPathChanged: (oldPath: string, newPath: string) => void;
+    onExpandToggle?: (relPath: string, isExpanded: boolean) => void;
+    initiallyExpanded?: boolean;
+    sortBy?: SortBy;
   }
 
   let {
@@ -27,9 +32,12 @@
     onOpenFile,
     onRefreshParent,
     onPathChanged,
+    onExpandToggle,
+    initiallyExpanded = false,
+    sortBy = "name",
   }: Props = $props();
 
-  let expanded = $state(false);
+  let expanded = $state(initiallyExpanded);
   let children = $state<DirEntry[]>([]);
   let childrenLoaded = $state(false);
   let loading = $state(false);
@@ -75,11 +83,19 @@
 
   const isActive = $derived(selectedPath === entry.path);
 
+  // Auto-load children if this node starts expanded (restored from persisted state, FILE-07)
+  onMount(() => {
+    if (initiallyExpanded && entry.is_dir && !childrenLoaded) {
+      void loadChildren();
+    }
+  });
+
   async function loadChildren() {
     if (loading) return;
     loading = true;
     try {
-      children = await listDirectory(entry.path);
+      const raw = await listDirectory(entry.path);
+      children = sortEntries(raw, sortBy);
       childrenLoaded = true;
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -95,6 +111,10 @@
     if (expanded && !childrenLoaded) {
       await loadChildren();
     }
+    // Notify Sidebar to persist expand state (FILE-07)
+    const vault = getVaultRoot();
+    const relPath = vault ? toRelPath(entry.path, vault) : entry.path;
+    onExpandToggle?.(relPath, expanded);
   }
 
   function handleClick() {
@@ -539,6 +559,9 @@
           {onOpenFile}
           onRefreshParent={refreshChildren}
           {onPathChanged}
+          {onExpandToggle}
+          initiallyExpanded={false}
+          {sortBy}
         />
       {/each}
       {#if children.length === 0}
