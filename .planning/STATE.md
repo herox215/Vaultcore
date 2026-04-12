@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Phase 5 context gathered (auto mode)
-last_updated: "2026-04-12T20:18:28.924Z"
-last_activity: 2026-04-12 -- Phase 5 planning complete
+stopped_at: Completed 05-polish-00-PLAN.md
+last_updated: "2026-04-12T20:40:24.818Z"
+last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 20
-  percent: 74
+  completed_plans: 21
+  percent: 78
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Stay fluid at 100,000+ notes — open, search, link, and edit a vault of that size without perceptible lag.
-**Current focus:** Phase 4 — Links
+**Current focus:** Phase 5 — Polish
 
 ## Current Position
 
-Phase: 4 (Links) — EXECUTING
-Plan: 4 of 4
+Phase: 5 (Polish) — EXECUTING
+Plan: 2 of 8
 Status: Ready to execute
-Last activity: 2026-04-12 -- Phase 5 planning complete
+Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -79,6 +79,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-links P04-02 | 7 | 2 tasks | 3 files |
 | Phase 04-links P03 | 68s | 1 tasks | 3 files |
 | Phase 04-links P04 | 6min | 3 tasks | 7 files |
+| Phase 05-polish P00 | 18min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,11 @@ Recent decisions affecting current work:
 - [Phase 04-links]: filter:false in wikiLinkCompletionSource — nucleo already ranks results; CM6 re-filtering would break nucleo ordering
 - [Phase 04-links]: autocompletion() override replaces default CM6 sources — closeBrackets is a separate extension, not a CompletionSource, so no conflict
 - [Phase 04-links]: backlinksStore uses classic writable store (D-06/RC-01); VaultLayout 5-column CSS grid with right-sidebar-width CSS var; EditorPane wiki-link-click listener per EditorView DOM; reloadResolvedLinks soft-fail sets empty Map on error; TreeNode getVaultRoot() one-shot subscribe; Move cascade (D-11) uses pendingMove state mirroring pendingRename
+- [Phase 05-polish]: Used pnpm (not npm) for install — project has pnpm-lock.yaml; npm errored with peer-dep conflict
+- [Phase 05-polish]: serde_yml 0.0.12 chosen over deprecated serde_yaml (maintained fork per RESEARCH Pitfall 1)
+- [Phase 05-polish]: DirEntry timestamps use Option<u64> UNIX seconds with double .ok() to avoid panics on Linux ext4 and pre-epoch clocks
+- [Phase 05-polish]: No serde rename_all=camelCase on DirEntry — snake_case preserved for backward compat with existing frontend field reads
+- [Phase 05-polish]: var(--vc-font-size) consumer wired in theme.ts before producer defined — browser falls back to inherited 14px without visual regression
 
 ### Pending Todos
 
@@ -162,6 +168,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T18:40:04.532Z
-Stopped at: Phase 5 context gathered (auto mode)
-Resume file: .planning/phases/05-polish/05-CONTEXT.md
+Last session: 2026-04-12T20:40:24.814Z
+Stopped at: Completed 05-polish-00-PLAN.md
+Resume file: None

@@ -70,7 +70,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **FILE-03**: User can rename files (triggers the LINK-09 cascade when links are affected)
 - [x] **FILE-04**: Deleting a file moves it to `<vault>/.trash/` rather than permanently removing it
 - [x] **FILE-05**: User can move files by drag-and-drop
-- [ ] **FILE-06**: Sorting options: name, modified date, created date; order is remembered
+- [x] **FILE-06**: Sorting options: name, modified date, created date; order is remembered
 - [ ] **FILE-07**: Folder expand/collapse state is persisted across sessions
 - [x] **FILE-08**: Symbolic links are displayed but not followed
 - [x] **FILE-09**: Non-UTF-8 files are displayed; attempting to open one shows a toast error and does not load them into the editor
@@ -96,7 +96,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 ### UI / UX
 
 - [ ] **UI-01**: Dark mode and Light mode are implemented and can be toggled at runtime
-- [ ] **UI-02**: Font family and font size are configurable
+- [x] **UI-02**: Font family and font size are configurable
 - [ ] **UI-03**: Sidebar can be collapsed/expanded with Cmd/Ctrl+\
 - [x] **UI-04**: Toast component supports error, clean-merge, and conflict variants, auto-dismisses after 5 s, and is manually dismissable
 - [ ] **UI-05**: All MVP keyboard shortcuts from spec Section 13 are wired up
@@ -233,7 +233,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | FILE-03 | Phase 2 — Vault | Complete |
 | FILE-04 | Phase 2 — Vault | Complete |
 | FILE-05 | Phase 2 — Vault | Complete |
-| FILE-06 | Phase 5 — Polish | Pending |
+| FILE-06 | Phase 5 — Polish | Complete |
 | FILE-07 | Phase 5 — Polish | Pending |
 | FILE-08 | Phase 2 — Vault | Complete |
 | FILE-09 | Phase 2 — Vault | Complete |
@@ -250,7 +250,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | SYNC-07 | Phase 2 — Vault | Complete |
 | SYNC-08 | Phase 2 — Vault | Complete |
 | UI-01 | Phase 5 — Polish | Pending |
-| UI-02 | Phase 5 — Polish | Pending |
+| UI-02 | Phase 5 — Polish | Complete |
 | UI-03 | Phase 5 — Polish | Pending |
 | UI-04 | Phase 1 — Skeleton | Complete |
 | UI-05 | Phase 5 — Polish | Pending |
