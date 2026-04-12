@@ -68,3 +68,38 @@ html, body, #app {
 .vc-spin {
   animation: vc-spin 1s linear infinite;
 }
+
+/* Phase 3 — Quick Switcher */
+.vc-quick-switcher-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 200;
+}
+.vc-quick-switcher-modal {
+  width: 560px;
+  max-height: 480px;
+  position: fixed;
+  top: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Phase 3 — Flash highlight for scroll-to-match */
+.vc-flash-highlight {
+  background: #FEF9C3;
+  transition: background 2500ms ease-out, opacity 2500ms ease-out;
+  border-radius: 2px;
+}
+.vc-flash-highlight.vc-flash-done {
+  background: transparent;
+  opacity: 0;
+}
