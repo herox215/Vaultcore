@@ -61,7 +61,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **LINK-06**: Backlinks panel shows every note whose parsed links point to the currently-active note
 - [x] **LINK-07**: `get_unresolved_links` command returns all dangling links in the vault
 - [x] **LINK-08**: The link graph is built from disk on startup (adjacency list) and updated incrementally on file changes
-- [ ] **LINK-09**: Renaming a file updates every wiki-link pointing at it after a confirmation dialog ("X links will be updated. Continue?")
+- [x] **LINK-09**: Renaming a file updates every wiki-link pointing at it after a confirmation dialog ("X links will be updated. Continue?")
 
 ### Files
 
@@ -227,7 +227,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | LINK-06 | Phase 4 — Links | Complete |
 | LINK-07 | Phase 4 — Links | Complete |
 | LINK-08 | Phase 4 — Links | Complete |
-| LINK-09 | Phase 4 — Links | Pending |
+| LINK-09 | Phase 4 — Links | Complete |
 | FILE-01 | Phase 2 — Vault | Complete |
 | FILE-02 | Phase 2 — Vault | Complete |
 | FILE-03 | Phase 2 — Vault | Complete |
