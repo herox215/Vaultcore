@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-polish-03-PLAN.md
-last_updated: "2026-04-12T21:20:37.111Z"
+stopped_at: Completed 05-polish-05-PLAN.md
+last_updated: "2026-04-12T21:31:29.629Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 24
-  percent: 89
+  completed_plans: 25
+  percent: 93
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 5 (Polish) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -83,6 +83,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-polish P01 | 12min | 2 tasks | 10 files |
 | Phase 05-polish P02 | 11 | 2 tasks | 8 files |
 | Phase 05-polish P03 | 6min | 3 tasks | 5 files |
+| Phase 05-polish P05 | 7min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -159,6 +160,8 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: SettingsModal.svelte uses subscribe side-effects (not $derived) to stay compatible with D-06/RC-01 classic writable store pattern
 - [Phase 05-polish]: Central SHORTCUTS registry in shortcuts.ts: shift guard requires !shiftKey for non-shift bindings to prevent Cmd+Shift+N matching Cmd+N slot; next-tab exempted since shift picks direction
 - [Phase 05-polish]: createNewNote uses vault root (not selected folder) in MVP — D-12 vault root fallback; selected-folder targeting deferred
+- [Phase 05-polish]: matchLanguageName third arg is fuzzy (substring), not alias-only — use fuzzy=false for reliable unknown-label test in fencedCode.test.ts
+- [Phase 05-polish]: Lezer markdown parser baseline on 10k-line doc is ~5-6s per 100 state updates in jsdom — largeFile.test.ts uses 30s budget + EditorState-only dispatch to catch O(n²) regressions while passing baseline
 
 ### Pending Todos
 
@@ -177,6 +180,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T21:20:37.108Z
-Stopped at: Completed 05-polish-03-PLAN.md
+Last session: 2026-04-12T21:31:29.627Z
+Stopped at: Completed 05-polish-05-PLAN.md
 Resume file: None
