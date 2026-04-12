@@ -92,7 +92,12 @@ Plans:
   3. Typing `[[` opens an autocomplete list that filters filenames as the user types, and the backlinks panel for the active note lists every other note that links into it
   4. Renaming or moving a file through the sidebar prompts "X links will be updated. Continue?" and, on confirm, rewrites every wiki-link pointing at the old path so nothing becomes unresolved after the rename
   5. The `get_unresolved_links` command returns a complete list of dangling links for the vault, and the link graph stays accurate as notes are created, edited, and deleted (no full rescan required)
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 04-01-PLAN.md — Wave 1: Rust LinkGraph module (ParsedLink, 3-stage resolve_link, update_file, remove_file, get_backlinks, get_unresolved), IndexCoordinator integration, 5 IPC commands (get_backlinks, get_outgoing_links, get_unresolved_links, suggest_links, update_links_after_rename), TypeScript types and IPC wrappers, unit tests for resolution algorithm
+- [ ] 04-02-PLAN.md — Wave 2: CM6 wikiLink ViewPlugin (Decoration.mark with accent/muted classes via RangeSetBuilder), lezer syntax-tree code-block exclusion, mousedown event handler dispatching wiki-link-click CustomEvent, tailwind.css classes .cm-wikilink-resolved/.cm-wikilink-unresolved, setResolvedPaths module state for resolution lookup
+- [ ] 04-03-PLAN.md — Wave 2: CM6 wikiLinkCompletionSource (triggered by matchBefore(/[[([^]]*)/) excluding alias), suggestLinks IPC integration (nucleo fuzzy), autocompletion() extension wired into buildExtensions, popup CSS matching UI-SPEC (360px, filename bold + path grey, Keine Dateien gefunden empty state)
+- [ ] 04-04-PLAN.md — Wave 3: backlinksStore (localStorage persistence for open/width), BacklinksPanel + BacklinkRow components (German copy per UI-SPEC), RightSidebar component, VaultLayout 5-column grid extension with Cmd+Shift+B toggle, EditorPane wiki-link-click listener (tabStore.openTab for resolved, createFile+openTab for unresolved), TreeNode rename/move cascade with German confirmation and partial-error toast, end-to-end human verification checkpoint
 **UI hint**: yes
 
 ### Phase 5: Polish
