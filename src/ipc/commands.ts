@@ -10,6 +10,7 @@ import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
+import type { SearchResult, FileMatch } from "../types/search";
 
 function normalizeError(err: unknown): VaultError {
   if (isVaultError(err)) {
@@ -153,6 +154,52 @@ export async function mergeExternalChange(
       editorContent,
       lastSavedContent,
     });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+// ── Search commands ────────────────────────────────────────────────────────────
+
+/**
+ * Full-text search using Tantivy BM25 with AND/OR/NOT/phrase support.
+ * Never throws on bad query syntax — the Rust side uses parse_query_lenient.
+ */
+export async function searchFulltext(
+  query: string,
+  limit: number = 100,
+): Promise<SearchResult[]> {
+  try {
+    return await invoke<SearchResult[]>("search_fulltext", { query, limit });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Fuzzy filename search using the pre-warmed nucleo Matcher.
+ * Returns up to `limit` matches sorted by score descending, with match
+ * indices for frontend highlighting.
+ */
+export async function searchFilename(
+  query: string,
+  limit: number = 20,
+): Promise<FileMatch[]> {
+  try {
+    return await invoke<FileMatch[]>("search_filename", { query, limit });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Trigger a full index rebuild.
+ * The rebuild runs asynchronously in the Rust write-queue — this call returns
+ * as soon as the command is enqueued (toast notifications are emitted by Rust).
+ */
+export async function rebuildIndex(): Promise<void> {
+  try {
+    await invoke<void>("rebuild_index");
   } catch (e) {
     throw normalizeError(e);
   }
