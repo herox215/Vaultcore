@@ -74,7 +74,8 @@ pub enum IndexCmd {
 /// Owns the mpsc sender end.  The single background task owns the
 /// `IndexWriter` — guaranteeing no concurrent writes.
 pub struct IndexCoordinator {
-    tx: mpsc::Sender<IndexCmd>,
+    /// Channel sender — search commands use this to enqueue rebuild requests.
+    pub tx: mpsc::Sender<IndexCmd>,
     file_index: Arc<Mutex<FileIndex>>,
     matcher: Arc<Mutex<nucleo_matcher::Matcher>>,
     /// Shared reader — search commands clone this Arc to query the index.

@@ -99,6 +99,9 @@ pub fn run() {
             commands::files::count_wiki_links,
             commands::tree::list_directory,
             commands::vault::merge_external_change,
+            commands::search::search_fulltext,
+            commands::search::search_filename,
+            commands::search::rebuild_index,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
