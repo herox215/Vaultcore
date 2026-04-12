@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
+    "@codemirror/language-data": "^6.5.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language": "^6.12.3",
@@ -36,6 +37,10 @@
     "@codemirror/view": "^6.41.0",
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.6.3",
+    "@fontsource/fira-code": "^5.2.7",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/lora": "^5.2.8",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-fs": "^2.5.0",
