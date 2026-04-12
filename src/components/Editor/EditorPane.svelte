@@ -10,6 +10,8 @@
   import { readFile, writeFile, mergeExternalChange } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
+  import { scrollToMatch } from "./flashHighlight";
+  import { scrollStore } from "../../store/scrollStore";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -72,6 +74,27 @@
   // Subscribe to vaultStore for vault reachability (ERR-03)
   const unsubVault = vaultStore.subscribe((state) => {
     vaultReachable = state.vaultReachable;
+  });
+
+  // Subscribe to scrollStore — execute scroll-to-match when a request targets a file in this pane.
+  // Uses doc.toString().indexOf() to find the first occurrence (no @codemirror/search dep needed).
+  const unsubScroll = scrollStore.subscribe((state) => {
+    if (!state.pending) return;
+    const { filePath, searchText } = state.pending;
+    // Find which tab in this pane has this file
+    const tab = allTabs.find((t) => t.filePath === filePath && paneTabIds.includes(t.id));
+    if (!tab) return;
+    const view = viewMap.get(tab.id);
+    if (!view) return;
+    // Find first occurrence of searchText using plain string search (case-insensitive)
+    const docText = view.state.doc.toString();
+    const lowerDoc = docText.toLowerCase();
+    const lowerSearch = searchText.toLowerCase();
+    const from = lowerDoc.indexOf(lowerSearch);
+    if (from === -1) return;
+    const to = from + searchText.length;
+    scrollToMatch(view, from, to);
+    scrollStore.clearPending();
   });
 
   // Manage EditorView lifecycle — create views for new tabs, destroy for removed
@@ -337,6 +360,7 @@
   onDestroy(() => {
     unsubTab();
     unsubVault();
+    unsubScroll();
     unlistenFileChange?.();
     unlistenVaultStatus?.();
     for (const view of viewMap.values()) {

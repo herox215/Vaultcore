@@ -2,9 +2,11 @@
   import { onMount, tick } from "svelte";
   import { RefreshCw } from "lucide-svelte";
   import { searchStore } from "../../store/searchStore";
+  import { scrollStore } from "../../store/scrollStore";
   import { searchFulltext, rebuildIndex } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import type { SearchResult } from "../../types/search";
+  import { extractSnippetMatch } from "../Editor/flashHighlight";
   import SearchInput from "./SearchInput.svelte";
   import SearchResults from "./SearchResults.svelte";
 
@@ -53,7 +55,13 @@
   }
 
   function handleResultClick(result: SearchResult) {
+    // Open the file tab first
     onOpenFile(result.path);
+    // Then request scroll-to-match: extract first highlighted term from snippet
+    const searchText = extractSnippetMatch(result.snippet) ?? $searchStore.query.split(" ")[0] ?? "";
+    if (searchText.trim()) {
+      scrollStore.requestScrollToMatch(result.path, searchText);
+    }
   }
 </script>
 

@@ -21,6 +21,7 @@ import { GFM } from "@lezer/markdown";
 import { vaultKeymap } from "./keymap";
 import { markdownTheme, markdownHighlightStyle } from "./theme";
 import { autoSaveExtension } from "./autoSave";
+import { flashField } from "./flashHighlight";
 
 export function buildExtensions(onSave: (text: string) => void): Extension[] {
   return [
@@ -43,5 +44,6 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
     syntaxHighlighting(markdownHighlightStyle),
     markdownTheme,
     autoSaveExtension(onSave),
+    flashField,
   ];
 }
