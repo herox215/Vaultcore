@@ -47,7 +47,11 @@
   async function loadRoot() {
     const vaultPath = $vaultStore.currentPath;
     if (!vaultPath) return;
-    loading = true;
+    // Only show loading spinner on initial load — refreshes silently update
+    // rootEntries to avoid destroying TreeNode components and losing their
+    // local expanded state.
+    const isInitialLoad = rootEntries.length === 0;
+    if (isInitialLoad) loading = true;
     loadError = null;
     try {
       rootEntries = await listDirectory(vaultPath);
@@ -56,7 +60,7 @@
       loadError = vaultErrorCopy(ve);
       toastStore.push({ variant: "error", message: loadError });
     } finally {
-      loading = false;
+      if (isInitialLoad) loading = false;
     }
   }
 
