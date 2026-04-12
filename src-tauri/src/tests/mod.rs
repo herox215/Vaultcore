@@ -7,3 +7,4 @@ mod watcher;
 mod merge;
 mod indexer;
 mod link_graph;
+pub mod tag_index;

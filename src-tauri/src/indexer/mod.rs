@@ -17,12 +17,14 @@ pub mod tantivy_index;
 pub mod memory;
 pub mod parser;
 pub mod link_graph;
+pub mod tag_index;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use link_graph::{LinkGraph, extract_links};
+use tag_index::TagIndex;
 
 use tantivy::schema::Schema;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
@@ -77,6 +79,15 @@ pub enum IndexCmd {
     RemoveLinks {
         rel_path: String,
     },
+    /// Incrementally update tag-index entries for a file (TAG-01/02).
+    UpdateTags {
+        rel_path: String,
+        content: String,
+    },
+    /// Remove all tag-index entries for a deleted file (TAG-01/02).
+    RemoveTags {
+        rel_path: String,
+    },
 }
 
 // ── IndexCoordinator ──────────────────────────────────────────────────────────
@@ -96,6 +107,8 @@ pub struct IndexCoordinator {
     pub index: Arc<Index>,
     /// In-memory link adjacency list — shared with link IPC commands.
     link_graph: Arc<Mutex<LinkGraph>>,
+    /// In-memory tag index — shared with tag IPC commands.
+    tag_index: Arc<Mutex<TagIndex>>,
 }
 
 impl IndexCoordinator {
@@ -131,6 +144,7 @@ impl IndexCoordinator {
             nucleo_matcher::Config::DEFAULT,
         )));
         let link_graph = Arc::new(Mutex::new(LinkGraph::new()));
+        let tag_index = Arc::new(Mutex::new(TagIndex::new()));
 
         let (tx, rx) = mpsc::channel::<IndexCmd>(CHANNEL_CAPACITY);
 
@@ -139,6 +153,7 @@ impl IndexCoordinator {
         let reader_clone = Arc::clone(&reader);
         let file_index_clone = Arc::clone(&file_index);
         let link_graph_clone = Arc::clone(&link_graph);
+        let tag_index_clone = Arc::clone(&tag_index);
         tokio::spawn(async move {
             run_queue_consumer(
                 rx,
@@ -146,6 +161,7 @@ impl IndexCoordinator {
                 reader_clone,
                 file_index_clone,
                 link_graph_clone,
+                tag_index_clone,
                 schema,
                 path_field,
                 title_field,
@@ -161,6 +177,7 @@ impl IndexCoordinator {
             reader,
             index,
             link_graph,
+            tag_index,
         })
     }
 
@@ -175,6 +192,11 @@ impl IndexCoordinator {
     /// Clone the link_graph Arc for use in IPC commands.
     pub fn link_graph(&self) -> Arc<Mutex<LinkGraph>> {
         Arc::clone(&self.link_graph)
+    }
+
+    /// Clone the tag_index Arc for use in IPC commands.
+    pub fn tag_index(&self) -> Arc<Mutex<TagIndex>> {
+        Arc::clone(&self.tag_index)
     }
 
     /// Index all `.md` files in `vault_path` and return a `VaultInfo`.
@@ -294,6 +316,9 @@ impl IndexCoordinator {
                     if let Ok(mut lg) = self.link_graph.lock() {
                         lg.update_file(&rel, links, &all_paths);
                     }
+                    if let Ok(mut ti) = self.tag_index.lock() {
+                        ti.update_file(&rel, &content);
+                    }
                 }
             }
         }
@@ -317,6 +342,7 @@ async fn run_queue_consumer(
     reader: Arc<IndexReader>,
     file_index: Arc<Mutex<FileIndex>>,
     link_graph: Arc<Mutex<LinkGraph>>,
+    tag_index: Arc<Mutex<TagIndex>>,
     _schema: Schema,
     path_field: tantivy::schema::Field,
     title_field: tantivy::schema::Field,
@@ -407,6 +433,18 @@ async fn run_queue_consumer(
                 // Remove link-graph entries for a deleted file (LINK-08).
                 if let Ok(mut lg) = link_graph.lock() {
                     lg.remove_file(&rel_path);
+                }
+            }
+            IndexCmd::UpdateTags { rel_path, content } => {
+                // Incrementally update tag-index entries for a file (TAG-01/02).
+                if let Ok(mut ti) = tag_index.lock() {
+                    ti.update_file(&rel_path, &content);
+                }
+            }
+            IndexCmd::RemoveTags { rel_path } => {
+                // Remove tag-index entries for a deleted file (TAG-01/02).
+                if let Ok(mut ti) = tag_index.lock() {
+                    ti.remove_file(&rel_path);
                 }
             }
             IndexCmd::Shutdown => {
