@@ -20,8 +20,9 @@ export function autoSaveExtension(
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged) return;
     if (timer !== null) clearTimeout(timer);
+    const view = update.view;
     timer = setTimeout(() => {
-      onSave(update.state.doc.toString());
+      onSave(view.state.doc.toString());
       timer = null;
     }, AUTO_SAVE_DEBOUNCE_MS);
   });
