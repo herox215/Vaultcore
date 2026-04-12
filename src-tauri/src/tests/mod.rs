@@ -4,3 +4,4 @@ mod files_ops;
 mod vault_stats;
 mod tree;
 mod watcher;
+mod merge;
