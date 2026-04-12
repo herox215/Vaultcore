@@ -72,19 +72,24 @@
     allTabs = state.tabs;
     activeTabId = state.activeTabId;
     activePane = state.splitState.activePane;
-    // Sync visibility on every store change — this catches tab switches
-    // that the $effect might miss due to batching or async timing.
-    syncVisibility();
+    // Sync visibility using values directly from the store state —
+    // $derived (paneActiveTabId) may not have recomputed yet after
+    // setting $state variables above.
+    const paneIds = state.splitState[paneId];
+    const activeForPane = (state.splitState.activePane === paneId
+      && state.activeTabId !== null
+      && paneIds.includes(state.activeTabId))
+        ? state.activeTabId
+        : paneIds[0] ?? null;
+    syncVisibility(activeForPane, state.tabs);
   });
 
   /**
    * Show only the active tab's container, hide all others.
-   * Called from both the store subscription (handles tab switches) and
-   * createEditorView (handles new tabs after async file read completes).
-   * Uses paneActiveTabId which is $derived — always reads the current value.
+   * Takes the active ID and tabs as parameters to avoid relying on
+   * $derived which may be stale when called from the store subscription.
    */
-  function syncVisibility() {
-    const activeId = paneActiveTabId;
+  function syncVisibility(activeId: string | null, tabs: Tab[]) {
     for (const [id, container] of containerMap) {
       container.style.display = id === activeId ? "block" : "none";
     }
@@ -104,7 +109,7 @@
     // Restore scroll/cursor when switching to a tab
     if (activeId && activeId !== prevActiveTabId) {
       const activeView = viewMap.get(activeId);
-      const activeTab = allTabs.find((t) => t.id === activeId);
+      const activeTab = tabs.find((t) => t.id === activeId);
       if (activeView && activeTab) {
         if (activeTab.cursorPos > 0) {
           const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
@@ -150,7 +155,7 @@
     }
 
     // Also sync here for when the effect runs after containerMap changes
-    syncVisibility();
+    syncVisibility(paneActiveTabId, allTabs);
   });
 
   // Subscribe to vaultStore for vault reachability (ERR-03)
@@ -241,7 +246,11 @@
     // Now that the container and view are in the maps, sync visibility.
     // This is the critical call — the $effect that triggered createEditorView
     // ran before the async work finished, so it couldn't show this container.
-    syncVisibility();
+    // Compute activeId inline from $state vars (same logic as paneActiveTabId).
+    const currentActiveId = (activePane === paneId && activeTabId !== null && paneTabIds.includes(activeTabId))
+      ? activeTabId
+      : paneTabIds[0] ?? null;
+    syncVisibility(currentActiveId, allTabs);
 
     // Sync editorStore if this is the active tab
     if (tab.id === paneActiveTabId) {
