@@ -9,6 +9,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
+import type { DirEntry } from "../types/tree";
 
 function normalizeError(err: unknown): VaultError {
   if (isVaultError(err)) {
@@ -70,6 +71,62 @@ export async function readFile(path: string): Promise<string> {
 export async function writeFile(path: string, content: string): Promise<string> {
   try {
     return await invoke<string>("write_file", { path, content });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function listDirectory(path: string): Promise<DirEntry[]> {
+  try {
+    return await invoke<DirEntry[]>("list_directory", { path });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function createFile(parent: string, name: string): Promise<string> {
+  try {
+    return await invoke<string>("create_file", { parent, name });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function renameFile(oldPath: string, newName: string): Promise<{ newPath: string; linkCount: number }> {
+  try {
+    return await invoke<{ newPath: string; linkCount: number }>("rename_file", { oldPath, newName });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function deleteFile(path: string): Promise<void> {
+  try {
+    await invoke<void>("delete_file", { path });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function moveFile(from: string, toFolder: string): Promise<string> {
+  try {
+    return await invoke<string>("move_file", { from, toFolder });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function createFolder(parent: string, name: string): Promise<string> {
+  try {
+    return await invoke<string>("create_folder", { parent, name });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function countWikiLinks(filename: string): Promise<number> {
+  try {
+    return await invoke<number>("count_wiki_links", { filename });
   } catch (e) {
     throw normalizeError(e);
   }

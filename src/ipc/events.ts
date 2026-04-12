@@ -22,3 +22,62 @@ export function listenIndexProgress(
     handler(event.payload);
   });
 }
+
+// --- Phase 2 events ---------------------------------------------------------
+
+export interface FileChangePayload {
+  path: string;
+  kind: "create" | "modify" | "delete" | "rename";
+  new_path?: string;
+}
+
+export interface VaultStatusPayload {
+  reachable: boolean;
+}
+
+export interface BulkChangePayload {
+  estimated_count: number;
+}
+
+export const FILE_CHANGE_EVENT = "vault://file_changed";
+export const VAULT_STATUS_EVENT = "vault://vault_status";
+export const BULK_CHANGE_START_EVENT = "vault://bulk_change_start";
+export const BULK_CHANGE_END_EVENT = "vault://bulk_change_end";
+
+/**
+ * SYNC-01: Subscribe to vault://file_changed events emitted by the file watcher
+ * when an external change is detected.
+ */
+export function listenFileChange(
+  handler: (payload: FileChangePayload) => void,
+): Promise<UnlistenFn> {
+  return listen<FileChangePayload>(FILE_CHANGE_EVENT, (event) => handler(event.payload));
+}
+
+/**
+ * ERR-03: Subscribe to vault://vault_status events emitted when the vault
+ * folder becomes unreachable (unmounted) or reachable again.
+ */
+export function listenVaultStatus(
+  handler: (payload: VaultStatusPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<VaultStatusPayload>(VAULT_STATUS_EVENT, (event) => handler(event.payload));
+}
+
+/**
+ * SYNC-05: Subscribe to vault://bulk_change_start events emitted when >500
+ * file events arrive in a 2-second window — triggers the progress UI.
+ */
+export function listenBulkChangeStart(
+  handler: (payload: BulkChangePayload) => void,
+): Promise<UnlistenFn> {
+  return listen<BulkChangePayload>(BULK_CHANGE_START_EVENT, (event) => handler(event.payload));
+}
+
+/**
+ * SYNC-05: Subscribe to vault://bulk_change_end events emitted when the bulk
+ * change burst subsides — dismisses the progress UI.
+ */
+export function listenBulkChangeEnd(handler: () => void): Promise<UnlistenFn> {
+  return listen(BULK_CHANGE_END_EVENT, () => handler());
+}
