@@ -78,7 +78,7 @@ Plans:
 Plans:
 - [x] 03-01-PLAN.md — Wave 1: Rust indexer module (Tantivy schema, central mpsc queue, FileIndex in-memory store, pulldown-cmark parser, index_version.json sidecar), Cargo deps (tantivy, nucleo-matcher, pulldown-cmark), open_vault integration with real Tantivy indexing
 - [x] 03-02-PLAN.md — Wave 2: Three Rust search commands (search_fulltext with SnippetGenerator, search_filename with nucleo-matcher, rebuild_index), frontend TypeScript types, IPC wrappers, searchStore
-- [ ] 03-03-PLAN.md — Wave 3: Sidebar tab switching (Dateien/Suche), SearchPanel with 200ms debounce live search, SearchInput, SearchResults with counter and overflow hint, SearchResultRow with snippet highlights, rebuild button UX, Cmd+Shift+F shortcut
+- [x] 03-03-PLAN.md — Wave 3: Sidebar tab switching (Dateien/Suche), SearchPanel with 200ms debounce live search, SearchInput, SearchResults with counter and overflow hint, SearchResultRow with snippet highlights, rebuild button UX, Cmd+Shift+F shortcut
 - [ ] 03-04-PLAN.md — Wave 3: Quick Switcher modal (Cmd+P) with fuzzy filename matching, recents on empty input, keyboard navigation, CM6 flash highlight decoration for scroll-to-match, manual verification checkpoint
 **UI hint**: yes
 

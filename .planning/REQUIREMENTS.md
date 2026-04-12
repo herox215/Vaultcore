@@ -44,12 +44,12 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Search
 
-- [ ] **SRCH-01**: Cmd/Ctrl+Shift+F opens the full-text search panel
+- [x] **SRCH-01**: Cmd/Ctrl+Shift+F opens the full-text search panel
 - [x] **SRCH-02**: Full-text search results include filename, relevance rank, and a contextual snippet
 - [x] **SRCH-03**: Search supports AND, OR, NOT, and phrase queries (`"exact text"`)
 - [x] **SRCH-04**: Cmd/Ctrl+P opens the Quick Switcher with fuzzy filename matching
 - [x] **SRCH-05**: Quick Switcher and full-text search are backed by separate commands (`search_filename`, `search_fulltext`)
-- [ ] **SRCH-06**: Clicking a search result opens the note at the match location
+- [x] **SRCH-06**: Clicking a search result opens the note at the match location
 
 ### Links
 
@@ -213,12 +213,12 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | EDIT-09 | Phase 1 — Skeleton | Complete |
 | EDIT-10 | Phase 5 — Polish | Pending |
 | EDIT-11 | Phase 5 — Polish | Pending |
-| SRCH-01 | Phase 3 — Search | Pending |
+| SRCH-01 | Phase 3 — Search | Complete |
 | SRCH-02 | Phase 3 — Search | Complete |
 | SRCH-03 | Phase 3 — Search | Complete |
 | SRCH-04 | Phase 3 — Search | Complete |
 | SRCH-05 | Phase 3 — Search | Complete |
-| SRCH-06 | Phase 3 — Search | Pending |
+| SRCH-06 | Phase 3 — Search | Complete |
 | LINK-01 | Phase 4 — Links | Pending |
 | LINK-02 | Phase 4 — Links | Pending |
 | LINK-03 | Phase 4 — Links | Pending |
