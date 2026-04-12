@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { PanelRight } from "lucide-svelte";
+  import { PanelRight, Settings as SettingsIcon } from "lucide-svelte";
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
   import QuickSwitcher from "../Search/QuickSwitcher.svelte";
   import RightSidebar from "./RightSidebar.svelte";
+  import SettingsModal from "../Settings/SettingsModal.svelte";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
@@ -20,6 +21,7 @@
   let sidebarCollapsed = $state(false);
   let isDragging = $state(false);
   let quickSwitcherOpen = $state(false);
+  let settingsOpen = $state(false);
   let dragStartX = 0;
   let dragStartWidth = 0;
 
@@ -303,6 +305,16 @@
         >
           <PanelRight size={16} />
         </button>
+        <button
+          class="vc-sidebar-toggle-btn"
+          class:vc-backlinks-toggle-btn--active={settingsOpen}
+          onclick={() => { settingsOpen = true; }}
+          aria-label="Einstellungen"
+          aria-haspopup="dialog"
+          title="Einstellungen"
+        >
+          <SettingsIcon size={16} />
+        </button>
       </div>
     {/if}
 
@@ -367,6 +379,8 @@
   onClose={() => { quickSwitcherOpen = false; }}
   onOpenFile={handleOpenFile}
 />
+
+<SettingsModal open={settingsOpen} onClose={() => { settingsOpen = false; }} />
 
 <style>
   .vc-vault-layout {
