@@ -3,8 +3,11 @@
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
   import QuickSwitcher from "../Search/QuickSwitcher.svelte";
+  import RightSidebar from "./RightSidebar.svelte";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
+  import { backlinksStore } from "../../store/backlinksStore";
+  import { vaultStore } from "../../store/vaultStore";
 
   const SIDEBAR_WIDTH_KEY = "vaultcore-sidebar-width";
   const DEFAULT_SIDEBAR_WIDTH = 240;
@@ -18,6 +21,11 @@
   let quickSwitcherOpen = $state(false);
   let dragStartX = 0;
   let dragStartWidth = 0;
+
+  // Right sidebar drag-to-resize state
+  let isRightDragging = $state(false);
+  let rightDragStartX = 0;
+  let rightDragStartWidth = 0;
 
   // Split view state from tabStore
   let rightPaneIds = $state<string[]>([]);
@@ -64,6 +72,11 @@
     if (isSplitDragging) {
       handleSplitDragMove(e);
     }
+    if (isRightDragging) {
+      // Right divider drag: dragging left increases sidebar width
+      const delta = rightDragStartX - e.clientX;
+      backlinksStore.setWidth(rightDragStartWidth + delta);
+    }
   }
 
   function handleMouseup() {
@@ -74,6 +87,20 @@
     if (isSplitDragging) {
       isSplitDragging = false;
     }
+    if (isRightDragging) {
+      isRightDragging = false;
+    }
+  }
+
+  function handleRightDividerMousedown(e: MouseEvent) {
+    e.preventDefault();
+    isRightDragging = true;
+    rightDragStartX = e.clientX;
+    // Read current width from store
+    let currentWidth = 240;
+    const unsub = backlinksStore.subscribe((s) => { currentWidth = s.width; });
+    unsub();
+    rightDragStartWidth = currentWidth;
   }
 
   // Split pane divider drag
@@ -108,8 +135,32 @@
     };
   });
 
+  // Subscribe to tabStore to sync active file to backlinksStore
+  let unsubBacklinksTab: (() => void) | null = null;
+  onMount(() => {
+    unsubBacklinksTab = tabStore.subscribe((state) => {
+      const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+      const vault = (() => {
+        let v: string | null = null;
+        const u = vaultStore.subscribe((s) => { v = s.currentPath; });
+        u();
+        return v;
+      })();
+      if (!activeTab || !vault) {
+        backlinksStore.setActiveFile(null);
+        return;
+      }
+      const absPath = activeTab.filePath;
+      const relPath = absPath.startsWith(vault + "/")
+        ? absPath.slice((vault as string).length + 1)
+        : absPath;
+      backlinksStore.setActiveFile(relPath);
+    });
+  });
+
   onDestroy(() => {
     unsubTab();
+    unsubBacklinksTab?.();
     document.removeEventListener("mousemove", handleMousemove);
     document.removeEventListener("mouseup", handleMouseup);
   });
@@ -133,6 +184,12 @@
   function handleKeydown(e: KeyboardEvent) {
     const isMeta = e.metaKey || e.ctrlKey;
     if (!isMeta) return;
+
+    if (e.shiftKey && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      backlinksStore.toggle();
+      return;
+    }
 
     if (e.shiftKey && e.key === "F") {
       e.preventDefault();
@@ -167,14 +224,22 @@
   }
 
   const isSplit = $derived(rightPaneIds.length > 0);
+
+  // Reactive right sidebar CSS variables derived from store
+  let backlinksOpen = $state(false);
+  let backlinksWidth = $state(240);
+  const unsubBacklinks = backlinksStore.subscribe((s) => {
+    backlinksOpen = s.open;
+    backlinksWidth = s.width;
+  });
 </script>
 
 <svelte:document onkeydown={handleKeydown} />
 
 <div
   class="vc-vault-layout"
-  class:vc-vault-layout--dragging={isDragging || isSplitDragging}
-  style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px"
+  class:vc-vault-layout--dragging={isDragging || isSplitDragging || isRightDragging}
+  style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px; --right-sidebar-width: {backlinksOpen ? backlinksWidth : 0}px"
 >
   <!-- Sidebar column -->
   <div
@@ -201,7 +266,7 @@
     ></div>
   {/if}
 
-  <!-- Editor area -->
+  <!-- Editor area (3rd column) -->
   <div class="vc-layout-editor" style="--split-ratio: {splitRatio}">
     <!-- Sidebar collapse toggle (shown when collapsed) -->
     {#if sidebarCollapsed}
@@ -260,6 +325,28 @@
       {/if}
     </div>
   </div>
+
+  <!-- Right resize divider (4th column) -->
+  {#if backlinksOpen}
+    <div
+      class="vc-layout-divider-right"
+      class:vc-layout-divider-right--active={isRightDragging}
+      role="separator"
+      aria-label="Resize backlinks sidebar"
+      aria-orientation="vertical"
+      onmousedown={handleRightDividerMousedown}
+    ></div>
+  {:else}
+    <div class="vc-layout-divider-right-hidden"></div>
+  {/if}
+
+  <!-- Right sidebar (5th column) -->
+  <div
+    class="vc-layout-right-sidebar"
+    class:vc-layout-right-sidebar--hidden={!backlinksOpen}
+  >
+    <RightSidebar />
+  </div>
 </div>
 
 <!-- Quick Switcher modal — rendered outside the grid at body level -->
@@ -272,10 +359,16 @@
 <style>
   .vc-vault-layout {
     display: grid;
-    grid-template-columns: var(--sidebar-width, 240px) auto 1fr;
+    grid-template-columns:
+      var(--sidebar-width, 240px)
+      auto
+      1fr
+      auto
+      var(--right-sidebar-width, 0px);
     height: 100vh;
     background: var(--color-bg);
     overflow: hidden;
+    transition: grid-template-columns 200ms ease;
   }
 
   .vc-vault-layout--dragging {
@@ -382,5 +475,35 @@
     left: 8px;
     top: 50%;
     transform: translateY(-50%);
+  }
+
+  .vc-layout-divider-right {
+    width: 4px;
+    background: var(--color-border);
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background 150ms;
+  }
+
+  .vc-layout-divider-right:hover,
+  .vc-layout-divider-right--active {
+    background: var(--color-accent-bg);
+  }
+
+  .vc-layout-divider-right-hidden {
+    width: 0;
+  }
+
+  .vc-layout-right-sidebar {
+    overflow: hidden;
+    width: var(--right-sidebar-width, 0px);
+    border-left: 1px solid var(--color-border);
+    background: var(--color-bg);
+  }
+
+  .vc-layout-right-sidebar--hidden {
+    width: 0;
+    border-left: none;
+    overflow: hidden;
   }
 </style>
