@@ -42,6 +42,8 @@
 
   // EditorPane host element for drag-to-split detection
   let paneEl = $state<HTMLDivElement | undefined>();
+  // Inner content area where EditorView containers are appended
+  let contentEl = $state<HTMLDivElement | undefined>();
 
   // Drag-to-split visual state
   let splitIndicatorSide = $state<"left" | "right" | null>(null);
@@ -156,7 +158,7 @@
    * Initially hidden unless it's the active tab.
    */
   async function createEditorView(tab: Tab) {
-    if (!paneEl) return;
+    if (!contentEl) return;
     if (viewMap.has(tab.id)) return;
 
     let content = "";
@@ -171,11 +173,11 @@
     tabStore.setLastSavedContent(tab.id, content);
 
     const container = document.createElement("div");
-    container.style.width = "100%";
-    container.style.height = "100%";
+    container.style.position = "absolute";
+    container.style.inset = "0";
     container.style.display = tab.id === paneActiveTabId ? "block" : "none";
     container.setAttribute("data-tab-id", tab.id);
-    paneEl.appendChild(container);
+    contentEl.appendChild(container);
 
     const onSave = async (text: string) => {
       // ERR-03: skip auto-save when vault is unreachable
@@ -402,7 +404,7 @@
   />
 
   <!-- Editor content area — EditorView containers are appended here via JS -->
-  <div class="vc-editor-content">
+  <div class="vc-editor-content" bind:this={contentEl}>
     {#if paneTabs.length === 0}
       <!-- Empty pane state -->
       <div class="vc-editor-empty">
