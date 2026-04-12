@@ -13,6 +13,7 @@
   import { scrollToMatch } from "./flashHighlight";
   import { scrollStore } from "../../store/scrollStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { tabReloadStore } from "../../store/tabReloadStore";
   import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -152,6 +153,41 @@
       if (state.currentPath) {
         void reloadResolvedLinks();
       }
+    }
+  });
+
+  // Subscribe to tabReloadStore — reload CM6 doc content when backend externally
+  // rewrites files (e.g. rename-cascade). Matches tabs in THIS pane only by
+  // absolute path (vault + rel path) and dispatches a replaceAll doc transaction.
+  // Without this, after a cascade the open tab keeps showing the stale content
+  // and the next auto-save would silently revert the cascade's rewrites.
+  let prevReloadToken: string | null = null;
+  const unsubTabReload = tabReloadStore.subscribe((state) => {
+    if (!state.pending) return;
+    if (state.pending.token === prevReloadToken) return;
+    prevReloadToken = state.pending.token;
+
+    let vault: string | null = null;
+    const u = vaultStore.subscribe((s) => { vault = s.currentPath; });
+    u();
+    if (!vault) return;
+    const vaultPath = vault as string;
+
+    for (const relPath of state.pending.paths) {
+      const absPath = `${vaultPath}/${relPath}`;
+      const tab = allTabs.find((t) => t.filePath === absPath && paneTabIds.includes(t.id));
+      if (!tab) continue;
+      const view = viewMap.get(tab.id);
+      if (!view) continue;
+      // Re-read file from disk and replace the entire document. No merge needed
+      // here — the user just confirmed the cascade, they're not actively editing.
+      void readFile(absPath).then((content) => {
+        if (!view) return;
+        const currentLen = view.state.doc.length;
+        view.dispatch({
+          changes: { from: 0, to: currentLen, insert: content },
+        });
+      }).catch(() => { /* file vanished — leave tab alone */ });
     }
   });
 
@@ -448,6 +484,7 @@
     unsubTab();
     unsubVault();
     unsubScroll();
+    unsubTabReload();
     unsubVaultPath();
     unlistenFileChange?.();
     unlistenVaultStatus?.();

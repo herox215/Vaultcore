@@ -7,6 +7,7 @@
   import type { DirEntry } from "../../types/tree";
   import InlineRename from "./InlineRename.svelte";
   import { vaultStore } from "../../store/vaultStore";
+  import { tabReloadStore } from "../../store/tabReloadStore";
 
   interface Props {
     entry: DirEntry;
@@ -177,6 +178,11 @@
     onRefreshParent();
     try {
       const result = await updateLinksAfterRename(oldRelPath, newRelPath);
+      // Reload any open tabs whose content was rewritten — the cascade writes
+      // through write_ignore so the watcher/editor never learns about them.
+      if (result.updatedPaths.length > 0) {
+        tabReloadStore.request(result.updatedPaths);
+      }
       if (result.failedFiles.length > 0) {
         const total = result.updatedLinks + result.failedFiles.length;
         toastStore.push({
@@ -326,6 +332,10 @@
       await loadChildren();
       onRefreshParent();
       const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
+      // Reload open tabs for rewritten source files (see confirmRenameWithLinks).
+      if (result.updatedPaths.length > 0) {
+        tabReloadStore.request(result.updatedPaths);
+      }
       if (result.failedFiles.length > 0) {
         const total = result.updatedLinks + result.failedFiles.length;
         toastStore.push({

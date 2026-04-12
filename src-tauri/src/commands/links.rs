@@ -32,6 +32,10 @@ pub struct RenameResult {
     pub updated_files: usize,
     pub updated_links: usize,
     pub failed_files: Vec<String>,
+    /// Vault-relative paths of files whose content was rewritten. The frontend
+    /// uses this to reload any open tabs pointing at these files so the CM6
+    /// EditorView content stays in sync with the on-disk update.
+    pub updated_paths: Vec<String>,
 }
 
 // ── get_backlinks ──────────────────────────────────────────────────────────────
@@ -238,7 +242,7 @@ pub async fn update_links_after_rename(
             .map_err(|_| VaultError::IndexCorrupt)?;
         match guard.as_ref() {
             Some(c) => (c.file_index(), c.link_graph()),
-            None => return Ok(RenameResult { updated_files: 0, updated_links: 0, failed_files: vec![] }),
+            None => return Ok(RenameResult { updated_files: 0, updated_links: 0, failed_files: vec![], updated_paths: vec![] }),
         }
     };
 
@@ -349,7 +353,12 @@ pub async fn update_links_after_rename(
         }
     }
 
-    Ok(RenameResult { updated_files, updated_links, failed_files })
+    Ok(RenameResult {
+        updated_files,
+        updated_links,
+        failed_files,
+        updated_paths: rewritten_sources,
+    })
 }
 
 // ── get_resolved_links ─────────────────────────────────────────────────────────
