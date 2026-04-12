@@ -12,7 +12,7 @@
   import { isVaultError, vaultErrorCopy } from "./types/errors";
   import type { RecentVault } from "./types/vault";
   import WelcomeScreen from "./components/Welcome/WelcomeScreen.svelte";
-  import VaultView from "./components/Welcome/VaultView.svelte";
+  import VaultLayout from "./components/Layout/VaultLayout.svelte";
   import ToastContainer from "./components/Toast/ToastContainer.svelte";
   import ProgressBar from "./components/Progress/ProgressBar.svelte";
 
@@ -92,7 +92,7 @@
 </script>
 
 {#if $vaultStore.status === "ready"}
-  <VaultView />
+  <VaultLayout />
 {:else}
   <WelcomeScreen
     {recent}
