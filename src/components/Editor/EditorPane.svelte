@@ -11,6 +11,8 @@
   import { readFile, writeFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
+  import { listenFileChange, type FileChangePayload } from "../../ipc/events";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
 
   let {
     paneId,
@@ -32,6 +34,9 @@
   let activeTabId = $state<string | null>(null);
   let activePane = $state<"left" | "right">("left");
   let vaultReachable = $state(true); // ERR-03 placeholder
+
+  // Watcher event unlisten handle
+  let unlistenFileChange: UnlistenFn | null = null;
 
   // EditorPane host element for drag-to-split detection
   let paneEl = $state<HTMLDivElement | undefined>();
@@ -206,6 +211,58 @@
     }
   }
 
+  // ─── Watcher event handling ────────────────────────────────────────────────
+
+  /**
+   * Handle external file changes detected by the Rust file watcher.
+   * Only processes events for files open in THIS pane's EditorView Map.
+   */
+  function handleExternalFileChange(payload: FileChangePayload) {
+    const { path, kind, new_path } = payload;
+
+    if (kind === "modify") {
+      // Check if this pane has an EditorView for the modified file
+      const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
+      if (tabWithPath && viewMap.has(tabWithPath.id)) {
+        // TODO Plan 05: three_way_merge
+        // Plan 05 will read the new disk content, compute three-way diff
+        // (base = last-saved, left = current editor buffer, right = new disk),
+        // apply non-conflicting changes silently and show toast for conflicts.
+        // For now: mark the tab as needing merge by storing it in pending queue.
+        pendingMergePaths.add(path);
+      }
+    } else if (kind === "delete") {
+      // If the deleted file is open in this pane, destroy its EditorView and remove from Map
+      const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
+      if (tabWithPath) {
+        const view = viewMap.get(tabWithPath.id);
+        if (view) {
+          view.destroy();
+          viewMap.delete(tabWithPath.id);
+        }
+        const container = containerMap.get(tabWithPath.id);
+        if (container) {
+          container.remove();
+          containerMap.delete(tabWithPath.id);
+        }
+        // tabStore.closeByPath is called by Sidebar — don't double-close
+      }
+    } else if (kind === "rename" && new_path) {
+      // Update the Map key from old path to new path
+      const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
+      if (tabWithPath) {
+        // The tabStore.updateFilePath() call from Sidebar will update tab.filePath.
+        // The viewMap is keyed by tabId, not filePath, so no Map rekeying needed.
+        // Just ensure the container still references the correct tab.
+        pendingMergePaths.delete(path);
+        if (new_path) pendingMergePaths.delete(new_path);
+      }
+    }
+  }
+
+  // Pending merge queue — tracks paths with external modifications awaiting Plan 05 merge
+  const pendingMergePaths = new Set<string>();
+
   // Drag-to-split detection
   function handleDragover(e: DragEvent) {
     if (!e.dataTransfer) return;
@@ -251,15 +308,22 @@
     splitIndicatorSide = null;
   }
 
+  onMount(async () => {
+    // Subscribe to file-change events for merge hook points (SYNC-01)
+    unlistenFileChange = await listenFileChange(handleExternalFileChange);
+  });
+
   onDestroy(() => {
     unsubTab();
     unsubVault();
+    unlistenFileChange?.();
     // Destroy all EditorView instances in this pane
     for (const view of viewMap.values()) {
       view.destroy();
     }
     viewMap.clear();
     containerMap.clear();
+    pendingMergePaths.clear();
   });
 </script>
 
