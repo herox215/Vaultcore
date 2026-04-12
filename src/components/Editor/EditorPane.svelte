@@ -83,6 +83,9 @@
       if (!currentIds.has(id)) {
         view.destroy();
         viewMap.delete(id);
+        // Remove container DOM element (not just the Map reference)
+        const container = containerMap.get(id);
+        if (container) container.remove();
         containerMap.delete(id);
       }
     }
@@ -97,54 +100,48 @@
       }
     }
 
-    // Handle active tab switch: save scroll/cursor on deactivate, show/hide
+    // Sync all container visibility: show only the active tab, hide the rest.
+    // This is more robust than tracking prevActiveTabId because createEditorView
+    // is async — the container might not exist yet when the effect first runs,
+    // and this approach works correctly on every subsequent re-run.
     const newActiveId = paneActiveTabId;
-    if (prevActiveTabId !== newActiveId) {
-      // Hide previous
-      if (prevActiveTabId) {
-        const prevContainer = containerMap.get(prevActiveTabId);
-        if (prevContainer) {
-          prevContainer.style.display = "none";
-          // Save scroll position
-          const prevView = viewMap.get(prevActiveTabId);
-          if (prevView) {
-            const scrollTop = prevView.scrollDOM.scrollTop;
-            const cursor = prevView.state.selection.main.head;
-            tabStore.updateScrollPos(prevActiveTabId, scrollTop, cursor);
-          }
-        }
-      }
-      // Show new active
-      if (newActiveId) {
-        const activeContainer = containerMap.get(newActiveId);
-        if (activeContainer) {
-          activeContainer.style.display = "block";
-          // Restore scroll position
-          const activeView = viewMap.get(newActiveId);
-          const activeTab = allTabs.find((t) => t.id === newActiveId);
-          if (activeView && activeTab) {
-            // Restore cursor position
-            if (activeTab.cursorPos > 0) {
-              const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
-              activeView.dispatch({
-                selection: { anchor: pos },
-              });
-            }
-            // Restore scroll position after a microtask
-            requestAnimationFrame(() => {
-              activeView.scrollDOM.scrollTop = activeTab.scrollPos;
-            });
-            // Sync editorStore to active tab
-            editorStore.syncFromTab(
-              activeTab.filePath,
-              activeView.state.doc.toString(),
-              activeTab.lastSaved ? String(activeTab.lastSaved) : null
-            );
-          }
-        }
-      }
-      prevActiveTabId = newActiveId;
+    for (const [id, container] of containerMap) {
+      container.style.display = id === newActiveId ? "block" : "none";
     }
+
+    // Save scroll/cursor on deactivated tab
+    if (prevActiveTabId && prevActiveTabId !== newActiveId) {
+      const prevView = viewMap.get(prevActiveTabId);
+      if (prevView) {
+        const scrollTop = prevView.scrollDOM.scrollTop;
+        const cursor = prevView.state.selection.main.head;
+        tabStore.updateScrollPos(prevActiveTabId, scrollTop, cursor);
+      }
+    }
+
+    // Restore scroll/cursor on newly activated tab
+    if (newActiveId && newActiveId !== prevActiveTabId) {
+      const activeView = viewMap.get(newActiveId);
+      const activeTab = allTabs.find((t) => t.id === newActiveId);
+      if (activeView && activeTab) {
+        if (activeTab.cursorPos > 0) {
+          const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
+          activeView.dispatch({
+            selection: { anchor: pos },
+          });
+        }
+        requestAnimationFrame(() => {
+          activeView.scrollDOM.scrollTop = activeTab.scrollPos;
+        });
+        editorStore.syncFromTab(
+          activeTab.filePath,
+          activeView.state.doc.toString(),
+          activeTab.lastSaved ? String(activeTab.lastSaved) : null
+        );
+      }
+    }
+
+    prevActiveTabId = newActiveId;
   });
 
   // Subscribe to vaultStore for vault reachability (ERR-03)
