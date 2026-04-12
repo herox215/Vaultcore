@@ -99,6 +99,7 @@ pub fn run() {
             commands::files::move_file,
             commands::files::create_folder,
             commands::files::count_wiki_links,
+            commands::files::get_file_hash,
             commands::tree::list_directory,
             commands::vault::merge_external_change,
             commands::search::search_fulltext,
