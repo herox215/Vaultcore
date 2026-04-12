@@ -1,41 +1,47 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { vaultStore } from "./store/vaultStore";
   import { toastStore } from "./store/toastStore";
+  import { progressStore } from "./store/progressStore";
   import {
     getRecentVaults,
     openVault,
     pickVaultFolder,
   } from "./ipc/commands";
-  import { isVaultError, vaultErrorCopy, type VaultError } from "./types/errors";
+  import { listenIndexProgress } from "./ipc/events";
+  import { isVaultError, vaultErrorCopy } from "./types/errors";
   import type { RecentVault } from "./types/vault";
   import WelcomeScreen from "./components/Welcome/WelcomeScreen.svelte";
+  import VaultView from "./components/Welcome/VaultView.svelte";
   import ToastContainer from "./components/Toast/ToastContainer.svelte";
+  import ProgressBar from "./components/Progress/ProgressBar.svelte";
 
   let recent: RecentVault[] = $state([]);
+  let unlistenProgress: (() => void) | null = null;
 
-  function toVaultError(err: unknown): VaultError {
+  function toVaultError(err: unknown) {
     if (isVaultError(err)) {
       return { kind: err.kind, message: err.message, data: err.data ?? null };
     }
-    return { kind: "Io", message: String(err), data: null };
+    return { kind: "Io" as const, message: String(err), data: null };
   }
 
   async function loadVault(path: string): Promise<void> {
     vaultStore.setOpening(path);
+    progressStore.start(0);
     try {
       const info = await openVault(path);
-      // Plan 01-04 will replace the empty fileList with the real file walk
-      // results fed by the vault://index_progress event channel.
       vaultStore.setReady({
         currentPath: info.path,
-        fileList: [],
+        fileList: info.file_list,
         fileCount: info.file_count,
       });
+      progressStore.finish();
       // Refresh recent-vaults list so the just-opened entry floats to the top
       // next time the Welcome card is shown.
       recent = await getRecentVaults();
     } catch (err) {
+      progressStore.finish();
       const ve = toVaultError(err);
       const copy = vaultErrorCopy(ve);
       vaultStore.setError(copy);
@@ -60,6 +66,11 @@
   }
 
   onMount(async () => {
+    // Subscribe to progress events before any vault open happens
+    unlistenProgress = await listenIndexProgress((payload) => {
+      progressStore.update(payload.current, payload.total, payload.current_file);
+    });
+
     // VAULT-03: on startup, attempt to reopen the most-recent reachable vault.
     // VAULT-05: if that vault has been moved/deleted/unmounted, we stay on the
     // Welcome screen and surface a toast instead of crashing.
@@ -74,15 +85,14 @@
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
   });
+
+  onDestroy(() => {
+    unlistenProgress?.();
+  });
 </script>
 
 {#if $vaultStore.status === "ready"}
-  <!-- Placeholder VaultView — plan 01-04 replaces this with the real file
-       list + CodeMirror editor from plan 01-03. -->
-  <main data-testid="vault-view" class="vc-vault-view">
-    <p class="vc-vault-path">Vault opened: {$vaultStore.currentPath}</p>
-    <p class="vc-vault-count">{$vaultStore.fileCount} file(s)</p>
-  </main>
+  <VaultView />
 {:else}
   <WelcomeScreen
     {recent}
@@ -91,21 +101,5 @@
   />
 {/if}
 
+<ProgressBar />
 <ToastContainer />
-
-<style>
-  .vc-vault-view {
-    padding: 32px;
-    color: var(--color-text);
-    font-family: var(--vc-font-body);
-    font-size: 14px;
-  }
-  .vc-vault-path {
-    margin: 0 0 8px 0;
-    font-weight: 700;
-  }
-  .vc-vault-count {
-    margin: 0;
-    color: var(--color-text-muted);
-  }
-</style>
