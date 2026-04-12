@@ -12,26 +12,26 @@ use crate::WriteIgnoreList;
 
 #[test]
 fn test_write_ignore_record_and_ignore_within_window() {
-    // Test 1: record(path) + should_ignore(path) within 100ms returns true
+    // Test 1: record(path) + should_ignore(path) within 500ms returns true
     let mut list = WriteIgnoreList::default();
     let path = PathBuf::from("/vault/note.md");
     list.record(path.clone());
     assert!(
         list.should_ignore(&path),
-        "should_ignore should return true within the 100ms window"
+        "should_ignore should return true within the 500ms window"
     );
 }
 
 #[test]
 fn test_write_ignore_expires_after_window() {
-    // Test 2: should_ignore(path) after 150ms returns false (window expired)
+    // Test 2: should_ignore(path) after 600ms returns false (500ms window expired)
     let mut list = WriteIgnoreList::default();
     let path = PathBuf::from("/vault/old-note.md");
     list.record(path.clone());
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(600));
     assert!(
         !list.should_ignore(&path),
-        "should_ignore should return false after 150ms (100ms window expired)"
+        "should_ignore should return false after 600ms (500ms window expired)"
     );
 }
 
