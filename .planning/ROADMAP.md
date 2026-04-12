@@ -54,7 +54,13 @@ Plans:
   4. When an external tool (e.g. Syncthing) rewrites an open file, the change is merged in cleanly and the user sees a "Externe Änderungen wurden eingebunden" toast; when the same region was edited locally, the local state is kept and a "Konflikt in <file> – lokale Version behalten" toast is shown
   5. The app's own writes (auto-save, rename, delete, move) never trigger external-change toasts, and bulk external changes of >500 files raise the indexing progress UI instead of toast-spamming
   6. If the vault folder is unmounted while the app is open, editing is disabled and a toast explains the state without the app crashing; a disk-full write attempt surfaces a toast without losing the in-editor buffer
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 02-01-PLAN.md — Wave 1: Rust crate additions (notify-debouncer-full, similar, rayon), list_directory command with lazy-load/dot-filter/symlink detection, VaultState extension (WriteIgnoreList, vault_reachable), watcher + merge module skeletons, frontend TypeScript types and IPC wrappers for all Phase 2 commands/events
+- [ ] 02-02-PLAN.md — Wave 2: Six Rust file-operation commands (create_file, rename_file, delete_file, move_file, create_folder, count_wiki_links), Sidebar tree with TreeNode/InlineRename, VaultLayout grid shell replacing VaultView, confirmation dialogs, drag-drop move, lucide-svelte icons
+- [ ] 02-03-PLAN.md — Wave 3: tabStore with split-view state management, TabBar/Tab/EditorPane Svelte components, EditorView Map lifecycle (no remount on tab switch), drag-to-reorder/drag-to-split, Cmd+Tab/Cmd+W keyboard shortcuts
+- [ ] 02-04-PLAN.md — Wave 4: File watcher (notify-debouncer-full spawn on vault open), write-ignore-list self-filtering in all write commands, bulk-change detection (>500 events/2s), sidebar auto-refresh on external changes, bulk progress UI
+- [ ] 02-05-PLAN.md — Wave 5: Three-way merge implementation (similar crate, line-level), merge_external_change Tauri command, frontend merge wiring with toasts, vault unmount/reconnect readonly toggle, disk-full resilience, end-to-end manual verification checkpoint
 **UI hint**: yes
 
 ### Phase 3: Search
@@ -116,8 +122,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Skeleton | 0/TBD | Not started | - |
-| 2. Vault | 0/TBD | Not started | - |
+| 1. Skeleton | 5/5 | Complete | - |
+| 2. Vault | 0/5 | Planning complete | - |
 | 3. Search | 0/TBD | Not started | - |
 | 4. Links | 0/TBD | Not started | - |
 | 5. Polish | 0/TBD | Not started | - |
