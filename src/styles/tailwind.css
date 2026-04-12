@@ -121,3 +121,41 @@ html, body, #app {
 .cm-wikilink-unresolved:hover {
   text-decoration: underline;
 }
+
+/* Phase 4 Plan 03: Wiki-link autocomplete popup styling */
+.cm-tooltip-autocomplete {
+  width: 360px !important;
+  max-height: 320px !important;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+.cm-tooltip-autocomplete ul {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.cm-tooltip-autocomplete ul li {
+  padding: 8px 16px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.cm-tooltip-autocomplete ul li[aria-selected="true"] {
+  background: var(--color-accent-bg);
+}
+.cm-tooltip-autocomplete ul li[aria-selected="true"] .cm-completionLabel {
+  color: var(--color-accent);
+}
+.cm-completionLabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.cm-completionDetail {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  margin-left: 0 !important;
+}

@@ -14,7 +14,8 @@ import type { Extension } from "@codemirror/state";
 import { EditorView, drawSelection, dropCursor, highlightActiveLine, keymap } from "@codemirror/view";
 import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/language";
-import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { wikiLinkCompletionSource } from "./wikiLinkAutocomplete";
 import { markdown } from "@codemirror/lang-markdown";
 import { GFM } from "@lezer/markdown";
 
@@ -32,6 +33,11 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
     indentOnInput(),
     bracketMatching(),
     closeBrackets(),
+    autocompletion({
+      override: [wikiLinkCompletionSource],
+      activateOnTyping: true,
+      defaultKeymap: true,
+    }),
     highlightActiveLine(),
     EditorView.lineWrapping,
     keymap.of([
