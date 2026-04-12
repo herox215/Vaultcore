@@ -24,7 +24,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [ ] **IDX-04**: The in-memory index (FileIndex, LinkGraph, TagIndex) is rebuilt from disk on every cold start
 - [ ] **IDX-05**: Tantivy index stores an `index_version.json` sidecar; on schema mismatch the index is deleted and rebuilt with progress UI
 - [ ] **IDX-06**: All Tantivy writes go through a single central queue (never two concurrent writes for the same file)
-- [ ] **IDX-07**: The `.obsidian/` folder is ignored by both the file browser and the indexer
+- [x] **IDX-07**: The `.obsidian/` folder is ignored by both the file browser and the indexer
 - [ ] **IDX-08**: Non-UTF-8 files are shown in the browser but skipped by the indexer
 - [ ] **IDX-09**: User can trigger a manual index rebuild via `rebuild_index` command
 
@@ -65,15 +65,15 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Files
 
-- [ ] **FILE-01**: The sidebar shows a folder/file tree for the open vault with lazy loading of subtrees
+- [x] **FILE-01**: The sidebar shows a folder/file tree for the open vault with lazy loading of subtrees
 - [ ] **FILE-02**: User can create a new file from the file browser
 - [ ] **FILE-03**: User can rename files (triggers the LINK-09 cascade when links are affected)
 - [ ] **FILE-04**: Deleting a file moves it to `<vault>/.trash/` rather than permanently removing it
 - [ ] **FILE-05**: User can move files by drag-and-drop
 - [ ] **FILE-06**: Sorting options: name, modified date, created date; order is remembered
 - [ ] **FILE-07**: Folder expand/collapse state is persisted across sessions
-- [ ] **FILE-08**: Symbolic links are displayed but not followed
-- [ ] **FILE-09**: Non-UTF-8 files are displayed; attempting to open one shows a toast error and does not load them into the editor
+- [x] **FILE-08**: Symbolic links are displayed but not followed
+- [x] **FILE-09**: Non-UTF-8 files are displayed; attempting to open one shows a toast error and does not load them into the editor
 
 ### Tags
 
@@ -199,7 +199,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | IDX-04 | Phase 3 — Search | Pending |
 | IDX-05 | Phase 3 — Search | Pending |
 | IDX-06 | Phase 3 — Search | Pending |
-| IDX-07 | Phase 2 — Vault | Pending |
+| IDX-07 | Phase 2 — Vault | Complete |
 | IDX-08 | Phase 3 — Search | Pending |
 | IDX-09 | Phase 3 — Search | Pending |
 | EDIT-01 | Phase 1 — Skeleton | Complete |
@@ -228,15 +228,15 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | LINK-07 | Phase 4 — Links | Pending |
 | LINK-08 | Phase 4 — Links | Pending |
 | LINK-09 | Phase 4 — Links | Pending |
-| FILE-01 | Phase 2 — Vault | Pending |
+| FILE-01 | Phase 2 — Vault | Complete |
 | FILE-02 | Phase 2 — Vault | Pending |
 | FILE-03 | Phase 2 — Vault | Pending |
 | FILE-04 | Phase 2 — Vault | Pending |
 | FILE-05 | Phase 2 — Vault | Pending |
 | FILE-06 | Phase 5 — Polish | Pending |
 | FILE-07 | Phase 5 — Polish | Pending |
-| FILE-08 | Phase 2 — Vault | Pending |
-| FILE-09 | Phase 2 — Vault | Pending |
+| FILE-08 | Phase 2 — Vault | Complete |
+| FILE-09 | Phase 2 — Vault | Complete |
 | TAG-01 | Phase 5 — Polish | Pending |
 | TAG-02 | Phase 5 — Polish | Pending |
 | TAG-03 | Phase 5 — Polish | Pending |

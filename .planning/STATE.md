@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 UI-SPEC approved
-last_updated: "2026-04-12T08:08:09.515Z"
-last_activity: 2026-04-12 -- Phase 2 planning complete
+stopped_at: Completed 02-vault/02-01-PLAN.md
+last_updated: "2026-04-12T08:16:53.564Z"
+last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 5
-  percent: 50
+  completed_plans: 6
+  percent: 60
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Stay fluid at 100,000+ notes — open, search, link, and edit a vault of that size without perceptible lag.
-**Current focus:** Phase 01 — skeleton
+**Current focus:** Phase 02 — vault
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
+Phase: 02 (vault) — EXECUTING
+Plan: 2 of 5
 Status: Ready to execute
-Last activity: 2026-04-12 -- Phase 2 planning complete
+Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-skeleton P02 | 12min | 3 tasks | 15 files |
 | Phase 01-skeleton P01-03-editor-autosave | 4min | 3 tasks | 9 files |
 | Phase 01-skeleton P01-04-progress-filelist-wireup | 6min | 4 tasks | 9 files |
+| Phase 02-vault P02-01 | 4min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,9 @@ Recent decisions affecting current work:
 - [Phase 01-skeleton]: 50ms throttle on vault://index_progress events via PROGRESS_THROTTLE constant
 - [Phase 01-skeleton]: collect_file_list uses forward-slash normalization for cross-platform file paths
 - [Phase 01-skeleton]: VaultView grid layout: 200-280px file list + 1fr editor pane, CMEditor remount via {#key}
+- [Phase 02-vault]: regex crate added for D-16 wiki-link counting (beyond D-20 minimum crate list)
+- [Phase 02-vault]: watcher_handle deferred to Plan 04 — Debouncer has no Default, keeps VaultState::default() working
+- [Phase 02-vault]: list_directory uses dual metadata calls: symlink_metadata() for is_symlink, entry.metadata() for is_dir per D-05
 
 ### Pending Todos
 
@@ -103,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T07:33:38.658Z
-Stopped at: Phase 2 UI-SPEC approved
-Resume file: .planning/phases/02-vault/02-UI-SPEC.md
+Last session: 2026-04-12T08:16:53.562Z
+Stopped at: Completed 02-vault/02-01-PLAN.md
+Resume file: None
