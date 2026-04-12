@@ -132,7 +132,7 @@
         })
         .catch(() =>
           toastStore.push({
-            kind: "error",
+            variant: "error",
             message: "Notiz konnte nicht erstellt werden.",
           })
         );
