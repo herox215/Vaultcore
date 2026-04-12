@@ -1,10 +1,12 @@
 <script lang="ts">
   import { ChevronRight, Folder, FolderOpen, FileText, File, MoreHorizontal } from "lucide-svelte";
-  import { listDirectory, createFile, createFolder, deleteFile, moveFile } from "../../ipc/commands";
+  import { listDirectory, createFile, createFolder, deleteFile, moveFile, updateLinksAfterRename, getBacklinks } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
+  import type { RenameResult } from "../../types/links";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import type { DirEntry } from "../../types/tree";
   import InlineRename from "./InlineRename.svelte";
+  import { vaultStore } from "../../store/vaultStore";
 
   interface Props {
     entry: DirEntry;
@@ -47,7 +49,28 @@
   let isDragTarget = $state(false);
 
   // Wiki-link rename confirmation
-  let pendingRename = $state<{ newPath: string; linkCount: number } | null>(null);
+  // newPath: absolute path after rename (InlineRename already executed renameFile)
+  // oldRelPath: vault-relative old path (for updateLinksAfterRename)
+  // newRelPath: vault-relative new path (for updateLinksAfterRename)
+  // linkCount: total number of wiki-links pointing to the file
+  // fileCount: number of unique source files with links
+  let pendingRename = $state<{
+    newPath: string;
+    oldRelPath: string;
+    newRelPath: string;
+    linkCount: number;
+    fileCount: number;
+  } | null>(null);
+
+  // Move confirmation state (drag-drop, D-11)
+  let pendingMove = $state<{
+    sourcePath: string;
+    targetDirPath: string;
+    sourceRelPath: string;
+    newRelPath: string;
+    linkCount: number;
+    fileCount: number;
+  } | null>(null);
 
   const isActive = $derived(selectedPath === entry.path);
 
@@ -110,10 +133,32 @@
     isNewEntry = false;
   }
 
-  function handleRenameConfirm(newPath: string, linkCount: number) {
+  function getVaultRoot(): string | null {
+    let v: string | null = null;
+    const u = vaultStore.subscribe((s) => { v = s.currentPath; });
+    u();
+    return v;
+  }
+
+  function toRelPath(absPath: string, vaultRoot: string): string {
+    return absPath.startsWith(vaultRoot + "/")
+      ? absPath.slice(vaultRoot.length + 1)
+      : absPath;
+  }
+
+  async function handleRenameConfirm(newPath: string, linkCount: number) {
     renaming = false;
     if (linkCount > 0) {
-      pendingRename = { newPath, linkCount };
+      const vault = getVaultRoot();
+      const oldRelPath = vault ? toRelPath(entry.path, vault) : entry.path;
+      const newRelPath = vault ? toRelPath(newPath, vault) : newPath;
+      // Get unique source file count for the dialog copy
+      let fileCount = 1;
+      try {
+        const backlinks = await getBacklinks(oldRelPath);
+        fileCount = new Set(backlinks.map((b) => b.sourcePath)).size || 1;
+      } catch { /* fallback to 1 */ }
+      pendingRename = { newPath, oldRelPath, newRelPath, linkCount, fileCount };
     } else {
       onPathChanged(entry.path, newPath);
       onRefreshParent();
@@ -124,11 +169,26 @@
     renaming = false;
   }
 
-  function confirmRenameWithLinks() {
-    if (pendingRename) {
-      onPathChanged(entry.path, pendingRename.newPath);
-      onRefreshParent();
-      pendingRename = null;
+  async function confirmRenameWithLinks() {
+    if (!pendingRename) return;
+    const { newPath, oldRelPath, newRelPath } = pendingRename;
+    pendingRename = null;
+    onPathChanged(entry.path, newPath);
+    onRefreshParent();
+    try {
+      const result = await updateLinksAfterRename(oldRelPath, newRelPath);
+      if (result.failedFiles.length > 0) {
+        const total = result.updatedLinks + result.failedFiles.length;
+        toastStore.push({
+          variant: "error",
+          message: `${result.updatedLinks} von ${total} Links aktualisiert. ${result.failedFiles.length} Dateien konnten nicht geändert werden.`,
+        });
+      }
+    } catch {
+      toastStore.push({
+        variant: "error",
+        message: "Links konnten nicht aktualisiert werden.",
+      });
     }
   }
 
@@ -224,15 +284,63 @@
     e.preventDefault();
     const sourcePath = e.dataTransfer.getData("text/vaultcore-file");
     if (!sourcePath || sourcePath === entry.path) return;
+
+    // D-11: check backlinks before move and prompt cascade confirmation
+    const vault = getVaultRoot();
+    const sourceRelPath = vault ? toRelPath(sourcePath, vault) : sourcePath;
+    const sourceFilename = sourcePath.split("/").pop() ?? sourcePath;
+    const newAbsPath = entry.path + "/" + sourceFilename;
+    const newRelPath = vault ? toRelPath(newAbsPath, vault) : newAbsPath;
+
+    let linkCount = 0;
+    let fileCount = 0;
+    try {
+      const backlinks = await getBacklinks(sourceRelPath);
+      linkCount = backlinks.length;
+      fileCount = new Set(backlinks.map((b) => b.sourcePath)).size;
+    } catch { /* proceed without cascade */ }
+
+    if (linkCount > 0) {
+      // Show confirmation dialog for move cascade
+      pendingMove = { sourcePath, targetDirPath: entry.path, sourceRelPath, newRelPath, linkCount, fileCount };
+      return;
+    }
+
+    // No backlinks — proceed directly
     try {
       await moveFile(sourcePath, entry.path);
-      // Refresh this folder's children
       await loadChildren();
       onRefreshParent();
-    } catch (e) {
-      const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
+  }
+
+  async function confirmMoveWithLinks() {
+    if (!pendingMove) return;
+    const { sourcePath, targetDirPath, sourceRelPath, newRelPath } = pendingMove;
+    pendingMove = null;
+    try {
+      await moveFile(sourcePath, targetDirPath);
+      await loadChildren();
+      onRefreshParent();
+      const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
+      if (result.failedFiles.length > 0) {
+        const total = result.updatedLinks + result.failedFiles.length;
+        toastStore.push({
+          variant: "error",
+          message: `${result.updatedLinks} von ${total} Links aktualisiert. ${result.failedFiles.length} Dateien konnten nicht geändert werden.`,
+        });
+      }
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
+  function cancelMoveWithLinks() {
+    pendingMove = null;
   }
 
   async function refreshChildren() {
@@ -369,7 +477,7 @@
     </div>
   {/if}
 
-  <!-- Rename with wiki-links confirmation -->
+  <!-- Rename with wiki-links confirmation (German copy per D-09) -->
   {#if pendingRename}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -378,14 +486,33 @@
       role="presentation"
     ></div>
     <div class="vc-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-heading">
-      <h2 id="rename-heading" class="vc-confirm-heading">Rename file?</h2>
+      <h2 id="rename-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
       <p class="vc-confirm-body">
-        {pendingRename.linkCount} wiki-link{pendingRename.linkCount === 1 ? "" : "s"} point to this file.
-        Rename anyway? (Links will be updated in a future version.)
+        {pendingRename.linkCount} Links in {pendingRename.fileCount} Dateien werden aktualisiert. Fortfahren?
       </p>
       <div class="vc-confirm-actions">
-        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelRenameWithLinks}>Keep Name</button>
-        <button class="vc-confirm-btn vc-confirm-btn--primary" onclick={confirmRenameWithLinks}>Rename File</button>
+        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelRenameWithLinks}>Abbrechen</button>
+        <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmRenameWithLinks()}>Aktualisieren</button>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Move with wiki-links confirmation (D-11) -->
+  {#if pendingMove}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="vc-confirm-overlay"
+      onclick={cancelMoveWithLinks}
+      role="presentation"
+    ></div>
+    <div class="vc-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="move-heading">
+      <h2 id="move-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
+      <p class="vc-confirm-body">
+        {pendingMove.linkCount} Links in {pendingMove.fileCount} Dateien werden aktualisiert. Fortfahren?
+      </p>
+      <div class="vc-confirm-actions">
+        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelMoveWithLinks}>Abbrechen</button>
+        <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmMoveWithLinks()}>Aktualisieren</button>
       </div>
     </div>
   {/if}
@@ -667,5 +794,17 @@
 
   .vc-confirm-btn--primary:hover {
     opacity: 0.9;
+  }
+
+  .vc-confirm-btn--accent {
+    min-width: 80px;
+    padding: 4px 8px;
+    border: 1px solid var(--color-accent);
+    color: var(--color-accent);
+    background: transparent;
+  }
+
+  .vc-confirm-btn--accent:hover {
+    background: var(--color-accent-bg);
   }
 </style>
