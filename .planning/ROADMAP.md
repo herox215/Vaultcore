@@ -16,7 +16,7 @@ VaultCore v0.1 delivers a local, Markdown-first note app built on Tauri 2 + Rust
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [ ] **Phase 1: Skeleton** - Tauri 2 + CM6 scaffold, open a vault, edit and auto-save a single `.md` file
-- [ ] **Phase 2: Vault** - File browser tree, multi-tab, split-view, file watcher with three-way merge
+- [x] **Phase 2: Vault** - File browser tree, multi-tab, split-view, file watcher with three-way merge (completed 2026-04-12)
 - [ ] **Phase 3: Search** - Tantivy full-text index with AND/OR/NOT, Quick Switcher, versioned rebuild
 - [ ] **Phase 4: Links** - Wiki-link parsing, 3-stage resolution, backlinks panel, rename-cascade
 - [ ] **Phase 5: Polish** - Tags, themes, fonts, remaining shortcuts, editor quality-of-life
@@ -61,7 +61,7 @@ Plans:
 - [x] 02-03-PLAN.md — Wave 3: tabStore with split-view state management, TabBar/Tab/EditorPane Svelte components, EditorView Map lifecycle (no remount on tab switch), drag-to-reorder/drag-to-split, Cmd+Tab/Cmd+W keyboard shortcuts
 - [x] 02-04-PLAN.md — Wave 4: File watcher (notify-debouncer-full spawn on vault open), write-ignore-list self-filtering in all write commands, bulk-change detection (>500 events/2s), sidebar auto-refresh on external changes, bulk progress UI
 - [x] 02-05-PLAN.md — Wave 5: Three-way merge implementation (similar crate, line-level), merge_external_change Tauri command, frontend merge wiring with toasts, vault unmount/reconnect readonly toggle, disk-full resilience, end-to-end manual verification checkpoint
-- [ ] 02-06-PLAN.md — Wave 6 (gap closure): Fix RenameResult serde camelCase mismatch (CR-01), Sidebar onPathChanged prop wiring (CR-02), German toast text for merge/conflict (ROADMAP SC#4)
+- [x] 02-06-PLAN.md — Wave 6 (gap closure): Fix RenameResult serde camelCase mismatch (CR-01), Sidebar onPathChanged prop wiring (CR-02), German toast text for merge/conflict (ROADMAP SC#4)
 **UI hint**: yes
 
 ### Phase 3: Search
@@ -124,7 +124,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Skeleton | 5/5 | Complete | - |
-| 2. Vault | 5/6 | Gap closure | - |
+| 2. Vault | 6/6 | Complete   | 2026-04-12 |
 | 3. Search | 0/TBD | Not started | - |
 | 4. Links | 0/TBD | Not started | - |
 | 5. Polish | 0/TBD | Not started | - |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 02-vault/02-05-PLAN.md
-last_updated: "2026-04-12T08:51:14.928Z"
+status: executing
+stopped_at: Completed 02-vault/02-06-PLAN.md
+last_updated: "2026-04-12T10:22:11.312Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 11
+  completed_plans: 11
   percent: 100
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 02 (vault) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
+Plan: 2 of 6
+Status: Ready to execute
 Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
@@ -68,6 +68,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-vault P03 | 6min | 2 tasks | 8 files |
 | Phase 02-vault P02-04 | 5min | 2 tasks | 8 files |
 | Phase 02-vault P02-05 | 18 | 3 tasks | 10 files |
+| Phase 02-vault P06 | 66s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -109,6 +110,8 @@ Recent decisions affecting current work:
 - [Phase 02-vault]: pendingMergePaths is a per-pane ephemeral Set in EditorPane (not a store) — merge state is transient and not shared
 - [Phase 02-vault]: vault_reachable promoted to Arc<Mutex<bool>> for sharing with tokio reconnect-poll task
 - [Phase 02-vault]: Disk-full toast debounced 30s via lastDiskFullToast timestamp in EditorPane
+- [Phase 02-vault]: serde rename_all camelCase is the correct pattern for all IPC result structs so TypeScript consumers receive camelCase field names
+- [Phase 02-vault]: Svelte shorthand {onPathChanged} passes through the prop value as-is; explicit onPathChanged={handlePathChanged} is required when mapping a local function to a prop of the same name
 
 ### Pending Todos
 
@@ -121,6 +124,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T08:51:14.925Z
-Stopped at: Completed 02-vault/02-05-PLAN.md
+Last session: 2026-04-12T10:22:11.307Z
+Stopped at: Completed 02-vault/02-06-PLAN.md
 Resume file: None
