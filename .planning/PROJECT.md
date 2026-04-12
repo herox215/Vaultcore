@@ -123,4 +123,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-12 after Phase 2 (Vault) completion — file browser tree with lazy-loading, multi-tab/split-view editing, file watcher with three-way merge, vault unmount/reconnect, German localization for merge toasts*
+*Last updated: 2026-04-12 after Phase 3 (Search) completion — Tantivy full-text search with incremental SHA-256 indexing, sidebar search panel with live debounce, fuzzy Quick Switcher (nucleo), scroll-to-match with CM6 flash highlight, index_version.json schema versioning with auto-rebuild*
