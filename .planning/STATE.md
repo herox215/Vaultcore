@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: executing
-stopped_at: Completed 05-polish-06-PLAN.md
-last_updated: "2026-04-12T21:52:05.199Z"
+status: verifying
+stopped_at: Completed 05-polish-07-PLAN.md
+last_updated: "2026-04-12T22:02:46.707Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 27
-  completed_plans: 27
+  completed_plans: 28
   percent: 100
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 
 Phase: 5 (Polish) — EXECUTING
 Plan: 8 of 8
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
@@ -86,6 +86,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-polish P05 | 7min | 2 tasks | 3 files |
 | Phase 05-polish P04 | 6min | 3 tasks | 8 files |
 | Phase 05-polish P06 | 6min | 3 tasks | 8 files |
+| Phase 05-polish P07 | 6min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -167,6 +168,8 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: tagsStore mirrors backlinksStore loading+error+reload pattern; buildTree() single-level nesting; tag-click wires to existing SearchPanel via setActiveTab+setQuery (no new IPC); treeRefreshStore piggyback for tag reload
 - [Phase 05-polish]: savingPromise only set for real Promise returns in autoSave — synchronous onSave skips async-deferral preserving EDIT-09 test compat
 - [Phase 05-polish]: lastSavedHashSnapshot mirrors editorStore via subscribe at component scope — consistent with D-06/RC-01 classic writable store pattern
+- [Phase 05-polish]: DirEntry uses snake_case (is_dir/is_md/is_symlink) — treeState.ts adapts to match existing IPC type
+- [Phase 05-polish]: treeState expanded[] stores vault-relative paths via vaultRel() helper — portable across vault mountpoints
 
 ### Pending Todos
 
@@ -185,6 +188,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T21:52:05.196Z
-Stopped at: Completed 05-polish-06-PLAN.md
+Last session: 2026-04-12T22:02:46.704Z
+Stopped at: Completed 05-polish-07-PLAN.md
 Resume file: None
