@@ -123,4 +123,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-11 after initialization*
+*Last updated: 2026-04-12 after Phase 1 (Skeleton) completion — Tauri 2 + Svelte 5 + CM6 scaffold, Rust backend (5 IPC commands), Welcome screen, editor with auto-save, end-to-end wire-up*
