@@ -34,8 +34,8 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **EDIT-02**: Inline live-preview of bold, italic, headings, inline code, and lists
 - [ ] **EDIT-03**: Fenced code blocks render with per-language syntax highlighting
 - [x] **EDIT-04**: Keyboard shortcuts work: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link)
-- [ ] **EDIT-05**: Multi-tab: user can open multiple notes simultaneously and switch with Cmd/Ctrl+Tab
-- [ ] **EDIT-06**: Split-view: two notes can be displayed and edited side-by-side
+- [x] **EDIT-05**: Multi-tab: user can open multiple notes simultaneously and switch with Cmd/Ctrl+Tab
+- [x] **EDIT-06**: Split-view: two notes can be displayed and edited side-by-side
 - [ ] **EDIT-07**: Undo/redo work within each tab (provided by CM6)
 - [ ] **EDIT-08**: There is no file-size limit — a 10,000-line note opens without degradation
 - [x] **EDIT-09**: Auto-save writes the active note to disk every 2 seconds (no manual save, no dirty indicator)
@@ -206,8 +206,8 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | EDIT-02 | Phase 1 — Skeleton | Complete |
 | EDIT-03 | Phase 5 — Polish | Pending |
 | EDIT-04 | Phase 1 — Skeleton | Complete |
-| EDIT-05 | Phase 2 — Vault | Pending |
-| EDIT-06 | Phase 2 — Vault | Pending |
+| EDIT-05 | Phase 2 — Vault | Complete |
+| EDIT-06 | Phase 2 — Vault | Complete |
 | EDIT-07 | Phase 5 — Polish | Pending |
 | EDIT-08 | Phase 5 — Polish | Pending |
 | EDIT-09 | Phase 1 — Skeleton | Complete |

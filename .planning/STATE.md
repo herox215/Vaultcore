@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-vault/02-02-PLAN.md
-last_updated: "2026-04-12T08:25:18.851Z"
+stopped_at: Completed 02-vault/02-03-PLAN.md
+last_updated: "2026-04-12T08:33:50.170Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 7
-  percent: 70
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 02 (vault) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-skeleton P01-04-progress-filelist-wireup | 6min | 4 tasks | 9 files |
 | Phase 02-vault P02-01 | 4min | 2 tasks | 11 files |
 | Phase 02-vault P02-02 | 25min | 2 tasks | 11 files |
+| Phase 02-vault P03 | 6min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Recent decisions affecting current work:
 - [Phase 02-vault]: treeCache kept as module-level Map in vaultStore.ts — Maps don't serialize well in Svelte stores, ephemeral per-session
 - [Phase 02-vault]: VaultLayout uses CSS Grid 3-column template [sidebar][divider][1fr] for precise column control during drag-resize
 - [Phase 02-vault]: Drag-to-resize sidebar persists to localStorage key vaultcore-sidebar-width on mouseup
+- [Phase 02-vault]: tabStore uses Map-based EditorView lifecycle (not {#key} remount) to preserve undo history across tab switches
+- [Phase 02-vault]: text/vaultcore-tab custom MIME type for tab drag-drop (T-02-11 mitigation)
+- [Phase 02-vault]: Compartment used for CM6 readonly prop reactive reconfigure without EditorView remount
 
 ### Pending Todos
 
@@ -111,6 +115,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T08:25:18.849Z
-Stopped at: Completed 02-vault/02-02-PLAN.md
+Last session: 2026-04-12T08:33:50.167Z
+Stopped at: Completed 02-vault/02-03-PLAN.md
 Resume file: None
