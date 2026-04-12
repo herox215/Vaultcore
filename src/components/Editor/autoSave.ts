@@ -32,8 +32,13 @@ export function autoSaveExtension(
       timer = null;
       try {
         const result = onSave(view.state.doc.toString());
-        savingPromise = Promise.resolve(result);
-        await savingPromise;
+        // Only block on a real in-flight Promise. If onSave is synchronous
+        // (returns void/undefined), skip the async-deferral path so a second
+        // docChanged event after the timer fires can schedule immediately.
+        if (result instanceof Promise) {
+          savingPromise = result;
+          await savingPromise;
+        }
       } catch {
         // Errors surface via the onSave callback's own toast plumbing.
       } finally {
