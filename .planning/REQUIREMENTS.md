@@ -53,10 +53,10 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Links
 
-- [ ] **LINK-01**: `[[Note]]` and `[[Note|alias]]` are parsed and rendered as clickable wiki-links
+- [x] **LINK-01**: `[[Note]]` and `[[Note|alias]]` are parsed and rendered as clickable wiki-links
 - [x] **LINK-02**: Link resolution uses 3-stage shortest-path: (1) exact match in the same folder, (2) shortest relative path, (3) alphabetical tiebreak
-- [ ] **LINK-03**: Clicking a resolved wiki-link opens the target note in a new tab
-- [ ] **LINK-04**: Unresolved wiki-links are visually distinct (different color) in the editor
+- [x] **LINK-03**: Clicking a resolved wiki-link opens the target note in a new tab
+- [x] **LINK-04**: Unresolved wiki-links are visually distinct (different color) in the editor
 - [ ] **LINK-05**: Typing `[[` opens an autocomplete list of matching filenames
 - [x] **LINK-06**: Backlinks panel shows every note whose parsed links point to the currently-active note
 - [x] **LINK-07**: `get_unresolved_links` command returns all dangling links in the vault
@@ -219,10 +219,10 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | SRCH-04 | Phase 3 — Search | Complete |
 | SRCH-05 | Phase 3 — Search | Complete |
 | SRCH-06 | Phase 3 — Search | Complete |
-| LINK-01 | Phase 4 — Links | Pending |
+| LINK-01 | Phase 4 — Links | Complete |
 | LINK-02 | Phase 4 — Links | Complete |
-| LINK-03 | Phase 4 — Links | Pending |
-| LINK-04 | Phase 4 — Links | Pending |
+| LINK-03 | Phase 4 — Links | Complete |
+| LINK-04 | Phase 4 — Links | Complete |
 | LINK-05 | Phase 4 — Links | Pending |
 | LINK-06 | Phase 4 — Links | Complete |
 | LINK-07 | Phase 4 — Links | Complete |

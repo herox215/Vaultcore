@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-links 04-01-PLAN.md
-last_updated: "2026-04-12T17:14:23.715Z"
+stopped_at: Completed 04-links 04-02-PLAN.md
+last_updated: "2026-04-12T17:18:05.939Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 19
-  completed_plans: 16
-  percent: 84
+  completed_plans: 17
+  percent: 89
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 4 (Links) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -76,6 +76,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-search P03 | 3min | 2 tasks | 7 files |
 | Phase 03-search P04 | 4min | 3 tasks | 9 files |
 | Phase 04-links P04-01 | 9min | 2 tasks | 11 files |
+| Phase 04-links P04-02 | 7 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,8 @@ Recent decisions affecting current work:
 - [Phase 04-links]: OnceLock<Regex> for compiled wiki-link regex (no once_cell dep needed)
 - [Phase 04-links]: LinkGraph stores adjacency list (outgoing + incoming maps) in IndexCoordinator as Arc<Mutex<LinkGraph>>
 - [Phase 04-links]: Watcher receives Option<mpsc::Sender<IndexCmd>> for incremental link-graph updates (LINK-08)
+- [Phase 04-links]: Module-level resolvedLinks Map in wikiLink.ts — zero-IPC decoration and click, populated once per vault open via setResolvedLinks(map)
+- [Phase 04-links]: CustomEvent('wiki-link-click') dispatched on EditorView DOM — decouples CM6 extension from Svelte stores
 
 ### Pending Todos
 
@@ -150,6 +153,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T17:14:23.710Z
-Stopped at: Completed 04-links 04-01-PLAN.md
+Last session: 2026-04-12T17:18:05.936Z
+Stopped at: Completed 04-links 04-02-PLAN.md
 Resume file: None
