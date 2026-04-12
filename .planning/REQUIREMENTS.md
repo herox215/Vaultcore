@@ -80,7 +80,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **TAG-01**: Inline tags (`#tag` and nested `#parent/child`) are extracted from note bodies
 - [x] **TAG-02**: YAML frontmatter tags (`tags: [a, b]`) are extracted (YAML only, no TOML)
 - [x] **TAG-03**: A tag panel in the sidebar lists all tags in the vault with usage counts
-- [ ] **TAG-04**: Clicking a tag in the panel runs a search for all notes carrying it
+- [x] **TAG-04**: Clicking a tag in the panel runs a search for all notes carrying it
 
 ### Sync / Concurrency
 
@@ -240,7 +240,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | TAG-01 | Phase 5 — Polish | Complete |
 | TAG-02 | Phase 5 — Polish | Complete |
 | TAG-03 | Phase 5 — Polish | Complete |
-| TAG-04 | Phase 5 — Polish | Pending |
+| TAG-04 | Phase 5 — Polish | Complete |
 | SYNC-01 | Phase 2 — Vault | Complete |
 | SYNC-02 | Phase 2 — Vault | Complete |
 | SYNC-03 | Phase 2 — Vault | Complete |

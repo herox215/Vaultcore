@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-polish-05-PLAN.md
-last_updated: "2026-04-12T21:31:29.629Z"
+stopped_at: Completed 05-polish-04-PLAN.md
+last_updated: "2026-04-12T21:40:51.724Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 25
-  percent: 93
+  completed_plans: 26
+  percent: 96
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 5 (Polish) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -84,6 +84,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-polish P02 | 11 | 2 tasks | 8 files |
 | Phase 05-polish P03 | 6min | 3 tasks | 5 files |
 | Phase 05-polish P05 | 7min | 2 tasks | 3 files |
+| Phase 05-polish P04 | 6min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,7 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: createNewNote uses vault root (not selected folder) in MVP — D-12 vault root fallback; selected-folder targeting deferred
 - [Phase 05-polish]: matchLanguageName third arg is fuzzy (substring), not alias-only — use fuzzy=false for reliable unknown-label test in fencedCode.test.ts
 - [Phase 05-polish]: Lezer markdown parser baseline on 10k-line doc is ~5-6s per 100 state updates in jsdom — largeFile.test.ts uses 30s budget + EditorState-only dispatch to catch O(n²) regressions while passing baseline
+- [Phase 05-polish]: tagsStore mirrors backlinksStore loading+error+reload pattern; buildTree() single-level nesting; tag-click wires to existing SearchPanel via setActiveTab+setQuery (no new IPC); treeRefreshStore piggyback for tag reload
 
 ### Pending Todos
 
@@ -180,6 +182,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T21:31:29.627Z
-Stopped at: Completed 05-polish-05-PLAN.md
+Last session: 2026-04-12T21:40:51.722Z
+Stopped at: Completed 05-polish-04-PLAN.md
 Resume file: None

@@ -126,7 +126,7 @@ Plans:
 - [x] 05-01-PLAN.md — Wave 2: TagIndex Rust module (inline + YAML frontmatter extraction), IndexCoordinator integration, watcher UpdateTags/RemoveTags dispatch, list_tags IPC + TS types (TAG-01, TAG-02, TAG-03)
 - [x] 05-02-PLAN.md — Wave 2: Dark palette under :root[data-theme=dark], themeStore + settingsStore, Settings modal foundation with Erscheinungsbild + Schrift sections (UI-01, UI-02)
 - [x] 05-03-PLAN.md — Wave 3: Central SHORTCUTS registry refactor of VaultLayout.handleKeydown, Cmd+N new-note, Cmd+\ sidebar toggle, Settings modal Tastaturkürzel table, per-tab undo/redo isolation regression test (UI-03, UI-05, EDIT-11, EDIT-07)
-- [ ] 05-04-PLAN.md — Wave 4: Tag panel UI + third sidebar tab, nested tag tree, empty state, tag-click search wiring (TAG-03 UI, TAG-04)
+- [x] 05-04-PLAN.md — Wave 4: Tag panel UI + third sidebar tab, nested tag tree, empty state, tag-click search wiring (TAG-03 UI, TAG-04)
 - [x] 05-05-PLAN.md — Wave 3: Fenced-code-block per-language highlighting via @codemirror/language-data + EDIT-08 10k-line regression test (EDIT-03, EDIT-08)
 - [ ] 05-06-PLAN.md — Wave 5: Hash-verify merge path in autoSave — get_file_hash IPC, async-aware autoSaveExtension, EditorPane merge-on-mismatch branch reusing Phase 2 toasts (EDIT-10)
 - [ ] 05-07-PLAN.md — Wave 5: treeState.ts sort+persist library, SortMenu popover in sidebar topbar, TreeNode expand persistence, UI-06 regression audit (FILE-06, FILE-07, UI-06)
@@ -156,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Vault | 6/6 | Complete   | 2026-04-12 |
 | 3. Search | 4/4 | Complete   | 2026-04-12 |
 | 4. Links | 4/4 | Complete   | 2026-04-12 |
-| 5. Polish | 5/8 | In Progress|  |
+| 5. Polish | 6/8 | In Progress|  |
 | 6. Benchmark & Release | 0/TBD | Not started | - |
 
 ## Coverage
