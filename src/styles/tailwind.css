@@ -15,6 +15,55 @@
 
   --vc-font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --vc-font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  --vc-font-size: 14px;
+}
+
+/* Light theme (explicit) — same values as the bare :root defaults. Allows the HTML
+   attribute to be set without clobbering the defaults. */
+:root[data-theme="light"] {
+  --color-bg: #F5F5F4;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E5E4;
+  --color-text: #1C1C1A;
+  --color-text-muted: #6B7280;
+  --color-accent: #6D28D9;
+  --color-accent-bg: #EDE9FE;
+  --color-error: #DC2626;
+  --color-warning: #D97706;
+  --color-success: #059669;
+  --color-code-bg: #F3F4F6;
+}
+
+/* Dark theme (locked palette per UI-SPEC D-06). */
+:root[data-theme="dark"] {
+  --color-bg: #1C1C1A;
+  --color-surface: #2A2A28;
+  --color-border: #3A3A38;
+  --color-text: #F5F5F4;
+  --color-text-muted: #A8A8A5;
+  --color-accent: #7C3AED;
+  --color-accent-bg: #2E1F4A;
+  --color-error: #F87171;
+  --color-warning: #FCD34D;
+  --color-success: #34D399;
+  --color-code-bg: #252523;
+}
+
+/* Auto — follow OS preference when data-theme="auto". */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    --color-bg: #1C1C1A;
+    --color-surface: #2A2A28;
+    --color-border: #3A3A38;
+    --color-text: #F5F5F4;
+    --color-text-muted: #A8A8A5;
+    --color-accent: #7C3AED;
+    --color-accent-bg: #2E1F4A;
+    --color-error: #F87171;
+    --color-warning: #FCD34D;
+    --color-success: #34D399;
+    --color-code-bg: #252523;
+  }
 }
 
 html, body, #app {
