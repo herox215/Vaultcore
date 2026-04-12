@@ -126,11 +126,99 @@ fn test_tag_index_alpha_sort_and_count() {
     assert_eq!(tags[1].count, 2);
 }
 
-// ── Tests 12–15 are in this file too (added in Task 2) ────────────────────────
-// They live below after the watcher + serde imports are available.
+// ── Tests 12–15: Task 2 — watcher dispatch + serde shape ──────────────────────
+
+use crate::indexer::IndexCmd;
+use crate::watcher::dispatch_tag_index_cmd;
+use notify_debouncer_full::{
+    notify::{event::CreateKind, event::RemoveKind, Event, EventKind},
+    DebouncedEvent,
+};
+use std::path::PathBuf;
+use std::time::Instant;
+use tokio::sync::mpsc;
+
+fn make_debounced_event(kind: EventKind, path: PathBuf) -> DebouncedEvent {
+    let event = Event {
+        kind,
+        paths: vec![path],
+        attrs: Default::default(),
+    };
+    DebouncedEvent::new(event, Instant::now())
+}
+
+// ── Test 12: watcher dispatches UpdateTags on Create ──────────────────────────
+
+#[tokio::test]
+async fn test_watcher_dispatch_update_tags_on_create() {
+    let (tx, mut rx) = mpsc::channel::<IndexCmd>(16);
+
+    // Create a temp .md file so dispatch_tag_index_cmd can read its content.
+    let tmp = tempfile::NamedTempFile::with_suffix(".md").unwrap();
+    std::fs::write(tmp.path(), "Hello #rust").unwrap();
+
+    let vault_path = tmp.path().parent().unwrap().to_path_buf();
+    let ev = make_debounced_event(EventKind::Create(CreateKind::File), tmp.path().to_path_buf());
+
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev);
+
+    let cmd = rx.try_recv().expect("expected one IndexCmd");
+    match cmd {
+        IndexCmd::UpdateTags { rel_path, .. } => {
+            // rel_path uses forward slashes
+            assert!(!rel_path.contains('\\'), "rel_path must use forward slashes");
+        }
+        other => panic!("expected UpdateTags, got {:?}", std::mem::discriminant(&other)),
+    }
+    assert!(rx.try_recv().is_err(), "expected exactly one command");
+}
+
+// ── Test 13: watcher dispatches RemoveTags on Remove ──────────────────────────
+
+#[tokio::test]
+async fn test_watcher_dispatch_remove_tags_on_delete() {
+    let (tx, mut rx) = mpsc::channel::<IndexCmd>(16);
+
+    let vault_path = PathBuf::from("/tmp/vault");
+    let md_path = vault_path.join("note.md");
+
+    let ev = make_debounced_event(EventKind::Remove(RemoveKind::File), md_path);
+
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev);
+
+    let cmd = rx.try_recv().expect("expected one IndexCmd");
+    assert!(
+        matches!(cmd, IndexCmd::RemoveTags { .. }),
+        "expected RemoveTags"
+    );
+    assert!(rx.try_recv().is_err(), "expected exactly one command");
+}
+
+// ── Test 14: watcher ignores non-.md files ─────────────────────────────────────
+
+#[tokio::test]
+async fn test_watcher_ignores_non_md_files() {
+    let (tx, mut rx) = mpsc::channel::<IndexCmd>(16);
+
+    let vault_path = PathBuf::from("/tmp/vault");
+
+    // .txt file — must be ignored
+    let txt_path = vault_path.join("note.txt");
+    let ev = make_debounced_event(EventKind::Create(CreateKind::File), txt_path);
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev);
+
+    // extensionless file — must be ignored
+    let no_ext = vault_path.join("README");
+    let ev2 = make_debounced_event(EventKind::Create(CreateKind::File), no_ext);
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev2);
+
+    assert!(
+        rx.try_recv().is_err(),
+        "no commands should be sent for non-.md files"
+    );
+}
 
 // ── Test 15: serde shape of TagUsage ──────────────────────────────────────────
-// (Moved here early; tests 12-14 require watcher dispatch and are added in Task 2)
 
 #[test]
 fn test_tag_usage_serde_shape() {

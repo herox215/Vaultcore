@@ -12,6 +12,7 @@ import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
 import type { SearchResult, FileMatch } from "../types/search";
 import type { BacklinkEntry, UnresolvedLink, RenameResult } from "../types/links";
+import type { TagUsage, TagOccurrence } from "../types/tags";
 
 function normalizeError(err: unknown): VaultError {
   if (isVaultError(err)) {
@@ -282,6 +283,26 @@ export async function getResolvedLinks(): Promise<Map<string, string>> {
   try {
     const record = await invoke<Record<string, string>>("get_resolved_links");
     return new Map(Object.entries(record));
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+// ── Tag commands ───────────────────────────────────────────────────────────────
+
+/** TAG-03: list all tags with usage counts, sorted alphabetically. */
+export async function listTags(): Promise<TagUsage[]> {
+  try {
+    return await invoke<TagUsage[]>("list_tags");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/** TAG-04: list per-file occurrences of a specific tag. */
+export async function getTagOccurrences(tag: string): Promise<TagOccurrence[]> {
+  try {
+    return await invoke<TagOccurrence[]>("get_tag_occurrences", { tag });
   } catch (e) {
     throw normalizeError(e);
   }

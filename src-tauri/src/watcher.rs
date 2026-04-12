@@ -247,11 +247,13 @@ fn process_events(
         );
     }
 
-    // Step 4: Emit individual file_changed events and dispatch link-graph commands
+    // Step 4: Emit individual file_changed events and dispatch index commands
     for ev in filtered {
         // Step 5: Dispatch link-graph commands (LINK-08)
         if let Some(tx) = index_tx {
             dispatch_link_graph_cmd(tx, vault_path, &ev);
+            // Step 5b: Dispatch tag-index commands (TAG-01/02)
+            dispatch_tag_index_cmd(tx, vault_path, &ev);
         }
 
         if let Some(payload) = map_event_to_payload(vault_path, &ev) {
@@ -301,7 +303,7 @@ fn dispatch_link_graph_cmd(
                 let _ = tx.try_send(IndexCmd::RemoveLinks { rel_path: rel_path.clone() });
                 // New path → UpdateLinks (if paths[1] exists and is .md)
                 if let Some(new_path) = ev.paths.get(1) {
-                    if new_path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("md")) {
+                    if new_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md")) {
                         let new_rel = match new_path.strip_prefix(vault_path) {
                             Ok(r) => r.to_string_lossy().replace('\\', "/"),
                             Err(_) => return,
@@ -323,6 +325,78 @@ fn dispatch_link_graph_cmd(
         }
         EventKind::Remove(_) => {
             let _ = tx.try_send(IndexCmd::RemoveLinks { rel_path });
+        }
+        _ => {}
+    }
+}
+
+/// Dispatch `IndexCmd::UpdateTags` or `IndexCmd::RemoveTags` based on the
+/// event kind. Only `.md` files are dispatched — non-Markdown file changes
+/// don't affect the tag index.
+///
+/// Uses `try_send` so a full channel (bounded at 1024) drops the command
+/// rather than blocking the watcher callback thread.
+pub(crate) fn dispatch_tag_index_cmd(
+    tx: &tokio::sync::mpsc::Sender<IndexCmd>,
+    vault_path: &Path,
+    ev: &DebouncedEvent,
+) {
+    let primary_path = match ev.paths.first() {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Only handle .md files
+    if primary_path
+        .extension()
+        .map_or(true, |ext| !ext.eq_ignore_ascii_case("md"))
+    {
+        return;
+    }
+
+    // Compute vault-relative path
+    let rel_path = match primary_path.strip_prefix(vault_path) {
+        Ok(r) => r.to_string_lossy().replace('\\', "/"),
+        Err(_) => return,
+    };
+
+    match &ev.kind {
+        EventKind::Create(_) | EventKind::Modify(_) => {
+            if let EventKind::Modify(
+                notify_debouncer_full::notify::event::ModifyKind::Name(_),
+            ) = &ev.kind
+            {
+                // Old path → RemoveTags
+                let _ = tx.try_send(IndexCmd::RemoveTags {
+                    rel_path: rel_path.clone(),
+                });
+                // New path → UpdateTags (if paths[1] exists and is .md)
+                if let Some(new_path) = ev.paths.get(1) {
+                    if new_path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    {
+                        let new_rel = match new_path.strip_prefix(vault_path) {
+                            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                            Err(_) => return,
+                        };
+                        if let Ok(content) = std::fs::read_to_string(new_path) {
+                            let _ = tx.try_send(IndexCmd::UpdateTags {
+                                rel_path: new_rel,
+                                content,
+                            });
+                        }
+                    }
+                }
+            } else {
+                // create or modify — read content and dispatch UpdateTags
+                if let Ok(content) = std::fs::read_to_string(primary_path) {
+                    let _ = tx.try_send(IndexCmd::UpdateTags { rel_path, content });
+                }
+            }
+        }
+        EventKind::Remove(_) => {
+            let _ = tx.try_send(IndexCmd::RemoveTags { rel_path });
         }
         _ => {}
     }
