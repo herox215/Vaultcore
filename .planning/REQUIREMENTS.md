@@ -95,7 +95,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### UI / UX
 
-- [ ] **UI-01**: Dark mode and Light mode are implemented and can be toggled at runtime
+- [x] **UI-01**: Dark mode and Light mode are implemented and can be toggled at runtime
 - [x] **UI-02**: Font family and font size are configurable
 - [ ] **UI-03**: Sidebar can be collapsed/expanded with Cmd/Ctrl+\
 - [x] **UI-04**: Toast component supports error, clean-merge, and conflict variants, auto-dismisses after 5 s, and is manually dismissable
@@ -249,7 +249,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | SYNC-06 | Phase 2 — Vault | Complete |
 | SYNC-07 | Phase 2 — Vault | Complete |
 | SYNC-08 | Phase 2 — Vault | Complete |
-| UI-01 | Phase 5 — Polish | Pending |
+| UI-01 | Phase 5 — Polish | Complete |
 | UI-02 | Phase 5 — Polish | Complete |
 | UI-03 | Phase 5 — Polish | Pending |
 | UI-04 | Phase 1 — Skeleton | Complete |

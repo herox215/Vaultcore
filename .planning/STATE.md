@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-polish-01-PLAN.md
-last_updated: "2026-04-12T20:55:09.134Z"
+stopped_at: Completed 05-polish-02-PLAN.md
+last_updated: "2026-04-12T21:09:44.177Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 22
-  percent: 81
+  completed_plans: 23
+  percent: 85
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 5 (Polish) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -81,6 +81,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-links P04 | 6min | 3 tasks | 7 files |
 | Phase 05-polish P00 | 18min | 3 tasks | 9 files |
 | Phase 05-polish P01 | 12min | 2 tasks | 10 files |
+| Phase 05-polish P02 | 11 | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -152,6 +153,9 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: No serde rename_all=camelCase on DirEntry — snake_case preserved for backward compat with existing frontend field reads
 - [Phase 05-polish]: var(--vc-font-size) consumer wired in theme.ts before producer defined — browser falls back to inherited 14px without visual regression
 - [Phase 05-polish]: TagIndex per-file dedup via by_file HashMap; DebouncedEvent constructed as DebouncedEvent::new(Event{...}, Instant::now()); clippy map_or(false) fixed to is_some_and() in new watcher code
+- [Phase 05-polish]: vi.stubGlobal('localStorage') required in tests — Tauri's --localstorage-file jsdom override removes clear/setItem/getItem from standard Storage interface
+- [Phase 05-polish]: themeStore/settingsStore use VALID_THEMES + BODY_STACKS/MONO_STACKS whitelists — values are mapped from safe tokens to CSS stacks, raw user input never written to DOM
+- [Phase 05-polish]: SettingsModal.svelte uses subscribe side-effects (not $derived) to stay compatible with D-06/RC-01 classic writable store pattern
 
 ### Pending Todos
 
@@ -170,6 +174,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T20:55:09.131Z
-Stopped at: Completed 05-polish-01-PLAN.md
+Last session: 2026-04-12T21:09:44.175Z
+Stopped at: Completed 05-polish-02-PLAN.md
 Resume file: None
