@@ -1,15 +1,17 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { EditorView } from "@codemirror/view";
-  import { EditorState } from "@codemirror/state";
+  import { EditorState, Compartment } from "@codemirror/state";
   import { buildExtensions } from "./extensions";
 
   let {
     content,
     onSave,
+    readonly = false,
   }: {
     content: string;
     onSave: (text: string) => void;
+    readonly?: boolean;
   } = $props();
 
   let container: HTMLDivElement | undefined = $state();
@@ -18,16 +20,29 @@
   // Svelte's reactive Proxy would intercept internal CM6 field access and
   // break the editor's change detection. Use plain `let` instead.
   let view: EditorView | null = null;
+  const readonlyCompartment = new Compartment();
 
   onMount(() => {
     if (!container) return;
     view = new EditorView({
       state: EditorState.create({
         doc: content,
-        extensions: buildExtensions(onSave),
+        extensions: [
+          ...buildExtensions(onSave),
+          readonlyCompartment.of(EditorState.readOnly.of(readonly)),
+        ],
       }),
       parent: container,
     });
+  });
+
+  // Reactively update readonly state when prop changes
+  $effect(() => {
+    if (view) {
+      view.dispatch({
+        effects: readonlyCompartment.reconfigure(EditorState.readOnly.of(readonly)),
+      });
+    }
   });
 
   onDestroy(() => {

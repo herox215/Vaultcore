@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import Sidebar from "../Sidebar/Sidebar.svelte";
+  import EditorPane from "../Editor/EditorPane.svelte";
+  import { tabStore } from "../../store/tabStore";
 
   const SIDEBAR_WIDTH_KEY = "vaultcore-sidebar-width";
   const DEFAULT_SIDEBAR_WIDTH = 240;
   const MIN_SIDEBAR_WIDTH = 160;
   const MAX_SIDEBAR_WIDTH = 480;
+  const MIN_PANE_WIDTH = 240;
 
   let sidebarWidth = $state(DEFAULT_SIDEBAR_WIDTH);
   let sidebarCollapsed = $state(false);
@@ -13,8 +16,19 @@
   let dragStartX = 0;
   let dragStartWidth = 0;
 
-  // Sidebar selection state (Plan 03 will hand off to tabStore)
+  // Split view state from tabStore
+  let rightPaneIds = $state<string[]>([]);
+  let splitRatio = $state(0.5);
+  let isSplitDragging = $state(false);
+  let splitDragStartX = 0;
+  let splitDragStartRatio = 0;
+
+  // Sidebar selection state
   let selectedPath = $state<string | null>(null);
+
+  const unsubTab = tabStore.subscribe((state) => {
+    rightPaneIds = state.splitState.right;
+  });
 
   onMount(() => {
     const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
@@ -30,7 +44,7 @@
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
   }
 
-  // Divider drag-to-resize
+  // Sidebar divider drag-to-resize
   function handleDividerMousedown(e: MouseEvent) {
     e.preventDefault();
     isDragging = true;
@@ -39,10 +53,14 @@
   }
 
   function handleMousemove(e: MouseEvent) {
-    if (!isDragging) return;
-    const delta = e.clientX - dragStartX;
-    const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, dragStartWidth + delta));
-    sidebarWidth = newWidth;
+    if (isDragging) {
+      const delta = e.clientX - dragStartX;
+      const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, dragStartWidth + delta));
+      sidebarWidth = newWidth;
+    }
+    if (isSplitDragging) {
+      handleSplitDragMove(e);
+    }
   }
 
   function handleMouseup() {
@@ -50,6 +68,32 @@
       isDragging = false;
       persistWidth(sidebarWidth);
     }
+    if (isSplitDragging) {
+      isSplitDragging = false;
+    }
+  }
+
+  // Split pane divider drag
+  function handleSplitDividerMousedown(e: MouseEvent) {
+    e.preventDefault();
+    isSplitDragging = true;
+    splitDragStartX = e.clientX;
+    splitDragStartRatio = splitRatio;
+  }
+
+  function handleSplitDragMove(e: MouseEvent) {
+    if (!isSplitDragging) return;
+    const editorAreaEl = document.querySelector(".vc-layout-editor") as HTMLElement;
+    if (!editorAreaEl) return;
+
+    const editorRect = editorAreaEl.getBoundingClientRect();
+    const totalWidth = editorRect.width;
+    const x = e.clientX - editorRect.left;
+    const newRatio = Math.max(
+      MIN_PANE_WIDTH / totalWidth,
+      Math.min(1 - MIN_PANE_WIDTH / totalWidth, x / totalWidth)
+    );
+    splitRatio = newRatio;
   }
 
   onMount(() => {
@@ -62,6 +106,7 @@
   });
 
   onDestroy(() => {
+    unsubTab();
     document.removeEventListener("mousemove", handleMousemove);
     document.removeEventListener("mouseup", handleMouseup);
   });
@@ -75,14 +120,45 @@
   }
 
   function handleOpenFile(path: string) {
-    // Plan 03 will wire this to tabStore
+    // Wire sidebar open-file to tabStore (Plan 03)
     selectedPath = path;
+    tabStore.openTab(path);
   }
+
+  // Global keyboard shortcuts for tab management
+  // Registered here (not per-TabBar) to avoid duplicate handlers
+  function handleKeydown(e: KeyboardEvent) {
+    const isMeta = e.metaKey || e.ctrlKey;
+    if (!isMeta) return;
+
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        tabStore.cycleTab(-1);
+      } else {
+        tabStore.cycleTab(1);
+      }
+    } else if (e.key === "w" || e.key === "W") {
+      e.preventDefault();
+      const state = tabStore;
+      // Get active tab ID from store snapshot
+      let activeId: string | null = null;
+      const unsub = tabStore.subscribe((s) => { activeId = s.activeTabId; });
+      unsub();
+      if (activeId) {
+        tabStore.closeTab(activeId);
+      }
+    }
+  }
+
+  const isSplit = $derived(rightPaneIds.length > 0);
 </script>
+
+<svelte:document onkeydown={handleKeydown} />
 
 <div
   class="vc-vault-layout"
-  class:vc-vault-layout--dragging={isDragging}
+  class:vc-vault-layout--dragging={isDragging || isSplitDragging}
   style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px"
 >
   <!-- Sidebar column -->
@@ -111,7 +187,7 @@
   {/if}
 
   <!-- Editor area -->
-  <div class="vc-layout-editor">
+  <div class="vc-layout-editor" style="--split-ratio: {splitRatio}">
     <!-- Sidebar collapse toggle (shown when collapsed) -->
     {#if sidebarCollapsed}
       <button
@@ -124,9 +200,9 @@
       </button>
     {/if}
 
-    <!-- Editor area header with collapse button -->
-    <div class="vc-editor-topbar">
-      {#if !sidebarCollapsed}
+    <!-- Topbar with collapse toggle (shown when sidebar visible) -->
+    {#if !sidebarCollapsed}
+      <div class="vc-editor-topbar">
         <button
           class="vc-sidebar-toggle-btn"
           onclick={toggleSidebar}
@@ -135,13 +211,38 @@
         >
           &#9664;
         </button>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
-    <!-- Plan 03 will replace this placeholder with EditorPane / TabBar -->
-    <div class="vc-editor-placeholder">
-      <p>No file open</p>
-      <p class="vc-editor-placeholder-hint">Select a file in the sidebar to open it.</p>
+    <!-- Editor panes area -->
+    <div class="vc-editor-panes">
+      <!-- Left pane (always present) -->
+      <div
+        class="vc-pane-wrapper"
+        style="flex-grow: {splitRatio}; flex-shrink: 1; flex-basis: 0; min-width: {MIN_PANE_WIDTH}px"
+      >
+        <EditorPane paneId="left" />
+      </div>
+
+      {#if isSplit}
+        <!-- Split divider -->
+        <div
+          class="vc-split-divider"
+          class:vc-split-divider--active={isSplitDragging}
+          role="separator"
+          aria-label="Resize split panes"
+          aria-orientation="vertical"
+          onmousedown={handleSplitDividerMousedown}
+        ></div>
+
+        <!-- Right pane -->
+        <div
+          class="vc-pane-wrapper"
+          style="flex-grow: {1 - splitRatio}; flex-shrink: 1; flex-basis: 0; min-width: {MIN_PANE_WIDTH}px"
+        >
+          <EditorPane paneId="right" />
+        </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -193,6 +294,7 @@
     min-width: 0;
     background: var(--color-surface);
     overflow: hidden;
+    position: relative;
   }
 
   .vc-editor-topbar {
@@ -202,6 +304,34 @@
     padding: 0 8px;
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
+  }
+
+  .vc-editor-panes {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: row;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .vc-pane-wrapper {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .vc-split-divider {
+    width: 4px;
+    background: var(--color-border);
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background 150ms;
+  }
+
+  .vc-split-divider:hover,
+  .vc-split-divider--active {
+    background: var(--color-accent-bg);
   }
 
   .vc-sidebar-toggle-btn,
@@ -230,24 +360,5 @@
     left: 8px;
     top: 50%;
     transform: translateY(-50%);
-  }
-
-  .vc-editor-placeholder {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-text-muted);
-    font-size: 14px;
-    gap: 8px;
-  }
-
-  .vc-editor-placeholder p {
-    margin: 0;
-  }
-
-  .vc-editor-placeholder-hint {
-    font-size: 12px;
   }
 </style>
