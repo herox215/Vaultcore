@@ -31,4 +31,6 @@ export interface RenameResult {
   updatedLinks: number;
   /** Vault-relative paths of files that could not be rewritten (IO errors). */
   failedFiles: string[];
+  /** Vault-relative paths of files whose content was rewritten. Use to reload open tabs. */
+  updatedPaths: string[];
 }
