@@ -4,7 +4,7 @@
 // the `get_vault_stats` command (which takes only a `String`).
 
 use crate::commands::vault::{
-    count_md_files, format_iso8601_utc, push_recent_vault_to, RecentVault,
+    collect_file_list, count_md_files, format_iso8601_utc, push_recent_vault_to, RecentVault,
 };
 use std::fs;
 use tempfile::tempdir;
@@ -124,6 +124,23 @@ fn recent_vault_has_path_and_last_opened_fields() {
     };
     assert_eq!(v.path, "/x");
     assert_eq!(v.last_opened, "2026-04-11T00:00:00Z");
+}
+
+// --- IDX-02 / D-14: collect_file_list ------------------------------------
+
+#[test]
+fn collect_file_list_sorted_and_normalized() {
+    let dir = tempdir().unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("b.md"), "").unwrap();
+    fs::write(dir.path().join("a.md"), "").unwrap();
+    fs::write(dir.path().join("sub/c.md"), "").unwrap();
+    fs::write(dir.path().join("ignore.txt"), "").unwrap();
+    fs::create_dir(dir.path().join(".hidden")).unwrap();
+    fs::write(dir.path().join(".hidden/x.md"), "").unwrap();
+
+    let list = collect_file_list(dir.path());
+    assert_eq!(list, vec!["a.md", "b.md", "sub/c.md"]);
 }
 
 // --- helpers --------------------------------------------------------------

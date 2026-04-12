@@ -20,7 +20,8 @@
 use crate::error::VaultError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_fs::FsExt;
 use walkdir::{DirEntry, WalkDir};
 
@@ -28,7 +29,18 @@ use walkdir::{DirEntry, WalkDir};
 pub struct VaultInfo {
     pub path: String,
     pub file_count: usize,
+    pub file_list: Vec<String>,
 }
+
+#[derive(Serialize, Clone, Debug)]
+struct IndexProgressPayload {
+    current: usize,
+    total: usize,
+    current_file: String,
+}
+
+const PROGRESS_THROTTLE: Duration = Duration::from_millis(50);
+const PROGRESS_EVENT: &str = "vault://index_progress";
 
 #[derive(Serialize, Clone, Debug)]
 pub struct VaultStats {
@@ -78,6 +90,32 @@ pub fn count_md_files(root: &Path) -> usize {
         .count()
 }
 
+/// Collect all `.md` file relative paths from the vault root, alphabetically sorted.
+/// Forward-slash separators on all platforms for cross-platform consistency.
+/// Skips dot-prefixed directories at any depth (D-14 / RESEARCH §4.1).
+pub fn collect_file_list(root: &Path) -> Vec<String> {
+    let mut paths: Vec<String> = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !is_excluded(e))
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_type().is_file()
+                && e.path()
+                    .extension()
+                    .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+        })
+        .filter_map(|e| {
+            e.path()
+                .strip_prefix(root)
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
 // --- Tauri commands ---------------------------------------------------------
 
 #[tauri::command]
@@ -124,10 +162,34 @@ pub async fn open_vault(
     let canonical_str = canonical.to_string_lossy().into_owned();
     push_recent_vault(&app, &canonical_str)?;
 
-    let file_count = count_md_files(&canonical);
+    // --- IDX-02 two-pass walk with progress events ---
+    let total = count_md_files(&canonical);
+
+    // Pre-collect the sorted file list (single pass over the directory).
+    let file_list = collect_file_list(&canonical);
+
+    // Emit throttled progress events while iterating the sorted list.
+    let mut last_emit = Instant::now() - PROGRESS_THROTTLE;
+    for (i, relative) in file_list.iter().enumerate() {
+        let current = i + 1;
+        let should_emit = current == total || last_emit.elapsed() >= PROGRESS_THROTTLE;
+        if should_emit {
+            let _ = app.emit(
+                PROGRESS_EVENT,
+                IndexProgressPayload {
+                    current,
+                    total,
+                    current_file: relative.clone(),
+                },
+            );
+            last_emit = Instant::now();
+        }
+    }
+
     Ok(VaultInfo {
         path: canonical_str,
-        file_count,
+        file_count: total,
+        file_list,
     })
 }
 
