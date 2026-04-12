@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Phase 3 UI-SPEC approved
-last_updated: "2026-04-12T14:17:40.786Z"
-last_activity: 2026-04-12 -- Phase 03 execution started
+stopped_at: Completed 03-01-PLAN.md — Tantivy indexer foundation
+last_updated: "2026-04-12T14:31:48.614Z"
+last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 15
-  completed_plans: 11
-  percent: 73
+  completed_plans: 12
+  percent: 80
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 03 (Search) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 03
-Last activity: 2026-04-12 -- Phase 03 execution started
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -70,6 +70,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-vault P02-04 | 5min | 2 tasks | 8 files |
 | Phase 02-vault P02-05 | 18 | 3 tasks | 10 files |
 | Phase 02-vault P06 | 66s | 2 tasks | 3 files |
+| Phase 03-search P01 | 45 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,9 @@ Recent decisions affecting current work:
 - [Phase 02-vault]: Disk-full toast debounced 30s via lastDiskFullToast timestamp in EditorPane
 - [Phase 02-vault]: serde rename_all camelCase is the correct pattern for all IPC result structs so TypeScript consumers receive camelCase field names
 - [Phase 02-vault]: Svelte shorthand {onPathChanged} passes through the prop value as-is; explicit onPathChanged={handlePathChanged} is required when mapping a local function to a prop of the same name
+- [Phase 03-search]: Submodule named tantivy_index (not tantivy) to avoid shadowing external tantivy crate in Rust name resolution
+- [Phase 03-search]: IndexCoordinator take/put pattern in open_vault — coordinator not Clone, taken from Mutex, run, put back
+- [Phase 03-search]: iso8601_utc inlined in tantivy_index.rs to avoid cross-module dependency on vault.rs
 
 ### Pending Todos
 
@@ -131,6 +135,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T13:45:03.833Z
-Stopped at: Phase 3 UI-SPEC approved
-Resume file: .planning/phases/03-search/03-UI-SPEC.md
+Last session: 2026-04-12T14:31:48.612Z
+Stopped at: Completed 03-01-PLAN.md — Tantivy indexer foundation
+Resume file: None
