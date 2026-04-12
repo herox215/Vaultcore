@@ -57,7 +57,9 @@ impl WriteIgnoreList {
 pub struct VaultState {
     pub current_vault: Mutex<Option<std::path::PathBuf>>,
     pub write_ignore: Arc<Mutex<WriteIgnoreList>>,
-    pub vault_reachable: Mutex<bool>,
+    /// Shared vault reachability flag (ERR-03 / D-14).
+    /// Wrapped in Arc so it can be shared with the watcher's reconnect-poll task.
+    pub vault_reachable: Arc<Mutex<bool>>,
     pub watcher_handle: Arc<Mutex<Option<Debouncer<RecommendedWatcher, RecommendedCache>>>>,
 }
 
@@ -66,7 +68,7 @@ impl Default for VaultState {
         Self {
             current_vault: Mutex::new(None),
             write_ignore: Arc::new(Mutex::new(WriteIgnoreList::default())),
-            vault_reachable: Mutex::new(false),
+            vault_reachable: Arc::new(Mutex::new(false)),
             watcher_handle: Arc::new(Mutex::new(None)),
         }
     }
