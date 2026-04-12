@@ -59,7 +59,7 @@ Plans:
 - [x] 02-01-PLAN.md — Wave 1: Rust crate additions (notify-debouncer-full, similar, rayon), list_directory command with lazy-load/dot-filter/symlink detection, VaultState extension (WriteIgnoreList, vault_reachable), watcher + merge module skeletons, frontend TypeScript types and IPC wrappers for all Phase 2 commands/events
 - [x] 02-02-PLAN.md — Wave 2: Six Rust file-operation commands (create_file, rename_file, delete_file, move_file, create_folder, count_wiki_links), Sidebar tree with TreeNode/InlineRename, VaultLayout grid shell replacing VaultView, confirmation dialogs, drag-drop move, lucide-svelte icons
 - [x] 02-03-PLAN.md — Wave 3: tabStore with split-view state management, TabBar/Tab/EditorPane Svelte components, EditorView Map lifecycle (no remount on tab switch), drag-to-reorder/drag-to-split, Cmd+Tab/Cmd+W keyboard shortcuts
-- [ ] 02-04-PLAN.md — Wave 4: File watcher (notify-debouncer-full spawn on vault open), write-ignore-list self-filtering in all write commands, bulk-change detection (>500 events/2s), sidebar auto-refresh on external changes, bulk progress UI
+- [x] 02-04-PLAN.md — Wave 4: File watcher (notify-debouncer-full spawn on vault open), write-ignore-list self-filtering in all write commands, bulk-change detection (>500 events/2s), sidebar auto-refresh on external changes, bulk progress UI
 - [ ] 02-05-PLAN.md — Wave 5: Three-way merge implementation (similar crate, line-level), merge_external_change Tauri command, frontend merge wiring with toasts, vault unmount/reconnect readonly toggle, disk-full resilience, end-to-end manual verification checkpoint
 **UI hint**: yes
 

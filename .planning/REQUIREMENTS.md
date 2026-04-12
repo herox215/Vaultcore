@@ -84,11 +84,11 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 ### Sync / Concurrency
 
-- [ ] **SYNC-01**: File watcher (notify crate) detects external changes to vault files
-- [ ] **SYNC-02**: Write-ignore-list suppresses watcher events caused by backend writes (auto-save, rename, delete, move) with a 100 ms debounce window
-- [ ] **SYNC-03**: Bulk external changes are debounced over a 200 ms window and processed as a batch
-- [ ] **SYNC-04**: Batch parsing is parallelized with rayon; the full batch produces a single Tantivy commit
-- [ ] **SYNC-05**: Batches of > 500 files trigger the progress UI
+- [x] **SYNC-01**: File watcher (notify crate) detects external changes to vault files
+- [x] **SYNC-02**: Write-ignore-list suppresses watcher events caused by backend writes (auto-save, rename, delete, move) with a 100 ms debounce window
+- [x] **SYNC-03**: Bulk external changes are debounced over a 200 ms window and processed as a batch
+- [x] **SYNC-04**: Batch parsing is parallelized with rayon; the full batch produces a single Tantivy commit
+- [x] **SYNC-05**: Batches of > 500 files trigger the progress UI
 - [ ] **SYNC-06**: A three-way merge is used when an open file is modified externally; conflict detection is based on CM6 `docChanged`, not cursor position
 - [ ] **SYNC-07**: On true conflict at the same location, the local editor state wins
 - [ ] **SYNC-08**: Clean merges surface a toast "Externe Änderungen wurden eingebunden"; lossy conflicts surface "Konflikt in <file> – lokale Version behalten"
@@ -241,11 +241,11 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | TAG-02 | Phase 5 — Polish | Pending |
 | TAG-03 | Phase 5 — Polish | Pending |
 | TAG-04 | Phase 5 — Polish | Pending |
-| SYNC-01 | Phase 2 — Vault | Pending |
-| SYNC-02 | Phase 2 — Vault | Pending |
-| SYNC-03 | Phase 2 — Vault | Pending |
-| SYNC-04 | Phase 2 — Vault | Pending |
-| SYNC-05 | Phase 2 — Vault | Pending |
+| SYNC-01 | Phase 2 — Vault | Complete |
+| SYNC-02 | Phase 2 — Vault | Complete |
+| SYNC-03 | Phase 2 — Vault | Complete |
+| SYNC-04 | Phase 2 — Vault | Complete |
+| SYNC-05 | Phase 2 — Vault | Complete |
 | SYNC-06 | Phase 2 — Vault | Pending |
 | SYNC-07 | Phase 2 — Vault | Pending |
 | SYNC-08 | Phase 2 — Vault | Pending |

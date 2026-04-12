@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-vault/02-03-PLAN.md
-last_updated: "2026-04-12T08:33:50.170Z"
+stopped_at: Completed 02-vault/02-04-PLAN.md
+last_updated: "2026-04-12T08:41:31.163Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 8
-  percent: 80
+  completed_plans: 9
+  percent: 90
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 02 (vault) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -66,6 +66,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-vault P02-01 | 4min | 2 tasks | 11 files |
 | Phase 02-vault P02-02 | 25min | 2 tasks | 11 files |
 | Phase 02-vault P03 | 6min | 2 tasks | 8 files |
+| Phase 02-vault P02-04 | 5min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,8 @@ Recent decisions affecting current work:
 - [Phase 02-vault]: tabStore uses Map-based EditorView lifecycle (not {#key} remount) to preserve undo history across tab switches
 - [Phase 02-vault]: text/vaultcore-tab custom MIME type for tab drag-drop (T-02-11 mitigation)
 - [Phase 02-vault]: Compartment used for CM6 readonly prop reactive reconfigure without EditorView remount
+- [Phase 02-vault]: RecommendedCache used instead of FileIdMap for Debouncer — Linux maps FileIdMap to NoCache; RecommendedCache is the platform-agnostic alias
+- [Phase 02-vault]: pendingMergePaths is a per-pane ephemeral Set in EditorPane (not a store) — merge state is transient and not shared
 
 ### Pending Todos
 
@@ -115,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T08:33:50.167Z
-Stopped at: Completed 02-vault/02-03-PLAN.md
+Last session: 2026-04-12T08:41:31.160Z
+Stopped at: Completed 02-vault/02-04-PLAN.md
 Resume file: None
