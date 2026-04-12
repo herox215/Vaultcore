@@ -225,6 +225,16 @@ impl LinkGraph {
         self.incoming.retain(|_, v| !v.is_empty());
     }
 
+    /// Return the outgoing links for `source_rel` (immutable borrow).
+    pub fn outgoing_for(&self, source_rel: &str) -> Option<&Vec<ParsedLink>> {
+        self.outgoing.get(source_rel)
+    }
+
+    /// Return the incoming sources for `target_rel` (immutable borrow).
+    pub fn incoming_for(&self, target_rel: &str) -> Option<&Vec<String>> {
+        self.incoming.get(target_rel)
+    }
+
     /// Return all backlink entries for `target_rel`.
     ///
     /// For each source file that links to `target_rel`, finds the ParsedLinks

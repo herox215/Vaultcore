@@ -104,6 +104,12 @@ pub fn run() {
             commands::search::search_fulltext,
             commands::search::search_filename,
             commands::search::rebuild_index,
+            commands::links::get_backlinks,
+            commands::links::get_outgoing_links,
+            commands::links::get_unresolved_links,
+            commands::links::suggest_links,
+            commands::links::update_links_after_rename,
+            commands::links::get_resolved_links,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

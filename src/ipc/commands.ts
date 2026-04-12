@@ -11,6 +11,7 @@ import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
 import type { SearchResult, FileMatch } from "../types/search";
+import type { BacklinkEntry, UnresolvedLink, RenameResult } from "../types/links";
 
 function normalizeError(err: unknown): VaultError {
   if (isVaultError(err)) {
@@ -200,6 +201,87 @@ export async function searchFilename(
 export async function rebuildIndex(): Promise<void> {
   try {
     await invoke<void>("rebuild_index");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+// ── Link commands ──────────────────────────────────────────────────────────────
+
+/**
+ * Return all backlinks for a vault-relative target path.
+ */
+export async function getBacklinks(path: string): Promise<BacklinkEntry[]> {
+  try {
+    return await invoke<BacklinkEntry[]>("get_backlinks", { path });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Return all outgoing wiki-links from a vault-relative source path.
+ */
+export async function getOutgoingLinks(path: string): Promise<any[]> {
+  try {
+    return await invoke<any[]>("get_outgoing_links", { path });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Return all wiki-links across the vault that could not be resolved.
+ */
+export async function getUnresolvedLinks(): Promise<UnresolvedLink[]> {
+  try {
+    return await invoke<UnresolvedLink[]>("get_unresolved_links");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Fuzzy filename search for `[[` autocomplete.
+ * Reuses the nucleo Matcher from the Quick Switcher (Phase 3).
+ */
+export async function suggestLinks(
+  query: string,
+  limit: number = 20,
+): Promise<FileMatch[]> {
+  try {
+    return await invoke<FileMatch[]>("suggest_links", { query, limit });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Rewrite all wiki-links in the vault that point to `oldPath` after a rename.
+ * `oldPath` and `newPath` are vault-relative.
+ */
+export async function updateLinksAfterRename(
+  oldPath: string,
+  newPath: string,
+): Promise<RenameResult> {
+  try {
+    return await invoke<RenameResult>("update_links_after_rename", {
+      oldPath,
+      newPath,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Return a stem → vault-relative-path map for all files in the vault.
+ * The frontend converts this to `Map<string, string>` for zero-IPC click handling.
+ */
+export async function getResolvedLinks(): Promise<Map<string, string>> {
+  try {
+    const record = await invoke<Record<string, string>>("get_resolved_links");
+    return new Map(Object.entries(record));
   } catch (e) {
     throw normalizeError(e);
   }
