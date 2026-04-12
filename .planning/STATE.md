@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-vault/02-01-PLAN.md
-last_updated: "2026-04-12T08:16:53.564Z"
+stopped_at: Completed 02-vault/02-02-PLAN.md
+last_updated: "2026-04-12T08:25:18.851Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 6
-  percent: 60
+  completed_plans: 7
+  percent: 70
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 02 (vault) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -64,6 +64,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-skeleton P01-03-editor-autosave | 4min | 3 tasks | 9 files |
 | Phase 01-skeleton P01-04-progress-filelist-wireup | 6min | 4 tasks | 9 files |
 | Phase 02-vault P02-01 | 4min | 2 tasks | 11 files |
+| Phase 02-vault P02-02 | 25min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,9 @@ Recent decisions affecting current work:
 - [Phase 02-vault]: regex crate added for D-16 wiki-link counting (beyond D-20 minimum crate list)
 - [Phase 02-vault]: watcher_handle deferred to Plan 04 — Debouncer has no Default, keeps VaultState::default() working
 - [Phase 02-vault]: list_directory uses dual metadata calls: symlink_metadata() for is_symlink, entry.metadata() for is_dir per D-05
+- [Phase 02-vault]: treeCache kept as module-level Map in vaultStore.ts — Maps don't serialize well in Svelte stores, ephemeral per-session
+- [Phase 02-vault]: VaultLayout uses CSS Grid 3-column template [sidebar][divider][1fr] for precise column control during drag-resize
+- [Phase 02-vault]: Drag-to-resize sidebar persists to localStorage key vaultcore-sidebar-width on mouseup
 
 ### Pending Todos
 
@@ -107,6 +111,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T08:16:53.562Z
-Stopped at: Completed 02-vault/02-01-PLAN.md
+Last session: 2026-04-12T08:25:18.849Z
+Stopped at: Completed 02-vault/02-02-PLAN.md
 Resume file: None
