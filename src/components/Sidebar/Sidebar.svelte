@@ -16,8 +16,10 @@
   } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { tabStore } from "../../store/tabStore";
+  import { searchStore } from "../../store/searchStore";
   import TreeNode from "./TreeNode.svelte";
   import ProgressBar from "../Progress/ProgressBar.svelte";
+  import SearchPanel from "../Search/SearchPanel.svelte";
 
   interface Props {
     selectedPath: string | null;
@@ -163,6 +165,29 @@
 </script>
 
 <aside class="vc-sidebar" data-testid="sidebar">
+  <!-- Tab bar — Dateien / Suche switching (D-01) -->
+  <div class="vc-sidebar-tabs" role="tablist">
+    <button
+      class="vc-sidebar-tab"
+      role="tab"
+      aria-selected={$searchStore.activeTab === 'files'}
+      onclick={() => searchStore.setActiveTab('files')}
+    >Dateien</button>
+    <button
+      class="vc-sidebar-tab"
+      role="tab"
+      aria-selected={$searchStore.activeTab === 'search'}
+      onclick={() => searchStore.setActiveTab('search')}
+    >Suche</button>
+  </div>
+
+  {#if $searchStore.activeTab === 'search'}
+    <!-- Search panel tab panel -->
+    <div class="vc-sidebar-tabpanel" role="tabpanel">
+      <SearchPanel {onOpenFile} />
+    </div>
+  {:else}
+  <!-- Files tab panel — Header strip and tree -->
   <!-- Header strip — replaced by bulk progress bar when bulk changes arrive -->
   <header class="vc-sidebar-header">
     {#if bulkActive}
@@ -220,6 +245,7 @@
       </ul>
     {/if}
   </div>
+  {/if}
 </aside>
 
 <style>
@@ -326,5 +352,13 @@
 
   .vc-sidebar-status--error {
     color: var(--color-error);
+  }
+
+  .vc-sidebar-tabpanel {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
   }
 </style>

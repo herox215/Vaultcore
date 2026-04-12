@@ -3,6 +3,7 @@
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
   import { tabStore } from "../../store/tabStore";
+  import { searchStore } from "../../store/searchStore";
 
   const SIDEBAR_WIDTH_KEY = "vaultcore-sidebar-width";
   const DEFAULT_SIDEBAR_WIDTH = 240;
@@ -130,6 +131,12 @@
   function handleKeydown(e: KeyboardEvent) {
     const isMeta = e.metaKey || e.ctrlKey;
     if (!isMeta) return;
+
+    if (e.shiftKey && e.key === "F") {
+      e.preventDefault();
+      searchStore.setActiveTab("search");
+      return;
+    }
 
     if (e.key === "Tab") {
       e.preventDefault();
