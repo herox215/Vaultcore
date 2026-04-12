@@ -276,6 +276,7 @@ pub async fn create_folder(
 // ─── rename_file ─────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenameResult {
     pub new_path: String,
     pub link_count: u32,
