@@ -16,10 +16,13 @@
 pub mod tantivy_index;
 pub mod memory;
 pub mod parser;
+pub mod link_graph;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use link_graph::{LinkGraph, extract_links};
 
 use tantivy::schema::Schema;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
@@ -65,6 +68,15 @@ pub enum IndexCmd {
         vault_path: PathBuf,
     },
     Shutdown,
+    /// Incrementally update link-graph entries for a file (LINK-08).
+    UpdateLinks {
+        rel_path: String,
+        content: String,
+    },
+    /// Remove all link-graph entries for a deleted file (LINK-08).
+    RemoveLinks {
+        rel_path: String,
+    },
 }
 
 // ── IndexCoordinator ──────────────────────────────────────────────────────────
@@ -82,6 +94,8 @@ pub struct IndexCoordinator {
     pub reader: Arc<IndexReader>,
     /// Shared index handle — search commands need it to build queries.
     pub index: Arc<Index>,
+    /// In-memory link adjacency list — shared with link IPC commands.
+    link_graph: Arc<Mutex<LinkGraph>>,
 }
 
 impl IndexCoordinator {
@@ -116,6 +130,7 @@ impl IndexCoordinator {
         let matcher = Arc::new(Mutex::new(nucleo_matcher::Matcher::new(
             nucleo_matcher::Config::DEFAULT,
         )));
+        let link_graph = Arc::new(Mutex::new(LinkGraph::new()));
 
         let (tx, rx) = mpsc::channel::<IndexCmd>(CHANNEL_CAPACITY);
 
@@ -123,12 +138,14 @@ impl IndexCoordinator {
         let index_clone = Arc::clone(&index);
         let reader_clone = Arc::clone(&reader);
         let file_index_clone = Arc::clone(&file_index);
+        let link_graph_clone = Arc::clone(&link_graph);
         tokio::spawn(async move {
             run_queue_consumer(
                 rx,
                 index_clone,
                 reader_clone,
                 file_index_clone,
+                link_graph_clone,
                 schema,
                 path_field,
                 title_field,
@@ -143,6 +160,7 @@ impl IndexCoordinator {
             matcher,
             reader,
             index,
+            link_graph,
         })
     }
 
@@ -152,6 +170,11 @@ impl IndexCoordinator {
 
     pub fn matcher(&self) -> Arc<Mutex<nucleo_matcher::Matcher>> {
         Arc::clone(&self.matcher)
+    }
+
+    /// Clone the link_graph Arc for use in IPC commands.
+    pub fn link_graph(&self) -> Arc<Mutex<LinkGraph>> {
+        Arc::clone(&self.link_graph)
     }
 
     /// Index all `.md` files in `vault_path` and return a `VaultInfo`.
@@ -254,6 +277,27 @@ impl IndexCoordinator {
         let _ = self.tx.send(IndexCmd::Commit).await;
         tantivy_index::write_version(&vaultcore_dir)?;
 
+        // Populate the link graph from all indexed files.
+        // Two-pass: file_list already contains all relative paths; now
+        // re-read each file and update the graph.  We hold the link_graph
+        // lock only briefly per file.
+        {
+            let all_paths: Vec<String> = file_list.clone();
+            for abs_path in md_paths.iter() {
+                let rel = abs_path
+                    .strip_prefix(vault_path)
+                    .ok()
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                if let Ok(content) = std::fs::read_to_string(abs_path) {
+                    let links = extract_links(&content);
+                    if let Ok(mut lg) = self.link_graph.lock() {
+                        lg.update_file(&rel, links, &all_paths);
+                    }
+                }
+            }
+        }
+
         file_list.sort();
 
         Ok(VaultInfo {
@@ -271,7 +315,8 @@ async fn run_queue_consumer(
     mut rx: mpsc::Receiver<IndexCmd>,
     index: Arc<Index>,
     reader: Arc<IndexReader>,
-    _file_index: Arc<Mutex<FileIndex>>,
+    file_index: Arc<Mutex<FileIndex>>,
+    link_graph: Arc<Mutex<LinkGraph>>,
     _schema: Schema,
     path_field: tantivy::schema::Field,
     title_field: tantivy::schema::Field,
@@ -343,6 +388,25 @@ async fn run_queue_consumer(
                     log::error!("Tantivy rebuild commit failed: {e}");
                 } else if let Err(e) = reader.reload() {
                     log::error!("Tantivy rebuild reader reload failed: {e}");
+                }
+            }
+            IndexCmd::UpdateLinks { rel_path, content } => {
+                // Incremental link-graph update (LINK-08).
+                let all_paths = {
+                    file_index
+                        .lock()
+                        .map(|fi| fi.all_relative_paths())
+                        .unwrap_or_default()
+                };
+                let links = extract_links(&content);
+                if let Ok(mut lg) = link_graph.lock() {
+                    lg.update_file(&rel_path, links, &all_paths);
+                }
+            }
+            IndexCmd::RemoveLinks { rel_path } => {
+                // Remove link-graph entries for a deleted file (LINK-08).
+                if let Ok(mut lg) = link_graph.lock() {
+                    lg.remove_file(&rel_path);
                 }
             }
             IndexCmd::Shutdown => {

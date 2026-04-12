@@ -196,11 +196,21 @@ pub async fn open_vault(
         *handle = None; // drops old debouncer, stops previous watch
     }
 
+    // Clone the index_tx sender for the watcher so it can dispatch
+    // IndexCmd::UpdateLinks / RemoveLinks on file events (LINK-08).
+    let index_tx = {
+        let guard = state.index_coordinator.lock().map_err(|_| VaultError::Io(
+            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        ))?;
+        guard.as_ref().map(|c| c.tx.clone())
+    };
+
     let debouncer = watcher::spawn_watcher(
         app.clone(),
         canonical.clone(),
         state.write_ignore.clone(),
         state.vault_reachable.clone(),
+        index_tx,
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::Io(
         std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
