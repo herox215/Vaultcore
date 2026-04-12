@@ -6,3 +6,4 @@ mod tree;
 mod watcher;
 mod merge;
 mod indexer;
+mod link_graph;

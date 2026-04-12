@@ -22,6 +22,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::time::sleep;
 
 use crate::WriteIgnoreList;
+use crate::indexer::IndexCmd;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -80,11 +81,20 @@ const RECONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Also spawns a background tokio task that polls every 5 seconds when the
 /// vault is unreachable, emitting `vault://vault_status { reachable: true }`
 /// once it can be reached again (ERR-03 / D-14).
+/// Spawn a recursive file watcher over `vault_path`.
+///
+/// `index_tx`: optional mpsc sender to the IndexCoordinator queue.  When
+/// provided, create/modify events dispatch `IndexCmd::UpdateLinks` and delete
+/// events dispatch `IndexCmd::RemoveLinks` for incremental link-graph updates
+/// (LINK-08). The same write-ignore suppression that applies to Tauri events
+/// applies here — if a path is in write_ignore, both the Tauri event and the
+/// link-graph command are skipped.
 pub fn spawn_watcher(
     app: AppHandle,
     vault_path: PathBuf,
     write_ignore: Arc<Mutex<WriteIgnoreList>>,
     vault_reachable: Arc<Mutex<bool>>,
+    index_tx: Option<tokio::sync::mpsc::Sender<IndexCmd>>,
 ) -> Debouncer<RecommendedWatcher, RecommendedCache> {
     let vault_path_clone = vault_path.clone();
     let vault_reachable_for_error = vault_reachable.clone();
@@ -96,7 +106,7 @@ pub fn spawn_watcher(
         None,
         move |result: DebounceEventResult| match result {
             Ok(events) => {
-                process_events(&app_for_events, &write_ignore, &vault_path_clone, events);
+                process_events(&app_for_events, &write_ignore, &vault_path_clone, &index_tx, events);
             }
             Err(errors) => {
                 for error in errors {
@@ -193,10 +203,12 @@ pub(crate) fn is_hidden_path(vault_path: &Path, event_path: &Path) -> bool {
 /// 2. Filter self-writes via write_ignore list (D-12)
 /// 3. Check bulk-change threshold (D-13)
 /// 4. Emit typed Tauri events
+/// 5. Dispatch link-graph commands to IndexCoordinator queue (LINK-08)
 fn process_events(
     app: &AppHandle,
     write_ignore: &Arc<Mutex<WriteIgnoreList>>,
     vault_path: &Path,
+    index_tx: &Option<tokio::sync::mpsc::Sender<IndexCmd>>,
     events: Vec<DebouncedEvent>,
 ) {
     // Step 1: Filter dot-prefixed paths
@@ -235,8 +247,13 @@ fn process_events(
         );
     }
 
-    // Step 4: Emit individual file_changed events
+    // Step 4: Emit individual file_changed events and dispatch link-graph commands
     for ev in filtered {
+        // Step 5: Dispatch link-graph commands (LINK-08)
+        if let Some(tx) = index_tx {
+            dispatch_link_graph_cmd(tx, vault_path, &ev);
+        }
+
         if let Some(payload) = map_event_to_payload(vault_path, &ev) {
             let _ = app.emit(FILE_CHANGED_EVENT, payload);
         }
@@ -245,6 +262,69 @@ fn process_events(
     // Step 3 (continued): Emit bulk_change_end after processing all events
     if count > BULK_THRESHOLD {
         let _ = app.emit(BULK_CHANGE_END_EVENT, serde_json::json!({}));
+    }
+}
+
+/// Dispatch `IndexCmd::UpdateLinks` or `IndexCmd::RemoveLinks` based on the
+/// event kind.  Only `.md` files are dispatched — non-Markdown file changes
+/// don't affect the link graph.
+///
+/// Uses `try_send` so a full channel (bounded at 1024) drops the command
+/// rather than blocking the watcher callback thread.
+fn dispatch_link_graph_cmd(
+    tx: &tokio::sync::mpsc::Sender<IndexCmd>,
+    vault_path: &Path,
+    ev: &DebouncedEvent,
+) {
+    let primary_path = match ev.paths.first() {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Only handle .md files
+    if primary_path.extension().map_or(true, |ext| !ext.eq_ignore_ascii_case("md")) {
+        return;
+    }
+
+    // Compute vault-relative path
+    let rel_path = match primary_path.strip_prefix(vault_path) {
+        Ok(r) => r.to_string_lossy().replace('\\', "/"),
+        Err(_) => return,
+    };
+
+    match &ev.kind {
+        EventKind::Create(_) | EventKind::Modify(_) => {
+            // For rename events, the new path is paths[1]; dispatch UpdateLinks for both
+            // old (RemoveLinks) and new (UpdateLinks).
+            if let EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Name(_)) = &ev.kind {
+                // Old path → RemoveLinks
+                let _ = tx.try_send(IndexCmd::RemoveLinks { rel_path: rel_path.clone() });
+                // New path → UpdateLinks (if paths[1] exists and is .md)
+                if let Some(new_path) = ev.paths.get(1) {
+                    if new_path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("md")) {
+                        let new_rel = match new_path.strip_prefix(vault_path) {
+                            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                            Err(_) => return,
+                        };
+                        if let Ok(content) = std::fs::read_to_string(new_path) {
+                            let _ = tx.try_send(IndexCmd::UpdateLinks {
+                                rel_path: new_rel,
+                                content,
+                            });
+                        }
+                    }
+                }
+            } else {
+                // create or modify — read content and dispatch UpdateLinks
+                if let Ok(content) = std::fs::read_to_string(primary_path) {
+                    let _ = tx.try_send(IndexCmd::UpdateLinks { rel_path, content });
+                }
+            }
+        }
+        EventKind::Remove(_) => {
+            let _ = tx.try_send(IndexCmd::RemoveLinks { rel_path });
+        }
+        _ => {}
     }
 }
 
