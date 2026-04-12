@@ -96,7 +96,7 @@ Plans:
 Plans:
 - [x] 04-01-PLAN.md — Wave 1: Rust LinkGraph module (ParsedLink, 3-stage resolve_link, update_file, remove_file, get_backlinks, get_unresolved), IndexCoordinator integration, 5 IPC commands (get_backlinks, get_outgoing_links, get_unresolved_links, suggest_links, update_links_after_rename), TypeScript types and IPC wrappers, unit tests for resolution algorithm
 - [x] 04-02-PLAN.md — Wave 2: CM6 wikiLink ViewPlugin (Decoration.mark with accent/muted classes via RangeSetBuilder), lezer syntax-tree code-block exclusion, mousedown event handler dispatching wiki-link-click CustomEvent, tailwind.css classes .cm-wikilink-resolved/.cm-wikilink-unresolved, setResolvedPaths module state for resolution lookup
-- [ ] 04-03-PLAN.md — Wave 2: CM6 wikiLinkCompletionSource (triggered by matchBefore(/[[([^]]*)/) excluding alias), suggestLinks IPC integration (nucleo fuzzy), autocompletion() extension wired into buildExtensions, popup CSS matching UI-SPEC (360px, filename bold + path grey, Keine Dateien gefunden empty state)
+- [x] 04-03-PLAN.md — Wave 2: CM6 wikiLinkCompletionSource (triggered by matchBefore(/[[([^]]*)/) excluding alias), suggestLinks IPC integration (nucleo fuzzy), autocompletion() extension wired into buildExtensions, popup CSS matching UI-SPEC (360px, filename bold + path grey, Keine Dateien gefunden empty state)
 - [ ] 04-04-PLAN.md — Wave 3: backlinksStore (localStorage persistence for open/width), BacklinksPanel + BacklinkRow components (German copy per UI-SPEC), RightSidebar component, VaultLayout 5-column grid extension with Cmd+Shift+B toggle, EditorPane wiki-link-click listener (tabStore.openTab for resolved, createFile+openTab for unresolved), TreeNode rename/move cascade with German confirmation and partial-error toast, end-to-end human verification checkpoint
 **UI hint**: yes
 
@@ -136,7 +136,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Skeleton | 5/5 | Complete | - |
 | 2. Vault | 6/6 | Complete   | 2026-04-12 |
 | 3. Search | 4/4 | Complete   | 2026-04-12 |
-| 4. Links | 2/4 | In Progress|  |
+| 4. Links | 3/4 | In Progress|  |
 | 5. Polish | 0/TBD | Not started | - |
 | 6. Benchmark & Release | 0/TBD | Not started | - |
 
