@@ -79,6 +79,19 @@ export async function writeFile(path: string, content: string): Promise<string> 
   }
 }
 
+/**
+ * EDIT-10: Read a file's current SHA-256 hex from disk. Used by auto-save
+ * to detect external modifications between writes and route through the
+ * three-way merge engine on mismatch.
+ */
+export async function getFileHash(path: string): Promise<string> {
+  try {
+    return await invoke<string>("get_file_hash", { path });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 export async function listDirectory(path: string): Promise<DirEntry[]> {
   try {
     return await invoke<DirEntry[]>("list_directory", { path });
