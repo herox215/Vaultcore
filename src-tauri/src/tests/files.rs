@@ -160,7 +160,9 @@ async fn read_file_impl(state: &VaultState, path: String) -> Result<String, Vaul
         _ => VaultError::Io(e),
     })?;
     {
-        let guard = state.current_vault.lock().unwrap();
+        let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
+            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        ))?;
         let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
             path: path.clone(),
         })?;
@@ -191,7 +193,9 @@ async fn write_file_impl(
         _ => VaultError::Io(e),
     })?;
     {
-        let guard = state.current_vault.lock().unwrap();
+        let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
+            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        ))?;
         let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
             path: path.clone(),
         })?;

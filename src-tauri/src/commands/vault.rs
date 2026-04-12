@@ -154,7 +154,9 @@ pub async fn open_vault(
 
     // Persist as the active vault (files commands read from here).
     {
-        let mut guard = state.current_vault.lock().unwrap();
+        let mut guard = state.current_vault.lock().map_err(|_| VaultError::Io(
+            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        ))?;
         *guard = Some(canonical.clone());
     }
 
