@@ -332,3 +332,75 @@ pub(crate) fn format_iso8601_utc(epoch_secs: i64) -> String {
         year, mo, d, h, m, s
     )
 }
+
+// ─── merge_external_change command ───────────────────────────────────────────
+
+/// Result returned by the merge_external_change command.
+#[derive(Serialize, Clone, Debug)]
+pub struct MergeCommandResult {
+    /// "clean" or "conflict"
+    pub outcome: String,
+    /// The merged content (for "clean") or the original local content (for "conflict")
+    pub merged_content: String,
+}
+
+/// Perform a three-way merge for an external file change.
+///
+/// Called by EditorPane when the file watcher reports an external modification.
+/// - `path`: absolute path to the modified file
+/// - `editor_content`: current contents of the editor buffer (left / local)
+/// - `last_saved_content`: base snapshot — the content that was last written to disk
+///   by this session (used as the diff anchor)
+///
+/// Security: path is validated to be inside the open vault before reading disk
+/// content (T-02-18 mitigation).
+#[tauri::command]
+pub async fn merge_external_change(
+    state: tauri::State<'_, crate::VaultState>,
+    path: String,
+    editor_content: String,
+    last_saved_content: String,
+) -> Result<MergeCommandResult, crate::error::VaultError> {
+    use crate::merge::{three_way_merge, MergeOutcome};
+
+    // T-02-18 mitigation: validate path is inside vault
+    let vault_path = {
+        let guard = state.current_vault.lock().map_err(|_| {
+            crate::error::VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "internal state lock poisoned",
+            ))
+        })?;
+        guard.clone().ok_or_else(|| crate::error::VaultError::VaultUnavailable {
+            path: path.clone(),
+        })?
+    };
+
+    let target = PathBuf::from(&path);
+    let canonical = std::fs::canonicalize(&target).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => crate::error::VaultError::FileNotFound { path: path.clone() },
+        std::io::ErrorKind::PermissionDenied => crate::error::VaultError::PermissionDenied { path: path.clone() },
+        _ => crate::error::VaultError::Io(e),
+    })?;
+
+    if !canonical.starts_with(&vault_path) {
+        return Err(crate::error::VaultError::PermissionDenied { path });
+    }
+
+    // Read current disk content (the "right" / external version)
+    let disk_content = std::fs::read_to_string(&canonical).map_err(crate::error::VaultError::Io)?;
+
+    // Perform three-way merge: base=last_saved, left=editor, right=disk
+    let merge_result = three_way_merge(&last_saved_content, &editor_content, &disk_content);
+
+    match merge_result {
+        MergeOutcome::Clean(merged) => Ok(MergeCommandResult {
+            outcome: "clean".to_string(),
+            merged_content: merged,
+        }),
+        MergeOutcome::Conflict(local) => Ok(MergeCommandResult {
+            outcome: "conflict".to_string(),
+            merged_content: local,
+        }),
+    }
+}
