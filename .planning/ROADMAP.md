@@ -123,7 +123,7 @@ Plans:
 **Plans**: 8 plans
 Plans:
 - [x] 05-00-PLAN.md — Wave 0: Cargo/npm deps (serde_yml, @codemirror/language-data, @fontsource/*), DirEntry timestamps extension, theme.ts fontSize → var(--vc-font-size), @fontsource CSS import ordering
-- [ ] 05-01-PLAN.md — Wave 2: TagIndex Rust module (inline + YAML frontmatter extraction), IndexCoordinator integration, watcher UpdateTags/RemoveTags dispatch, list_tags IPC + TS types (TAG-01, TAG-02, TAG-03)
+- [x] 05-01-PLAN.md — Wave 2: TagIndex Rust module (inline + YAML frontmatter extraction), IndexCoordinator integration, watcher UpdateTags/RemoveTags dispatch, list_tags IPC + TS types (TAG-01, TAG-02, TAG-03)
 - [ ] 05-02-PLAN.md — Wave 2: Dark palette under :root[data-theme=dark], themeStore + settingsStore, Settings modal foundation with Erscheinungsbild + Schrift sections (UI-01, UI-02)
 - [ ] 05-03-PLAN.md — Wave 3: Central SHORTCUTS registry refactor of VaultLayout.handleKeydown, Cmd+N new-note, Cmd+\ sidebar toggle, Settings modal Tastaturkürzel table, per-tab undo/redo isolation regression test (UI-03, UI-05, EDIT-11, EDIT-07)
 - [ ] 05-04-PLAN.md — Wave 4: Tag panel UI + third sidebar tab, nested tag tree, empty state, tag-click search wiring (TAG-03 UI, TAG-04)
@@ -156,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Vault | 6/6 | Complete   | 2026-04-12 |
 | 3. Search | 4/4 | Complete   | 2026-04-12 |
 | 4. Links | 4/4 | Complete   | 2026-04-12 |
-| 5. Polish | 1/8 | In Progress|  |
+| 5. Polish | 2/8 | In Progress|  |
 | 6. Benchmark & Release | 0/TBD | Not started | - |
 
 ## Coverage

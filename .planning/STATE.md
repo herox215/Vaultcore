@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-polish-00-PLAN.md
-last_updated: "2026-04-12T20:40:24.818Z"
+stopped_at: Completed 05-polish-01-PLAN.md
+last_updated: "2026-04-12T20:55:09.134Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 21
-  percent: 78
+  completed_plans: 22
+  percent: 81
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 5 (Polish) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -80,6 +80,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-links P03 | 68s | 1 tasks | 3 files |
 | Phase 04-links P04 | 6min | 3 tasks | 7 files |
 | Phase 05-polish P00 | 18min | 3 tasks | 9 files |
+| Phase 05-polish P01 | 12min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -150,6 +151,7 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: DirEntry timestamps use Option<u64> UNIX seconds with double .ok() to avoid panics on Linux ext4 and pre-epoch clocks
 - [Phase 05-polish]: No serde rename_all=camelCase on DirEntry — snake_case preserved for backward compat with existing frontend field reads
 - [Phase 05-polish]: var(--vc-font-size) consumer wired in theme.ts before producer defined — browser falls back to inherited 14px without visual regression
+- [Phase 05-polish]: TagIndex per-file dedup via by_file HashMap; DebouncedEvent constructed as DebouncedEvent::new(Event{...}, Instant::now()); clippy map_or(false) fixed to is_some_and() in new watcher code
 
 ### Pending Todos
 
@@ -168,6 +170,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T20:40:24.814Z
-Stopped at: Completed 05-polish-00-PLAN.md
+Last session: 2026-04-12T20:55:09.131Z
+Stopped at: Completed 05-polish-01-PLAN.md
 Resume file: None
