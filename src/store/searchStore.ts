@@ -1,0 +1,91 @@
+// searchStore — classic Svelte `writable` store per D-06 / RC-01.
+// Do NOT refactor to a Svelte 5 `$state` class wrapper — this decision is
+// locked for Phase 1 in CONTEXT.md. Components subscribe via `$searchStore`.
+//
+// State owned here:
+//   - query:        current search input text
+//   - results:      array of Tantivy SearchResult objects
+//   - totalMatches: count of matched results (capped at Tantivy's `limit`)
+//   - totalFiles:   unique files matched (computed from results)
+//   - isSearching:  true while a search IPC call is in-flight
+//   - isRebuilding: true while rebuild_index is in-flight
+//   - activeTab:    sidebar tab — "files" (file browser) | "search" (results)
+
+import { writable } from "svelte/store";
+import type { SearchResult } from "../types/search";
+
+export interface SearchStoreState {
+  query: string;
+  results: SearchResult[];
+  /** Total results returned (capped at limit, typically 100). */
+  totalMatches: number;
+  /** Number of unique file paths in results. */
+  totalFiles: number;
+  /** True while a search_fulltext IPC call is in-flight. */
+  isSearching: boolean;
+  /** True while a rebuild_index IPC call is in-flight. */
+  isRebuilding: boolean;
+  /** Controls which sidebar panel is visible (D-01). */
+  activeTab: "files" | "search";
+}
+
+const initial: SearchStoreState = {
+  query: "",
+  results: [],
+  totalMatches: 0,
+  totalFiles: 0,
+  isSearching: false,
+  isRebuilding: false,
+  activeTab: "files",
+};
+
+function createSearchStore() {
+  const { subscribe, set, update } = writable<SearchStoreState>({ ...initial });
+
+  return {
+    subscribe,
+
+    /** Update the search query string (called on every keystroke). */
+    setQuery: (query: string) => update((s) => ({ ...s, query })),
+
+    /**
+     * Store search results returned by search_fulltext.
+     * Also clears isSearching and computes unique file count.
+     */
+    setResults: (results: SearchResult[], totalFiles: number) =>
+      update((s) => ({
+        ...s,
+        results,
+        totalMatches: results.length,
+        totalFiles,
+        isSearching: false,
+      })),
+
+    /** Mark a search IPC call as in-flight (true) or completed (false). */
+    setSearching: (isSearching: boolean) =>
+      update((s) => ({ ...s, isSearching })),
+
+    /** Mark a rebuild_index IPC call as in-flight (true) or completed (false). */
+    setRebuilding: (isRebuilding: boolean) =>
+      update((s) => ({ ...s, isRebuilding })),
+
+    /** Switch the sidebar between the file browser and search results panels. */
+    setActiveTab: (tab: "files" | "search") =>
+      update((s) => ({ ...s, activeTab: tab })),
+
+    /** Clear results and query — called on vault close or explicit dismiss. */
+    clearResults: () =>
+      update((s) => ({
+        ...s,
+        results: [],
+        totalMatches: 0,
+        totalFiles: 0,
+        query: "",
+      })),
+
+    /** Full reset to initial state (vault close / new vault open). */
+    reset: () => set({ ...initial }),
+  };
+}
+
+export const searchStore = createSearchStore();
