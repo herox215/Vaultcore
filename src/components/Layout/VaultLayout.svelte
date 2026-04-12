@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
+  import QuickSwitcher from "../Search/QuickSwitcher.svelte";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
 
@@ -14,6 +15,7 @@
   let sidebarWidth = $state(DEFAULT_SIDEBAR_WIDTH);
   let sidebarCollapsed = $state(false);
   let isDragging = $state(false);
+  let quickSwitcherOpen = $state(false);
   let dragStartX = 0;
   let dragStartWidth = 0;
 
@@ -138,6 +140,12 @@
       return;
     }
 
+    if (e.key === "p" || e.key === "P") {
+      e.preventDefault();
+      quickSwitcherOpen = true;
+      return;
+    }
+
     if (e.key === "Tab") {
       e.preventDefault();
       if (e.shiftKey) {
@@ -253,6 +261,13 @@
     </div>
   </div>
 </div>
+
+<!-- Quick Switcher modal — rendered outside the grid at body level -->
+<QuickSwitcher
+  open={quickSwitcherOpen}
+  onClose={() => { quickSwitcherOpen = false; }}
+  onOpenFile={handleOpenFile}
+/>
 
 <style>
   .vc-vault-layout {
