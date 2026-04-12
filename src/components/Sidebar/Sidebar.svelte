@@ -18,9 +18,12 @@
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { tagsStore } from "../../store/tagsStore";
+  import { Hash } from "lucide-svelte";
   import TreeNode from "./TreeNode.svelte";
   import ProgressBar from "../Progress/ProgressBar.svelte";
   import SearchPanel from "../Search/SearchPanel.svelte";
+  import TagsPanel from "../Tags/TagsPanel.svelte";
 
   interface Props {
     selectedPath: string | null;
@@ -122,13 +125,19 @@
     unlistenBulkStart = await listenBulkChangeStart(handleBulkStart);
     unlistenBulkEnd = await listenBulkChangeEnd(handleBulkEnd);
 
+    // Initial tags load (vault already open at mount time)
+    void tagsStore.reload();
+
     // Subscribe to tree-refresh signal — callers that create files through
     // backend paths (which bypass the watcher via write-ignore) use this
     // to force a sidebar reload. See EditorPane click-to-create.
+    // Also reload tags on the same signal (watcher dispatches UpdateTags
+    // on the same event batch that triggers tree refresh).
     unsubTreeRefresh = treeRefreshStore.subscribe((state) => {
       if (state.token && state.token !== prevRefreshToken) {
         prevRefreshToken = state.token;
         void loadRoot();
+        if ($vaultStore.currentPath) void tagsStore.reload();
       }
     });
   });
@@ -138,6 +147,7 @@
     unlistenBulkStart?.();
     unlistenBulkEnd?.();
     unsubTreeRefresh?.();
+    tagsStore.reset();
   });
 
   async function handleNewFile() {
@@ -194,12 +204,28 @@
       aria-selected={$searchStore.activeTab === 'search'}
       onclick={() => searchStore.setActiveTab('search')}
     >Suche</button>
+    <button
+      type="button"
+      class="vc-sidebar-tab"
+      role="tab"
+      aria-selected={$searchStore.activeTab === 'tags'}
+      aria-label="Tags-Bereich"
+      onclick={() => searchStore.setActiveTab('tags')}
+    >
+      <Hash size={14} />
+      <span>Tags</span>
+    </button>
   </div>
 
   {#if $searchStore.activeTab === 'search'}
     <!-- Search panel tab panel -->
     <div class="vc-sidebar-tabpanel" role="tabpanel">
       <SearchPanel {onOpenFile} />
+    </div>
+  {:else if $searchStore.activeTab === 'tags'}
+    <!-- Tags panel tab panel -->
+    <div class="vc-sidebar-tabpanel" role="tabpanel">
+      <TagsPanel />
     </div>
   {:else}
   <!-- Files tab panel — Header strip and tree -->
