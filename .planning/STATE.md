@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: executing
-stopped_at: "Completed 03-03-PLAN.md — search UI: tabbed sidebar, SearchPanel, SearchInput, SearchResults, SearchResultRow"
-last_updated: "2026-04-12T14:43:25.138Z"
+status: verifying
+stopped_at: Completed 03-04-PLAN.md — Quick Switcher + CM6 flash highlight, Phase 03-search complete
+last_updated: "2026-04-12T14:49:40.359Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 15
-  completed_plans: 14
-  percent: 93
+  completed_plans: 15
+  percent: 100
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 
 Phase: 03 (Search) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
@@ -73,6 +73,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-search P01 | 45 | 2 tasks | 9 files |
 | Phase 03-search P02 | 6min | 2 tasks | 6 files |
 | Phase 03-search P03 | 3min | 2 tasks | 7 files |
+| Phase 03-search P04 | 4min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,8 @@ Recent decisions affecting current work:
 - [Phase 03-search]: vc-sidebar-tabpanel uses flex column — SearchPanel fills available height, internal scroll works
 - [Phase 03-search]: Svelte {#if} conditional rendering (not display:none) for tab switching — instant per UI-SPEC, no eager SearchPanel mount
 - [Phase 03-search]: bind:this + export focus() pattern for SearchInput — parent-driven focus without reactive store coupling
+- [Phase 03-search]: scrollStore one-shot pattern: coordinator store decouples SearchPanel from EditorPane viewMap
+- [Phase 03-search]: inline doc.toString().indexOf() instead of SearchCursor — @codemirror/search not installed
 
 ### Pending Todos
 
@@ -142,6 +145,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T14:43:25.132Z
-Stopped at: Completed 03-03-PLAN.md — search UI: tabbed sidebar, SearchPanel, SearchInput, SearchResults, SearchResultRow
+Last session: 2026-04-12T14:49:40.356Z
+Stopped at: Completed 03-04-PLAN.md — Quick Switcher + CM6 flash highlight, Phase 03-search complete
 Resume file: None

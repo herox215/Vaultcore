@@ -17,7 +17,7 @@ VaultCore v0.1 delivers a local, Markdown-first note app built on Tauri 2 + Rust
 
 - [ ] **Phase 1: Skeleton** - Tauri 2 + CM6 scaffold, open a vault, edit and auto-save a single `.md` file
 - [x] **Phase 2: Vault** - File browser tree, multi-tab, split-view, file watcher with three-way merge (completed 2026-04-12)
-- [ ] **Phase 3: Search** - Tantivy full-text index with AND/OR/NOT, Quick Switcher, versioned rebuild
+- [x] **Phase 3: Search** - Tantivy full-text index with AND/OR/NOT, Quick Switcher, versioned rebuild (completed 2026-04-12)
 - [ ] **Phase 4: Links** - Wiki-link parsing, 3-stage resolution, backlinks panel, rename-cascade
 - [ ] **Phase 5: Polish** - Tags, themes, fonts, remaining shortcuts, editor quality-of-life
 - [ ] **Phase 6: Benchmark & Release** - 100k-note benchmarks, 24h soak, cross-platform alpha builds
@@ -79,7 +79,7 @@ Plans:
 - [x] 03-01-PLAN.md — Wave 1: Rust indexer module (Tantivy schema, central mpsc queue, FileIndex in-memory store, pulldown-cmark parser, index_version.json sidecar), Cargo deps (tantivy, nucleo-matcher, pulldown-cmark), open_vault integration with real Tantivy indexing
 - [x] 03-02-PLAN.md — Wave 2: Three Rust search commands (search_fulltext with SnippetGenerator, search_filename with nucleo-matcher, rebuild_index), frontend TypeScript types, IPC wrappers, searchStore
 - [x] 03-03-PLAN.md — Wave 3: Sidebar tab switching (Dateien/Suche), SearchPanel with 200ms debounce live search, SearchInput, SearchResults with counter and overflow hint, SearchResultRow with snippet highlights, rebuild button UX, Cmd+Shift+F shortcut
-- [ ] 03-04-PLAN.md — Wave 3: Quick Switcher modal (Cmd+P) with fuzzy filename matching, recents on empty input, keyboard navigation, CM6 flash highlight decoration for scroll-to-match, manual verification checkpoint
+- [x] 03-04-PLAN.md — Wave 3: Quick Switcher modal (Cmd+P) with fuzzy filename matching, recents on empty input, keyboard navigation, CM6 flash highlight decoration for scroll-to-match, manual verification checkpoint
 **UI hint**: yes
 
 ### Phase 4: Links
@@ -130,7 +130,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Skeleton | 5/5 | Complete | - |
 | 2. Vault | 6/6 | Complete   | 2026-04-12 |
-| 3. Search | 2/4 | In Progress|  |
+| 3. Search | 4/4 | Complete   | 2026-04-12 |
 | 4. Links | 0/TBD | Not started | - |
 | 5. Polish | 0/TBD | Not started | - |
 | 6. Benchmark & Release | 0/TBD | Not started | - |
