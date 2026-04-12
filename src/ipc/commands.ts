@@ -131,3 +131,29 @@ export async function countWikiLinks(filename: string): Promise<number> {
     throw normalizeError(e);
   }
 }
+
+export interface MergeResult {
+  outcome: "clean" | "conflict";
+  merged_content: string;
+}
+
+/**
+ * SYNC-06/07: Perform a three-way merge for an external file change.
+ * base = lastSavedContent, left = editorContent, right = current disk content.
+ * Returns outcome ("clean" | "conflict") and the merged content.
+ */
+export async function mergeExternalChange(
+  path: string,
+  editorContent: string,
+  lastSavedContent: string,
+): Promise<MergeResult> {
+  try {
+    return await invoke<MergeResult>("merge_external_change", {
+      path,
+      editorContent,
+      lastSavedContent,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}

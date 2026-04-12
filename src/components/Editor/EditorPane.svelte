@@ -8,10 +8,10 @@
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
-  import { readFile, writeFile } from "../../ipc/commands";
+  import { readFile, writeFile, mergeExternalChange } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
-  import { listenFileChange, type FileChangePayload } from "../../ipc/events";
+  import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
   let {
@@ -33,16 +33,22 @@
   let allTabs = $state<Tab[]>([]);
   let activeTabId = $state<string | null>(null);
   let activePane = $state<"left" | "right">("left");
-  let vaultReachable = $state(true); // ERR-03 placeholder
+  // ERR-03: vault reachability — driven by vaultStore.vaultReachable
+  let vaultReachable = $state(true);
 
-  // Watcher event unlisten handle
+  // Watcher event unlisten handles
   let unlistenFileChange: UnlistenFn | null = null;
+  let unlistenVaultStatus: UnlistenFn | null = null;
 
   // EditorPane host element for drag-to-split detection
   let paneEl = $state<HTMLDivElement | undefined>();
 
   // Drag-to-split visual state
   let splitIndicatorSide = $state<"left" | "right" | null>(null);
+
+  // ERR-04: Disk-full toast debounce — max one toast per 30 seconds
+  let lastDiskFullToast = 0;
+  const DISK_FULL_DEBOUNCE_MS = 30_000;
 
   const paneTabs = $derived(
     paneTabIds
@@ -141,8 +147,7 @@
 
   // Subscribe to vaultStore for vault reachability (ERR-03)
   const unsubVault = vaultStore.subscribe((state) => {
-    // vaultReachable will be wired in Plan 05 — defaulting to true
-    vaultReachable = true;
+    vaultReachable = state.vaultReachable;
   });
 
   /**
@@ -162,6 +167,9 @@
       return;
     }
 
+    // Initialize lastSavedContent snapshot for three-way merge base
+    tabStore.setLastSavedContent(tab.id, content);
+
     const container = document.createElement("div");
     container.style.width = "100%";
     container.style.height = "100%";
@@ -170,12 +178,30 @@
     paneEl.appendChild(container);
 
     const onSave = async (text: string) => {
+      // ERR-03: skip auto-save when vault is unreachable
+      if (!vaultReachable) return;
+
       try {
         const hash = await writeFile(tab.filePath, text);
         tabStore.setDirty(tab.id, false);
+        tabStore.setLastSavedContent(tab.id, text);
         editorStore.setLastSavedHash(hash);
-      } catch (err) {
-        toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
+      } catch (err: unknown) {
+        // ERR-04: disk-full error — preserve buffer, debounce toast
+        const isVaultErr = err && typeof err === "object" && "kind" in err;
+        const isDiskFull = isVaultErr && (err as { kind: string }).kind === "DiskFull";
+
+        if (isDiskFull) {
+          const now = Date.now();
+          if (now - lastDiskFullToast > DISK_FULL_DEBOUNCE_MS) {
+            lastDiskFullToast = now;
+            toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
+          }
+          // Keep tab dirty so auto-save retries; do NOT clear editor buffer
+          tabStore.setDirty(tab.id, true);
+        } else {
+          toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
+        }
       }
     };
 
@@ -217,19 +243,44 @@
    * Handle external file changes detected by the Rust file watcher.
    * Only processes events for files open in THIS pane's EditorView Map.
    */
-  function handleExternalFileChange(payload: FileChangePayload) {
+  async function handleExternalFileChange(payload: FileChangePayload) {
     const { path, kind, new_path } = payload;
 
     if (kind === "modify") {
       // Check if this pane has an EditorView for the modified file
       const tabWithPath = allTabs.find((t) => t.filePath === path && paneTabIds.includes(t.id));
-      if (tabWithPath && viewMap.has(tabWithPath.id)) {
-        // TODO Plan 05: three_way_merge
-        // Plan 05 will read the new disk content, compute three-way diff
-        // (base = last-saved, left = current editor buffer, right = new disk),
-        // apply non-conflicting changes silently and show toast for conflicts.
-        // For now: mark the tab as needing merge by storing it in pending queue.
-        pendingMergePaths.add(path);
+      if (!tabWithPath || !viewMap.has(tabWithPath.id)) return;
+
+      const view = viewMap.get(tabWithPath.id)!;
+      const editorContent = view.state.doc.toString();
+      const lastSavedContent = tabWithPath.lastSavedContent;
+      const filename = path.split("/").pop() ?? path;
+
+      try {
+        const result = await mergeExternalChange(path, editorContent, lastSavedContent);
+
+        if (result.outcome === "clean") {
+          // Replace editor content with merged result
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: result.merged_content },
+          });
+          // Update lastSavedContent to the merged result
+          tabStore.setLastSavedContent(tabWithPath.id, result.merged_content);
+          toastStore.push({
+            variant: "clean-merge",
+            message: `External changes merged into ${filename}.`,
+          });
+        } else {
+          // Conflict: keep editor content as-is, update base snapshot
+          tabStore.setLastSavedContent(tabWithPath.id, editorContent);
+          toastStore.push({
+            variant: "conflict",
+            message: `Conflict in ${filename} — local version kept.`,
+          });
+        }
+      } catch (_err) {
+        // If merge command fails (e.g. file deleted between watcher event and read),
+        // silently ignore — the delete event will handle cleanup
       }
     } else if (kind === "delete") {
       // If the deleted file is open in this pane, destroy its EditorView and remove from Map
@@ -253,15 +304,22 @@
       if (tabWithPath) {
         // The tabStore.updateFilePath() call from Sidebar will update tab.filePath.
         // The viewMap is keyed by tabId, not filePath, so no Map rekeying needed.
-        // Just ensure the container still references the correct tab.
-        pendingMergePaths.delete(path);
-        if (new_path) pendingMergePaths.delete(new_path);
       }
     }
   }
 
-  // Pending merge queue — tracks paths with external modifications awaiting Plan 05 merge
-  const pendingMergePaths = new Set<string>();
+  /**
+   * Handle vault status events (ERR-03: vault unmount/reconnect).
+   */
+  function handleVaultStatus(payload: { reachable: boolean }) {
+    if (!payload.reachable) {
+      vaultStore.setVaultReachable(false);
+      toastStore.push({ variant: "error", message: "Vault unavailable. Editing disabled." });
+    } else {
+      vaultStore.setVaultReachable(true);
+      toastStore.push({ variant: "clean-merge", message: "Vault reconnected. Editing re-enabled." });
+    }
+  }
 
   // Drag-to-split detection
   function handleDragover(e: DragEvent) {
@@ -309,21 +367,23 @@
   }
 
   onMount(async () => {
-    // Subscribe to file-change events for merge hook points (SYNC-01)
+    // Subscribe to file-change events for merge logic (SYNC-01)
     unlistenFileChange = await listenFileChange(handleExternalFileChange);
+    // Subscribe to vault status events for ERR-03 handling
+    unlistenVaultStatus = await listenVaultStatus(handleVaultStatus);
   });
 
   onDestroy(() => {
     unsubTab();
     unsubVault();
     unlistenFileChange?.();
+    unlistenVaultStatus?.();
     // Destroy all EditorView instances in this pane
     for (const view of viewMap.values()) {
       view.destroy();
     }
     viewMap.clear();
     containerMap.clear();
-    pendingMergePaths.clear();
   });
 </script>
 
@@ -353,7 +413,7 @@
     <!-- EditorView DOM containers are inserted here by createEditorView() -->
   </div>
 
-  <!-- ERR-03 readonly overlay — wired in Plan 05 -->
+  <!-- ERR-03 readonly overlay — shown when vault is unreachable -->
   {#if !vaultReachable}
     <div class="vc-editor-readonly-overlay"></div>
   {/if}
@@ -411,7 +471,9 @@
     max-width: 280px;
   }
 
-  /* ERR-03 readonly overlay — pointer-events: none so text is still readable */
+  /* ERR-03 readonly overlay — covers the editor area when vault is unreachable.
+     pointer-events: none so text is still readable (no interaction possible).
+     auto-save is also disabled in JS (double protection per T-02-21). */
   .vc-editor-readonly-overlay {
     pointer-events: none;
     background: rgba(255, 255, 255, 0.6);

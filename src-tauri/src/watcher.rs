@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tokio::time::sleep;
 
 use crate::WriteIgnoreList;
 
@@ -65,6 +66,9 @@ const WATCHER_ERROR_EVENT: &str = "vault://watcher_error";
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/// Interval for the vault-reachability reconnect poll (ERR-03 / D-14).
+const RECONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Spawn a recursive file watcher over `vault_path`.
 ///
 /// Returns a `Debouncer` handle that MUST be kept alive in `VaultState` for
@@ -72,19 +76,27 @@ const WATCHER_ERROR_EVENT: &str = "vault://watcher_error";
 ///
 /// Events are debounced at 200ms, self-writes filtered via `write_ignore`,
 /// and dot-prefixed paths filtered before emission.
+///
+/// Also spawns a background tokio task that polls every 5 seconds when the
+/// vault is unreachable, emitting `vault://vault_status { reachable: true }`
+/// once it can be reached again (ERR-03 / D-14).
 pub fn spawn_watcher(
     app: AppHandle,
     vault_path: PathBuf,
     write_ignore: Arc<Mutex<WriteIgnoreList>>,
+    vault_reachable: Arc<Mutex<bool>>,
 ) -> Debouncer<RecommendedWatcher, RecommendedCache> {
     let vault_path_clone = vault_path.clone();
+    let vault_reachable_for_error = vault_reachable.clone();
+    let app_for_error = app.clone();
+    let app_for_events = app.clone();
 
     let mut debouncer = new_debouncer(
         DEBOUNCE_DURATION,
         None,
         move |result: DebounceEventResult| match result {
             Ok(events) => {
-                process_events(&app, &write_ignore, &vault_path_clone, events);
+                process_events(&app_for_events, &write_ignore, &vault_path_clone, events);
             }
             Err(errors) => {
                 for error in errors {
@@ -94,13 +106,17 @@ pub fn spawn_watcher(
                         || format!("{:?}", error.kind).contains("NotFound");
 
                     if is_vault_missing {
-                        let _ = app.emit(
+                        // Mark vault unreachable in shared state
+                        if let Ok(mut reachable) = vault_reachable_for_error.lock() {
+                            *reachable = false;
+                        }
+                        let _ = app_for_error.emit(
                             VAULT_STATUS_EVENT,
                             VaultStatusPayload { reachable: false },
                         );
                     }
 
-                    let _ = app.emit(
+                    let _ = app_for_error.emit(
                         WATCHER_ERROR_EVENT,
                         serde_json::json!({ "message": format!("{:?}", error.kind) }),
                     );
@@ -113,6 +129,34 @@ pub fn spawn_watcher(
     debouncer
         .watch(&vault_path, RecursiveMode::Recursive)
         .expect("Failed to start watching vault directory");
+
+    // Spawn a background task that polls vault reachability every 5 seconds
+    // when vault_reachable is false (ERR-03 / D-14).
+    let app_poll = app.clone();
+    let vault_path_poll = vault_path.clone();
+    let vault_reachable_poll = vault_reachable.clone();
+    tokio::spawn(async move {
+        loop {
+            sleep(RECONNECT_POLL_INTERVAL).await;
+
+            // Only poll when vault is known unreachable
+            let is_unreachable = vault_reachable_poll
+                .lock()
+                .map(|g| !*g)
+                .unwrap_or(false);
+
+            if is_unreachable && vault_path_poll.exists() {
+                // Vault is reachable again
+                if let Ok(mut reachable) = vault_reachable_poll.lock() {
+                    *reachable = true;
+                }
+                let _ = app_poll.emit(
+                    VAULT_STATUS_EVENT,
+                    VaultStatusPayload { reachable: true },
+                );
+            }
+        }
+    });
 
     debouncer
 }

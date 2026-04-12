@@ -17,6 +17,7 @@ export interface VaultState {
   fileCount: number;
   errorMessage: string | null;
   sidebarWidth: number;
+  vaultReachable: boolean;  // ERR-03: false when vault folder is unmounted/unreachable
 }
 
 const initial: VaultState = {
@@ -26,6 +27,7 @@ const initial: VaultState = {
   fileCount: 0,
   errorMessage: null,
   sidebarWidth: 240,
+  vaultReachable: true,
 };
 
 // treeCache is kept as a module-level Map (not inside the store) because
@@ -67,6 +69,10 @@ export const vaultStore = {
   },
   setSidebarWidth(width: number): void {
     _store.update((s) => ({ ...s, sidebarWidth: width }));
+  },
+
+  setVaultReachable(reachable: boolean): void {
+    _store.update((s) => ({ ...s, vaultReachable: reachable }));
   },
 
   // Tree cache helpers (module-level Map, not in store state)

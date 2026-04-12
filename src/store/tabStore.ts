@@ -11,6 +11,7 @@ export interface Tab {
   scrollPos: number;
   cursorPos: number;
   lastSaved: number;
+  lastSavedContent: string;  // base snapshot for three-way merge (Plan 05)
 }
 
 export interface SplitState {
@@ -85,6 +86,7 @@ export const tabStore = {
         scrollPos: 0,
         cursorPos: 0,
         lastSaved: Date.now(),
+        lastSavedContent: "",
       };
 
       const activePane = state.splitState.activePane;
@@ -303,6 +305,17 @@ export const tabStore = {
     });
     unsub();
     return result;
+  },
+
+  /**
+   * Update the base snapshot content used for three-way merge (Plan 05).
+   * Called after auto-save completes, so the snapshot tracks what's on disk.
+   */
+  setLastSavedContent(tabId: string, content: string): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedContent: content } : t)),
+    }));
   },
 
   /**

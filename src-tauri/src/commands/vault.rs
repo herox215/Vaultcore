@@ -203,6 +203,7 @@ pub async fn open_vault(
         app.clone(),
         canonical.clone(),
         state.write_ignore.clone(),
+        state.vault_reachable.clone(),
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::Io(
         std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
