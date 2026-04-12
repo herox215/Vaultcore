@@ -17,6 +17,7 @@
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
+  import { treeRefreshStore } from "../../store/treeRefreshStore";
   import TreeNode from "./TreeNode.svelte";
   import ProgressBar from "../Progress/ProgressBar.svelte";
   import SearchPanel from "../Search/SearchPanel.svelte";
@@ -110,6 +111,9 @@
 
   // ─── Mount / Destroy ────────────────────────────────────────────────────────
 
+  let prevRefreshToken: string | null = null;
+  let unsubTreeRefresh: (() => void) | null = null;
+
   onMount(async () => {
     void loadRoot();
 
@@ -117,12 +121,23 @@
     unlistenFileChange = await listenFileChange(handleFileChange);
     unlistenBulkStart = await listenBulkChangeStart(handleBulkStart);
     unlistenBulkEnd = await listenBulkChangeEnd(handleBulkEnd);
+
+    // Subscribe to tree-refresh signal — callers that create files through
+    // backend paths (which bypass the watcher via write-ignore) use this
+    // to force a sidebar reload. See EditorPane click-to-create.
+    unsubTreeRefresh = treeRefreshStore.subscribe((state) => {
+      if (state.token && state.token !== prevRefreshToken) {
+        prevRefreshToken = state.token;
+        void loadRoot();
+      }
+    });
   });
 
   onDestroy(() => {
     unlistenFileChange?.();
     unlistenBulkStart?.();
     unlistenBulkEnd?.();
+    unsubTreeRefresh?.();
   });
 
   async function handleNewFile() {
