@@ -142,11 +142,19 @@ html, body, #app {
   flex-direction: column;
   justify-content: center;
 }
+/* Selected-row state: brand-purple background + white text.
+   !important is required to beat CM6's default theme
+   (".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]" sets
+   background:#17c and color:white via EditorView.theme(), which has higher
+   specificity than this class-only selector). */
 .cm-tooltip-autocomplete ul li[aria-selected="true"] {
-  background: var(--color-accent-bg);
+  background: var(--color-accent) !important;
 }
 .cm-tooltip-autocomplete ul li[aria-selected="true"] .cm-completionLabel {
-  color: var(--color-accent);
+  color: #FFFFFF !important;
+}
+.cm-tooltip-autocomplete ul li[aria-selected="true"] .cm-completionDetail {
+  color: rgba(255, 255, 255, 0.75) !important;
 }
 .cm-completionLabel {
   font-size: 14px;
