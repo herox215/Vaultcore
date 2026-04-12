@@ -77,7 +77,7 @@ Plans:
 **Plans**: 4 plans
 Plans:
 - [x] 03-01-PLAN.md — Wave 1: Rust indexer module (Tantivy schema, central mpsc queue, FileIndex in-memory store, pulldown-cmark parser, index_version.json sidecar), Cargo deps (tantivy, nucleo-matcher, pulldown-cmark), open_vault integration with real Tantivy indexing
-- [ ] 03-02-PLAN.md — Wave 2: Three Rust search commands (search_fulltext with SnippetGenerator, search_filename with nucleo-matcher, rebuild_index), frontend TypeScript types, IPC wrappers, searchStore
+- [x] 03-02-PLAN.md — Wave 2: Three Rust search commands (search_fulltext with SnippetGenerator, search_filename with nucleo-matcher, rebuild_index), frontend TypeScript types, IPC wrappers, searchStore
 - [ ] 03-03-PLAN.md — Wave 3: Sidebar tab switching (Dateien/Suche), SearchPanel with 200ms debounce live search, SearchInput, SearchResults with counter and overflow hint, SearchResultRow with snippet highlights, rebuild button UX, Cmd+Shift+F shortcut
 - [ ] 03-04-PLAN.md — Wave 3: Quick Switcher modal (Cmd+P) with fuzzy filename matching, recents on empty input, keyboard navigation, CM6 flash highlight decoration for scroll-to-match, manual verification checkpoint
 **UI hint**: yes
@@ -130,7 +130,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Skeleton | 5/5 | Complete | - |
 | 2. Vault | 6/6 | Complete   | 2026-04-12 |
-| 3. Search | 1/4 | In Progress|  |
+| 3. Search | 2/4 | In Progress|  |
 | 4. Links | 0/TBD | Not started | - |
 | 5. Polish | 0/TBD | Not started | - |
 | 6. Benchmark & Release | 0/TBD | Not started | - |

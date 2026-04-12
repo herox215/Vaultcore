@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-01-PLAN.md — Tantivy indexer foundation
-last_updated: "2026-04-12T14:31:48.614Z"
+stopped_at: Completed 03-02-PLAN.md — search commands + frontend IPC + searchStore
+last_updated: "2026-04-12T14:38:59.563Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 15
-  completed_plans: 12
-  percent: 80
+  completed_plans: 13
+  percent: 87
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 03 (Search) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -71,6 +71,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-vault P02-05 | 18 | 3 tasks | 10 files |
 | Phase 02-vault P06 | 66s | 2 tasks | 3 files |
 | Phase 03-search P01 | 45 | 2 tasks | 9 files |
+| Phase 03-search P02 | 6min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -117,6 +118,8 @@ Recent decisions affecting current work:
 - [Phase 03-search]: Submodule named tantivy_index (not tantivy) to avoid shadowing external tantivy crate in Rust name resolution
 - [Phase 03-search]: IndexCoordinator take/put pattern in open_vault — coordinator not Clone, taken from Mutex, run, put back
 - [Phase 03-search]: iso8601_utc inlined in tantivy_index.rs to avoid cross-module dependency on vault.rs
+- [Phase 03-search]: TopDocs::with_limit(n).order_by_score() required in tantivy 0.26 — bare TopDocs does not implement Collector without a sort key
+- [Phase 03-search]: Clone Arc handles (index, reader, file_index, matcher, tx) before releasing Mutex in search commands — MutexGuard is not Send and cannot be held across .await
 
 ### Pending Todos
 
@@ -135,6 +138,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T14:31:48.612Z
-Stopped at: Completed 03-01-PLAN.md — Tantivy indexer foundation
+Last session: 2026-04-12T14:38:59.559Z
+Stopped at: Completed 03-02-PLAN.md — search commands + frontend IPC + searchStore
 Resume file: None
