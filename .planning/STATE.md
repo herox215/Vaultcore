@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: executing
-stopped_at: Completed 01-03-editor-autosave-PLAN.md
-last_updated: "2026-04-12T05:56:33.434Z"
+status: verifying
+stopped_at: Completed 01-04-progress-filelist-wireup-PLAN.md
+last_updated: "2026-04-12T06:07:09.056Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 80
+  completed_plans: 5
+  percent: 100
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 
 Phase: 01 (skeleton) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
@@ -61,6 +61,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-skeleton P01-01 | 25min | 3 tasks | 12 files |
 | Phase 01-skeleton P02 | 12min | 3 tasks | 15 files |
 | Phase 01-skeleton P01-03-editor-autosave | 4min | 3 tasks | 9 files |
+| Phase 01-skeleton P01-04-progress-filelist-wireup | 6min | 4 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,9 @@ Recent decisions affecting current work:
 - [Phase 01-skeleton]: RC-02 enforced: buildExtensions uses 13 explicit CM6 extensions, no basicSetup
 - [Phase 01-skeleton]: RC-01 enforced: EditorView in plain let, not $state — prevents Svelte Proxy breaking CM6
 - [Phase 01-skeleton]: autoSaveExtension uses EditorView.updateListener (not ViewPlugin) for 2000ms idle debounce
+- [Phase 01-skeleton]: 50ms throttle on vault://index_progress events via PROGRESS_THROTTLE constant
+- [Phase 01-skeleton]: collect_file_list uses forward-slash normalization for cross-platform file paths
+- [Phase 01-skeleton]: VaultView grid layout: 200-280px file list + 1fr editor pane, CMEditor remount via {#key}
 
 ### Pending Todos
 
@@ -98,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T05:56:33.432Z
-Stopped at: Completed 01-03-editor-autosave-PLAN.md
+Last session: 2026-04-12T06:07:09.054Z
+Stopped at: Completed 01-04-progress-filelist-wireup-PLAN.md
 Resume file: None
