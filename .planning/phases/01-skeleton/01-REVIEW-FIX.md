@@ -1,26 +1,26 @@
 ---
 phase: 01-skeleton
-fixed_at: 2026-04-11T00:00:00Z
+fixed_at: 2026-04-12T06:32:40Z
 review_path: .planning/phases/01-skeleton/01-REVIEW.md
-iteration: 1
-findings_in_scope: 6
-fixed: 6
-skipped: 0
-status: all_fixed
+iteration: 2
+findings_in_scope: 9
+fixed: 8
+skipped: 1
+status: partial
 ---
 
-# Phase 1: Code Review Fix Report
+# Phase 01: Code Review Fix Report
 
-**Fixed at:** 2026-04-11T00:00:00Z
+**Fixed at:** 2026-04-12T06:32:40Z
 **Source review:** .planning/phases/01-skeleton/01-REVIEW.md
-**Iteration:** 1
+**Iteration:** 2
 
 **Summary:**
-- Findings in scope: 6
-- Fixed: 6
-- Skipped: 0
+- Findings in scope: 9
+- Fixed: 8 (6 in iteration 1 + 2 in iteration 2)
+- Skipped: 1
 
-## Fixed Issues
+## Fixed Issues (Iteration 1)
 
 ### CR-01: Mutex::lock().unwrap() can panic under poison, crashing the entire app
 
@@ -58,8 +58,30 @@ status: all_fixed
 **Commit:** d5da84f
 **Applied fix:** Replaced `document.getElementById('app')!` with a separate `const target` assignment followed by an explicit null check that throws a descriptive error message.
 
+## Fixed Issues (Iteration 2)
+
+### IN-01: Hardcoded color value in theme for monospace code background
+
+**Files modified:** `src/components/Editor/theme.ts`, `src/styles/tailwind.css`
+**Commit:** 9adc08f
+**Applied fix:** Introduced `--color-code-bg: #F3F4F6` CSS custom property in `tailwind.css` and replaced the hardcoded `#F3F4F6` hex value in `theme.ts` with `var(--color-code-bg)`. This makes the inline code background dark-mode-ready while preserving the current appearance.
+
+### IN-02: Unused `codemirror` top-level package dependency
+
+**Files modified:** `package.json`
+**Commit:** e0fbae4
+**Applied fix:** Removed `"codemirror": "^6.0.2"` from the dependencies section. The codebase imports directly from `@codemirror/*` sub-packages, making the meta-package unnecessary.
+
+## Skipped Issues
+
+### IN-03: Test file duplicates command logic instead of extracting shared helpers
+
+**File:** `src-tauri/src/tests/files.rs:150-213`
+**Reason:** The review explicitly states "No immediate code change needed" and recommends tracking as tech debt. The duplication is intentional due to `tauri::State` limitations -- extracting shared helpers requires a design change (free functions accepting `&VaultState`) that goes beyond a mechanical fix.
+**Original issue:** The `_impl` helpers in the test file duplicate the body of `read_file` and `write_file` from `commands/files.rs`, creating a maintenance risk if one side is updated without the other.
+
 ---
 
-_Fixed: 2026-04-11T00:00:00Z_
+_Fixed: 2026-04-12T06:32:40Z_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2_
