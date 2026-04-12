@@ -164,11 +164,12 @@ pub async fn open_vault(
     let canonical_str = canonical.to_string_lossy().into_owned();
     push_recent_vault(&app, &canonical_str)?;
 
-    // --- IDX-02 two-pass walk with progress events ---
-    let total = count_md_files(&canonical);
-
-    // Pre-collect the sorted file list (single pass over the directory).
+    // --- IDX-02 single-pass walk with progress events ---
+    // Collect the sorted file list once and derive total from it, avoiding a
+    // second walkdir pass (WR-03: prevents count/list mismatch from concurrent
+    // file changes between two walks).
     let file_list = collect_file_list(&canonical);
+    let total = file_list.len();
 
     // Emit throttled progress events while iterating the sorted list.
     let mut last_emit = Instant::now() - PROGRESS_THROTTLE;
