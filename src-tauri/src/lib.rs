@@ -71,6 +71,12 @@ pub fn run() {
             commands::vault::get_vault_stats,
             commands::files::read_file,
             commands::files::write_file,
+            commands::files::create_file,
+            commands::files::rename_file,
+            commands::files::delete_file,
+            commands::files::move_file,
+            commands::files::create_folder,
+            commands::files::count_wiki_links,
             commands::tree::list_directory,
         ])
         .run(tauri::generate_context!())
