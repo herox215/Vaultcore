@@ -103,6 +103,12 @@ pub async fn write_file(
         .ok_or_else(|| VaultError::PermissionDenied { path: path.clone() })?;
     let final_path = canonical_parent.join(file_name);
 
+    // D-12 self-filtering: record before the fs call so the watcher ignores
+    // the resulting event.
+    if let Ok(mut list) = state.write_ignore.lock() {
+        list.record(final_path.clone());
+    }
+
     let bytes = content.as_bytes();
     std::fs::write(&final_path, bytes).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },

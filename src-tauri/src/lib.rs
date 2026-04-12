@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
+use notify_debouncer_full::{Debouncer, RecommendedCache};
+use notify_debouncer_full::notify::RecommendedWatcher;
 
 /// Write-ignore-list: records own-write events so the file watcher can
 /// suppress spurious self-triggered events (D-12).
@@ -48,14 +50,26 @@ impl WriteIgnoreList {
 /// read_file / write_file can refuse paths outside the vault (T-02).
 /// Extended in Phase 2 with write_ignore and vault_reachable fields.
 ///
-/// Note: `watcher_handle` (wrapping Debouncer) is added in Plan 04 when the
-/// watcher is actually spawned. Debouncer has no Default so we keep
-/// VaultState Default-derivable by omitting it here.
-#[derive(Default)]
+/// `watcher_handle` stores the Debouncer from notify-debouncer-full.
+/// Wrapped in Arc<Mutex<Option<...>>> so it can be shared across threads
+/// and replaced on vault re-open. Debouncer has no Default impl so we
+/// use a manual Default that initializes the Option to None.
 pub struct VaultState {
     pub current_vault: Mutex<Option<std::path::PathBuf>>,
     pub write_ignore: Arc<Mutex<WriteIgnoreList>>,
     pub vault_reachable: Mutex<bool>,
+    pub watcher_handle: Arc<Mutex<Option<Debouncer<RecommendedWatcher, RecommendedCache>>>>,
+}
+
+impl Default for VaultState {
+    fn default() -> Self {
+        Self {
+            current_vault: Mutex::new(None),
+            write_ignore: Arc::new(Mutex::new(WriteIgnoreList::default())),
+            vault_reachable: Mutex::new(false),
+            watcher_handle: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
