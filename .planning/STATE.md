@@ -82,6 +82,10 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 04.1 inserted after Phase 4: Phase 4 UAT Bugfixes (URGENT) — 5 bugs from manual verification (tree refresh, autocomplete contrast, backlinks panel discoverability, rename-cascade race, closeBrackets conflict)
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table (pulled from spec Section 17).

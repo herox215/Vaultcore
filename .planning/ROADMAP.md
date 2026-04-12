@@ -100,6 +100,16 @@ Plans:
 - [x] 04-04-PLAN.md — Wave 3: backlinksStore (localStorage persistence for open/width), BacklinksPanel + BacklinkRow components (German copy per UI-SPEC), RightSidebar component, VaultLayout 5-column grid extension with Cmd+Shift+B toggle, EditorPane wiki-link-click listener (tabStore.openTab for resolved, createFile+openTab for unresolved), TreeNode rename/move cascade with German confirmation and partial-error toast, end-to-end human verification checkpoint
 **UI hint**: yes
 
+### Phase 04.1: Phase 4 UAT Bugfixes (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 4
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 04.1 to break down)
+
 ### Phase 5: Polish
 **Goal**: User experiences VaultCore as a polished daily driver — tag panel, dark/light themes, configurable typography, full keyboard-shortcut coverage, persistent sort/expand state, and all remaining editor niceties.
 **Depends on**: Phase 4
