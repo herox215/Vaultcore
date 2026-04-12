@@ -45,7 +45,7 @@ Inherited from Phase 1 — no changes. All tokens carry forward unchanged.
 
 **Phase 2 exceptions:**
 
-- Sidebar tree rows: 28px min-height (6px top + 6px bottom padding on 16px body text) — denser than Phase 1's file rows to accommodate deep folder nesting without excessive vertical scroll
+- Sidebar tree rows: 24px min-height (4px top + 4px bottom padding on 16px body text) — denser than Phase 1's file rows to accommodate deep folder nesting without excessive vertical scroll
 - Tab bar height: 36px (8px top + 8px bottom padding on 14px tab label + 2px active-tab indicator bottom border)
 - Tree indentation: 16px per nesting level (folder icon column + left padding)
 - Split divider: 4px wide drag handle (not a spacing token — it is a component boundary)
@@ -166,7 +166,7 @@ All color tokens are already declared in `src/styles/tailwind.css` and carry for
 4. Filename: Body (14px/400), `--color-text`. Truncated with ellipsis. Full path in `title` tooltip.
 5. Right-side actions (visible on row hover only): lucide `MoreHorizontal` (16px) button — triggers context menu with: "Rename", "Delete", "New file here", "New folder here". Hover target: 24px × 24px. `--color-text-muted`, hover `--color-text`.
 
-**Row height:** 28px min-height. `display: flex; align-items: center; gap: 4px`. 6px top + bottom padding.
+**Row height:** 24px min-height. `display: flex; align-items: center; gap: 4px`. 4px top + bottom padding.
 
 **States:**
 - Default: background transparent
@@ -274,12 +274,12 @@ No changes to the `ProgressBar.svelte` component itself — only the trigger con
 | Empty editor pane body | "Select a file from the sidebar, or drag a tab here to split the view." |
 | Delete confirmation heading | "Move to Trash?" |
 | Delete confirmation body | ""{filename}" will be moved to .trash/ and can be recovered from there." |
-| Delete confirmation cancel | "Cancel" |
+| Delete confirmation cancel | "Keep File" |
 | Delete confirmation confirm | "Move to Trash" |
 | Rename confirmation heading (wiki-links found) | "Rename file?" |
 | Rename confirmation body (wiki-links found) | "{count} wiki-link{s} point to this file. Rename anyway? (Links will be updated in a future version.)" |
-| Rename confirmation cancel | "Cancel" |
-| Rename confirmation confirm | "Rename" |
+| Rename confirmation cancel | "Keep Name" |
+| Rename confirmation confirm | "Rename File" |
 | Toast: clean merge | "External changes merged into {filename}." |
 | Toast: conflict kept local | "Conflict in {filename} — local version kept." |
 | Toast: vault unmount | "Vault unavailable. Editing disabled." |
@@ -295,8 +295,8 @@ No changes to the `ProgressBar.svelte` component itself — only the trigger con
 
 | Action | Confirmation approach |
 |--------|----------------------|
-| Delete file (FILE-04) | Inline popover anchored to sidebar row. Shows filename. Two buttons: "Cancel" + "Move to Trash". No checkbox "don't ask again" — always confirms. |
-| Rename with wiki-links (FILE-03) | Inline popover. Shows count of affected links. Two buttons: "Cancel" + "Rename". Does NOT rewrite links (Phase 4); copy explains this explicitly. |
+| Delete file (FILE-04) | Inline popover anchored to sidebar row. Shows filename. Two buttons: "Keep File" + "Move to Trash". No checkbox "don't ask again" — always confirms. |
+| Rename with wiki-links (FILE-03) | Inline popover. Shows count of affected links. Two buttons: "Keep Name" + "Rename File". Does NOT rewrite links (Phase 4); copy explains this explicitly. |
 
 **No toast for successful non-destructive operations** (create, move, rename without wiki-links). The sidebar tree updates are immediate visual feedback.
 
@@ -317,9 +317,9 @@ No changes to the `ProgressBar.svelte` component itself — only the trigger con
 | Tab dirty dot | visible when `isDirty` is true; `--color-accent` fill |
 | Split divider | default (1px `--color-border`), hover (4px `--color-accent-bg`, `cursor: col-resize`) |
 | Inline rename input | default (1px `--color-border`), focus (2px `--color-accent` outline), validation error (1px `--color-error` border) |
-| Dialog Cancel button | default (1px `--color-border`), hover (`--color-bg` background), focus-visible (2px `--color-accent` outline) |
-| Dialog Confirm (rename) button | default (`--color-accent` background, white text), hover (brightness 90%), focus-visible (2px white outline, 2px offset inside button) |
-| Dialog Confirm (delete) button | default (`--color-error` background, white text), hover (brightness 90%), focus-visible (2px white outline, 2px offset inside button) |
+| Dialog "Keep File" / "Keep Name" button | default (1px `--color-border`), hover (`--color-bg` background), focus-visible (2px `--color-accent` outline) |
+| Dialog Confirm (rename — "Rename File") button | default (`--color-accent` background, white text), hover (brightness 90%), focus-visible (2px white outline, 2px offset inside button) |
+| Dialog Confirm (delete — "Move to Trash") button | default (`--color-error` background, white text), hover (brightness 90%), focus-visible (2px white outline, 2px offset inside button) |
 | Readonly editor overlay | static — `rgba(255,255,255,0.6)` veil, no animation |
 
 **Focus management:**
