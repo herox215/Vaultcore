@@ -119,10 +119,6 @@ pub async fn suggest_links(
     limit: usize,
     state: tauri::State<'_, VaultState>,
 ) -> Result<Vec<FileMatch>, VaultError> {
-    if query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
     let effective_limit = if limit == 0 { 20 } else { limit };
 
     let (fi_arc, matcher_arc) = {
@@ -140,6 +136,18 @@ pub async fn suggest_links(
         let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
         fi.all_relative_paths()
     };
+
+    // Empty query: return the first N files sorted alphabetically (Obsidian-style
+    // "browse" mode for [[|]]). Skip nucleo ranking — there's no pattern to rank by.
+    if query.trim().is_empty() {
+        let mut sorted = paths;
+        sorted.sort_unstable();
+        sorted.truncate(effective_limit);
+        return Ok(sorted
+            .into_iter()
+            .map(|path| FileMatch { path, score: 0, match_indices: Vec::new() })
+            .collect());
+    }
 
     let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
 
