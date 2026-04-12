@@ -103,3 +103,21 @@ html, body, #app {
   background: transparent;
   opacity: 0;
 }
+
+/* Phase 4: Wiki-link decoration in CM6 editor */
+.cm-wikilink-resolved {
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.cm-wikilink-resolved:hover {
+  text-decoration: underline;
+}
+.cm-wikilink-unresolved {
+  color: var(--color-text-muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+.cm-wikilink-unresolved:hover {
+  text-decoration: underline;
+}
