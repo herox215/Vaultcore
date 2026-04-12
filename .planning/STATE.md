@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-polish-04-PLAN.md
-last_updated: "2026-04-12T21:40:51.724Z"
+stopped_at: Completed 05-polish-06-PLAN.md
+last_updated: "2026-04-12T21:52:05.199Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 26
-  percent: 96
+  completed_plans: 27
+  percent: 100
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 5 (Polish) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -85,6 +85,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-polish P03 | 6min | 3 tasks | 5 files |
 | Phase 05-polish P05 | 7min | 2 tasks | 3 files |
 | Phase 05-polish P04 | 6min | 3 tasks | 8 files |
+| Phase 05-polish P06 | 6min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -164,6 +165,8 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: matchLanguageName third arg is fuzzy (substring), not alias-only — use fuzzy=false for reliable unknown-label test in fencedCode.test.ts
 - [Phase 05-polish]: Lezer markdown parser baseline on 10k-line doc is ~5-6s per 100 state updates in jsdom — largeFile.test.ts uses 30s budget + EditorState-only dispatch to catch O(n²) regressions while passing baseline
 - [Phase 05-polish]: tagsStore mirrors backlinksStore loading+error+reload pattern; buildTree() single-level nesting; tag-click wires to existing SearchPanel via setActiveTab+setQuery (no new IPC); treeRefreshStore piggyback for tag reload
+- [Phase 05-polish]: savingPromise only set for real Promise returns in autoSave — synchronous onSave skips async-deferral preserving EDIT-09 test compat
+- [Phase 05-polish]: lastSavedHashSnapshot mirrors editorStore via subscribe at component scope — consistent with D-06/RC-01 classic writable store pattern
 
 ### Pending Todos
 
@@ -182,6 +185,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T21:40:51.722Z
-Stopped at: Completed 05-polish-04-PLAN.md
+Last session: 2026-04-12T21:52:05.196Z
+Stopped at: Completed 05-polish-06-PLAN.md
 Resume file: None
