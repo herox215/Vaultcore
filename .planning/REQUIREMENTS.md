@@ -39,7 +39,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **EDIT-07**: Undo/redo work within each tab (provided by CM6)
 - [x] **EDIT-08**: There is no file-size limit — a 10,000-line note opens without degradation
 - [x] **EDIT-09**: Auto-save writes the active note to disk every 2 seconds (no manual save, no dirty indicator)
-- [ ] **EDIT-10**: Before each auto-save, the on-disk hash is compared to the expected hash; mismatch triggers the merge path
+- [x] **EDIT-10**: Before each auto-save, the on-disk hash is compared to the expected hash; mismatch triggers the merge path
 - [x] **EDIT-11**: New note creation via Cmd/Ctrl+N
 
 ### Search
@@ -211,7 +211,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | EDIT-07 | Phase 5 — Polish | Complete |
 | EDIT-08 | Phase 5 — Polish | Complete |
 | EDIT-09 | Phase 1 — Skeleton | Complete |
-| EDIT-10 | Phase 5 — Polish | Pending |
+| EDIT-10 | Phase 5 — Polish | Complete |
 | EDIT-11 | Phase 5 — Polish | Complete |
 | SRCH-01 | Phase 3 — Search | Complete |
 | SRCH-02 | Phase 3 — Search | Complete |
