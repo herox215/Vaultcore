@@ -72,9 +72,59 @@
     allTabs = state.tabs;
     activeTabId = state.activeTabId;
     activePane = state.splitState.activePane;
+    // Sync visibility on every store change — this catches tab switches
+    // that the $effect might miss due to batching or async timing.
+    syncVisibility();
   });
 
-  // Watch paneTabIds changes to manage EditorView lifecycle
+  /**
+   * Show only the active tab's container, hide all others.
+   * Called from both the store subscription (handles tab switches) and
+   * createEditorView (handles new tabs after async file read completes).
+   * Uses paneActiveTabId which is $derived — always reads the current value.
+   */
+  function syncVisibility() {
+    const activeId = paneActiveTabId;
+    for (const [id, container] of containerMap) {
+      container.style.display = id === activeId ? "block" : "none";
+    }
+
+    // Save scroll/cursor when switching away from a tab
+    if (prevActiveTabId && prevActiveTabId !== activeId) {
+      const prevView = viewMap.get(prevActiveTabId);
+      if (prevView) {
+        try {
+          const scrollTop = prevView.scrollDOM.scrollTop;
+          const cursor = prevView.state.selection.main.head;
+          tabStore.updateScrollPos(prevActiveTabId, scrollTop, cursor);
+        } catch (_) { /* view may have been destroyed */ }
+      }
+    }
+
+    // Restore scroll/cursor when switching to a tab
+    if (activeId && activeId !== prevActiveTabId) {
+      const activeView = viewMap.get(activeId);
+      const activeTab = allTabs.find((t) => t.id === activeId);
+      if (activeView && activeTab) {
+        if (activeTab.cursorPos > 0) {
+          const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
+          activeView.dispatch({ selection: { anchor: pos } });
+        }
+        requestAnimationFrame(() => {
+          activeView.scrollDOM.scrollTop = activeTab.scrollPos;
+        });
+        editorStore.syncFromTab(
+          activeTab.filePath,
+          activeView.state.doc.toString(),
+          activeTab.lastSaved ? String(activeTab.lastSaved) : null
+        );
+      }
+    }
+
+    prevActiveTabId = activeId;
+  }
+
+  // Manage EditorView lifecycle — create/destroy views when tabs change
   $effect(() => {
     const currentIds = new Set(paneTabIds);
 
@@ -83,7 +133,6 @@
       if (!currentIds.has(id)) {
         view.destroy();
         viewMap.delete(id);
-        // Remove container DOM element (not just the Map reference)
         const container = containerMap.get(id);
         if (container) container.remove();
         containerMap.delete(id);
@@ -100,48 +149,8 @@
       }
     }
 
-    // Sync all container visibility: show only the active tab, hide the rest.
-    // This is more robust than tracking prevActiveTabId because createEditorView
-    // is async — the container might not exist yet when the effect first runs,
-    // and this approach works correctly on every subsequent re-run.
-    const newActiveId = paneActiveTabId;
-    for (const [id, container] of containerMap) {
-      container.style.display = id === newActiveId ? "block" : "none";
-    }
-
-    // Save scroll/cursor on deactivated tab
-    if (prevActiveTabId && prevActiveTabId !== newActiveId) {
-      const prevView = viewMap.get(prevActiveTabId);
-      if (prevView) {
-        const scrollTop = prevView.scrollDOM.scrollTop;
-        const cursor = prevView.state.selection.main.head;
-        tabStore.updateScrollPos(prevActiveTabId, scrollTop, cursor);
-      }
-    }
-
-    // Restore scroll/cursor on newly activated tab
-    if (newActiveId && newActiveId !== prevActiveTabId) {
-      const activeView = viewMap.get(newActiveId);
-      const activeTab = allTabs.find((t) => t.id === newActiveId);
-      if (activeView && activeTab) {
-        if (activeTab.cursorPos > 0) {
-          const pos = Math.min(activeTab.cursorPos, activeView.state.doc.length);
-          activeView.dispatch({
-            selection: { anchor: pos },
-          });
-        }
-        requestAnimationFrame(() => {
-          activeView.scrollDOM.scrollTop = activeTab.scrollPos;
-        });
-        editorStore.syncFromTab(
-          activeTab.filePath,
-          activeView.state.doc.toString(),
-          activeTab.lastSaved ? String(activeTab.lastSaved) : null
-        );
-      }
-    }
-
-    prevActiveTabId = newActiveId;
+    // Also sync here for when the effect runs after containerMap changes
+    syncVisibility();
   });
 
   // Subscribe to vaultStore for vault reachability (ERR-03)
@@ -172,7 +181,7 @@
     const container = document.createElement("div");
     container.style.position = "absolute";
     container.style.inset = "0";
-    container.style.display = tab.id === paneActiveTabId ? "block" : "none";
+    container.style.display = "none"; // syncVisibility() will show it if active
     container.setAttribute("data-tab-id", tab.id);
     contentEl.appendChild(container);
 
@@ -229,10 +238,14 @@
     viewMap.set(tab.id, view);
     containerMap.set(tab.id, container);
 
+    // Now that the container and view are in the maps, sync visibility.
+    // This is the critical call — the $effect that triggered createEditorView
+    // ran before the async work finished, so it couldn't show this container.
+    syncVisibility();
+
     // Sync editorStore if this is the active tab
     if (tab.id === paneActiveTabId) {
       editorStore.syncFromTab(tab.filePath, content, null);
-      prevActiveTabId = tab.id;
     }
   }
 
