@@ -268,14 +268,14 @@
           tabStore.setLastSavedContent(tabWithPath.id, result.merged_content);
           toastStore.push({
             variant: "clean-merge",
-            message: `External changes merged into ${filename}.`,
+            message: `Externe Änderungen wurden in ${filename} eingebunden.`,
           });
         } else {
           // Conflict: keep editor content as-is, update base snapshot
           tabStore.setLastSavedContent(tabWithPath.id, editorContent);
           toastStore.push({
             variant: "conflict",
-            message: `Conflict in ${filename} — local version kept.`,
+            message: `Konflikt in ${filename} – lokale Version behalten.`,
           });
         }
       } catch (_err) {
