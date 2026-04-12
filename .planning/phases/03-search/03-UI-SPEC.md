@@ -52,18 +52,20 @@ Exceptions:
 
 All values from `tailwind.css` global declarations and component inspection. No new type sizes introduced.
 
+**Exactly 2 weights used in this phase: 400 (regular) and 700 (emphasis). Weight 600 is not used.**
+
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px | 400 | 1.5 |
 | Label / muted | 12px | 400 | 1.5 |
 | Sidebar vault name / heading | 14px | 700 | 1.2 |
-| Counter / metadata | 12px | 600 | 1.2 |
+| Emphasis (filenames, matched chars) | 14px | 700 | 1.2 |
 
 Notes:
-- Matched search term characters in Quick Switcher results: **700 weight**, same 14px size — no size change, weight only
-- Search result counter ("23 Treffer in 12 Dateien"): 12px / 400 / color-text-muted
-- Sidebar tab labels ("Dateien", "Suche"): 12px / 600 for active tab, 12px / 400 for inactive
-- Search query syntax hint (if shown): 11px / 400 / color-text-muted
+- Matched search term characters in Quick Switcher results: 700 weight + `--color-accent` color, same 14px size — weight and color only, no size change
+- Search result counter ("23 Treffer in 12 Dateien"): 12px / 400 / `--color-text-muted`
+- Sidebar tab labels ("Dateien", "Suche"): 12px / 400 for both active and inactive states — active tab distinction is via `--color-accent` bottom border 2px and `--color-accent-bg` background tint only, not weight change
+- Search query syntax hint (if shown): 12px / 400 / `--color-text-muted` (unified with label size — color differentiation alone distinguishes it from body text)
 
 ---
 
@@ -85,11 +87,11 @@ All values from `src/styles/tailwind.css` CSS variable declarations. No new colo
 | Flash highlight | `#FEF9C3` (yellow-100) | 2-3 second CM6 decoration flash on scroll-to-match, fades to transparent |
 
 Accent (`#6D28D9`) reserved for:
-1. Active sidebar tab indicator (bottom border or background tint)
+1. Active sidebar tab indicator (2px bottom border + `--color-accent-bg` background tint — weight stays 400)
 2. Rebuild button icon and label when in active/pressed state
 3. Progress fill bar during index rebuild (reuses existing `.vc-progress-fill` rule)
 4. Focus ring on the search input (`outline: 2px solid var(--color-accent)`)
-5. Matched/highlighted characters in Quick Switcher results (bold + accent color)
+5. Matched/highlighted characters in Quick Switcher results (700 weight + accent color)
 
 Destructive: none in this phase — no delete actions in Search.
 
@@ -103,7 +105,7 @@ New components to build in `src/components/Search/`:
 |-----------|-------------|
 | `SidebarTabs.svelte` | Tab bar at top of sidebar with "Dateien" / "Suche" tabs. Slots content below. |
 | `SearchPanel.svelte` | Search input + results container + rebuild button header. Renders inside SidebarTabs "Suche" slot. |
-| `SearchInput.svelte` | Controlled text input with 200ms debounce, clear button, focus management. |
+| `SearchInput.svelte` | Controlled text input with 200ms debounce, clear button (aria-label="Suche löschen"), focus management. |
 | `SearchResults.svelte` | Scrollable list of `SearchResultRow` items. Shows counter header. Capped at 100 results. |
 | `SearchResultRow.svelte` | Filename (14px/700) + snippet (12px/400) + highlighted match term. Click handler. |
 | `QuickSwitcher.svelte` | Centered modal overlay. Search field + scrollable result list. Keyboard nav. Mounts into `<body>` portal. |
@@ -120,10 +122,15 @@ Reused existing components:
 
 ## Interaction Contracts
 
+### Focal Points
+
+- **Search screen primary focal point:** The search input (`SearchInput.svelte`) is the focal point. It receives focus automatically when the Suche tab becomes active (via `Cmd/Ctrl+Shift+F` or tab click). All other elements are secondary to this entry point.
+- **Quick Switcher focal point:** The Quick Switcher search input receives focus immediately on modal open. Tab trap keeps focus inside modal until Escape or Enter.
+
 ### Sidebar Tab Switching (D-01)
 
 - Two tabs rendered at top of sidebar: "Dateien" (file tree) and "Suche" (search).
-- Active tab: 12px / 600 weight, `--color-accent` bottom border 2px, background `--color-accent-bg` tint.
+- Active tab: 12px / 400 weight, `--color-accent` bottom border 2px, background `--color-accent-bg` tint. Weight does NOT change between active and inactive states.
 - Inactive tab: 12px / 400 weight, `--color-text-muted`, no bottom border.
 - Keyboard: `Cmd/Ctrl+Shift+F` directly activates the Suche tab AND focuses the search input, even if Files tab is active.
 - Tab switch: instant — no transition, no layout shift. File tree and search panel share the same container; only `display` toggled.
@@ -133,7 +140,7 @@ Reused existing components:
 
 - Placeholder text: "Suchen... (AND, OR, NOT, \"phrase\")" — gives syntax hint inline.
 - Debounce: 200ms after last keystroke before invoking `search_fulltext`.
-- Clear button (×): appears when input is non-empty. 16px lucide-svelte X icon. Clears input and resets results.
+- Clear button (×): appears when input is non-empty. 16px lucide-svelte X icon. `aria-label="Suche löschen"`. Clears input and resets results.
 - Focus ring: `outline: 2px solid var(--color-accent)`, `outline-offset: 2px`, `border-radius: 4px`.
 - During index rebuild: input disabled, `cursor: not-allowed`, background `--color-border`.
 
@@ -165,7 +172,7 @@ Reused existing components:
 - Result rows: filename (14px) left-aligned. Matched chars: 700 weight + `--color-accent` color. Relative path: 12px / `--color-text-muted`, right-aligned or below filename.
 - Keyboard navigation: `ArrowUp`/`ArrowDown` move selection. Selected row: `background: --color-accent-bg`. `Enter` opens selected. Mouse hover also sets selection.
 - Empty (no input): shows recently opened files from tabStore (label: "Zuletzt geöffnet"). Max 8 recents shown.
-- No results found: single row "Keine Dateien gefunden" (12px / muted, centered).
+- No results found: single row "Keine Dateien gefunden — anderen Begriff versuchen" (12px / muted, centered).
 - Fuzzy match algorithm: substring + word-initial. "mn" matches "meeting-notes.md". No regex required of user.
 
 ### Index Rebuild (D-09, D-10, D-11)
@@ -193,7 +200,7 @@ All German text consistent with Phase 2 convention (German for user-facing strin
 | Result counter | `{N} Treffer in {M} Dateien` |
 | Result overflow hint | `Zeige 100 von {N} Treffern — Suche verfeinern` |
 | Quick Switcher no-input label | Zuletzt geöffnet |
-| Quick Switcher no results | Keine Dateien gefunden |
+| Quick Switcher no results | Keine Dateien gefunden — anderen Begriff versuchen |
 | Rebuild button label | Index neu aufbauen |
 | Rebuild progress toast | Index wird neu aufgebaut... |
 | Rebuild complete toast | Index aktualisiert |
@@ -201,6 +208,7 @@ All German text consistent with Phase 2 convention (German for user-facing strin
 | Search disabled during rebuild | Indexierung läuft... |
 | Empty search panel (no query) | `(empty — no placeholder content; input is always focused)` |
 | Error: search command failed | Suche fehlgeschlagen — bitte erneut versuchen |
+| Clear search button aria-label | Suche löschen |
 
 No destructive actions in this phase. No confirmation dialogs required.
 
@@ -209,6 +217,7 @@ No destructive actions in this phase. No confirmation dialogs required.
 ## Accessibility Contract
 
 - Search input: `role="searchbox"`, `aria-label="Volltextsuche"`, `aria-busy="true"` during rebuild.
+- Search clear button: `aria-label="Suche löschen"` (visible only when input is non-empty).
 - Results list: `role="listbox"`, each row `role="option"`, `aria-selected` tracks keyboard selection.
 - Quick Switcher modal: `role="dialog"`, `aria-modal="true"`, `aria-label="Schnellwechsler"`. Focus trapped inside while open.
 - Rebuild button: `aria-label="Index neu aufbauen"`, `aria-disabled="true"` during active rebuild.
