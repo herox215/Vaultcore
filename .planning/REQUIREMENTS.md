@@ -26,7 +26,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **IDX-06**: All Tantivy writes go through a single central queue (never two concurrent writes for the same file)
 - [x] **IDX-07**: The `.obsidian/` folder is ignored by both the file browser and the indexer
 - [x] **IDX-08**: Non-UTF-8 files are shown in the browser but skipped by the indexer
-- [ ] **IDX-09**: User can trigger a manual index rebuild via `rebuild_index` command
+- [x] **IDX-09**: User can trigger a manual index rebuild via `rebuild_index` command
 
 ### Editor
 
@@ -45,10 +45,10 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 ### Search
 
 - [ ] **SRCH-01**: Cmd/Ctrl+Shift+F opens the full-text search panel
-- [ ] **SRCH-02**: Full-text search results include filename, relevance rank, and a contextual snippet
-- [ ] **SRCH-03**: Search supports AND, OR, NOT, and phrase queries (`"exact text"`)
-- [ ] **SRCH-04**: Cmd/Ctrl+P opens the Quick Switcher with fuzzy filename matching
-- [ ] **SRCH-05**: Quick Switcher and full-text search are backed by separate commands (`search_filename`, `search_fulltext`)
+- [x] **SRCH-02**: Full-text search results include filename, relevance rank, and a contextual snippet
+- [x] **SRCH-03**: Search supports AND, OR, NOT, and phrase queries (`"exact text"`)
+- [x] **SRCH-04**: Cmd/Ctrl+P opens the Quick Switcher with fuzzy filename matching
+- [x] **SRCH-05**: Quick Switcher and full-text search are backed by separate commands (`search_filename`, `search_fulltext`)
 - [ ] **SRCH-06**: Clicking a search result opens the note at the match location
 
 ### Links
@@ -201,7 +201,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | IDX-06 | Phase 3 — Search | Complete |
 | IDX-07 | Phase 2 — Vault | Complete |
 | IDX-08 | Phase 3 — Search | Complete |
-| IDX-09 | Phase 3 — Search | Pending |
+| IDX-09 | Phase 3 — Search | Complete |
 | EDIT-01 | Phase 1 — Skeleton | Complete |
 | EDIT-02 | Phase 1 — Skeleton | Complete |
 | EDIT-03 | Phase 5 — Polish | Pending |
@@ -214,10 +214,10 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | EDIT-10 | Phase 5 — Polish | Pending |
 | EDIT-11 | Phase 5 — Polish | Pending |
 | SRCH-01 | Phase 3 — Search | Pending |
-| SRCH-02 | Phase 3 — Search | Pending |
-| SRCH-03 | Phase 3 — Search | Pending |
-| SRCH-04 | Phase 3 — Search | Pending |
-| SRCH-05 | Phase 3 — Search | Pending |
+| SRCH-02 | Phase 3 — Search | Complete |
+| SRCH-03 | Phase 3 — Search | Complete |
+| SRCH-04 | Phase 3 — Search | Complete |
+| SRCH-05 | Phase 3 — Search | Complete |
 | SRCH-06 | Phase 3 — Search | Pending |
 | LINK-01 | Phase 4 — Links | Pending |
 | LINK-02 | Phase 4 — Links | Pending |
