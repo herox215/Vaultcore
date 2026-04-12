@@ -177,9 +177,11 @@
       return;
     }
 
-    // Find the container div rendered by Svelte's {#each} block
-    const container = document.querySelector(
-      `.vc-editor-pane [data-tab-id="${tab.id}"]`
+    // Find the container div rendered by Svelte's {#each} block.
+    // Scope to this pane's DOM element — document.querySelector would match
+    // the first .vc-editor-pane in the DOM, breaking right-pane mounts.
+    const container = paneEl?.querySelector(
+      `[data-tab-id="${tab.id}"]`
     ) as HTMLDivElement | null;
     if (!container) return; // tab was closed before async completed
 
@@ -229,7 +231,7 @@
     });
 
     // Final guard — tab may have been closed during second await
-    if (!document.querySelector(`.vc-editor-pane [data-tab-id="${tab.id}"]`)) return;
+    if (!paneEl?.querySelector(`[data-tab-id="${tab.id}"]`)) return;
     if (viewMap.has(tab.id)) return;
 
     const view = new EditorView({

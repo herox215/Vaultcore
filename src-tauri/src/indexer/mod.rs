@@ -92,6 +92,17 @@ impl IndexCoordinator {
         let vaultcore_dir = vault_path.join(".vaultcore");
         let index_dir = vaultcore_dir.join("index").join("tantivy");
 
+        // Schema-version check must happen BEFORE the index is opened and
+        // before the background writer task is spawned.  If we wipe the
+        // directory after the task is live, index.writer() races with
+        // remove_dir_all() and fails with LockFailure / NotFound.
+        if !tantivy_index::check_version(&vaultcore_dir) {
+            if index_dir.exists() {
+                std::fs::remove_dir_all(&index_dir).map_err(VaultError::Io)?;
+                log::info!("Schema mismatch — index directory wiped for rebuild");
+            }
+        }
+
         let index = tantivy_index::open_or_create_index(&index_dir, &schema)?;
         let reader = index
             .reader_builder()
@@ -154,22 +165,6 @@ impl IndexCoordinator {
         app: &AppHandle,
     ) -> Result<VaultInfo, VaultError> {
         let vaultcore_dir = vault_path.join(".vaultcore");
-
-        // Schema-version check → wipe and rebuild if stale.
-        if !tantivy_index::check_version(&vaultcore_dir) {
-            let index_dir = vaultcore_dir.join("index").join("tantivy");
-            if index_dir.exists() {
-                std::fs::remove_dir_all(&index_dir).map_err(VaultError::Io)?;
-            }
-            log::info!("Schema mismatch — rebuilding index");
-            let _ = app.emit(
-                "vault://index_toast",
-                serde_json::json!({
-                    "message": "Index wird neu aufgebaut...",
-                    "variant": "clean-merge"
-                }),
-            );
-        }
 
         // Collect all .md paths (skip dot-dirs and .vaultcore).
         let md_paths = collect_md_paths(vault_path);

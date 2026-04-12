@@ -39,10 +39,12 @@ impl WriteIgnoreList {
     }
 
     /// Returns `true` if a watcher event for `path` should be suppressed
-    /// because we wrote it ourselves within the last 100ms.
+    /// because we wrote it ourselves recently.  The window must exceed the
+    /// notify-debouncer delay (200 ms) so events that arrive after debouncing
+    /// are still filtered.  500 ms provides comfortable headroom.
     pub fn should_ignore(&self, path: &PathBuf) -> bool {
         use std::time::Duration;
-        const IGNORE_WINDOW: Duration = Duration::from_millis(100);
+        const IGNORE_WINDOW: Duration = Duration::from_millis(500);
         self.entries.get(path).map(|t| t.elapsed() < IGNORE_WINDOW).unwrap_or(false)
     }
 }
