@@ -10,6 +10,10 @@
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
   import { vaultStore } from "../../store/vaultStore";
+  import { SHORTCUTS, handleShortcut, type ShortcutContext, type ShortcutGuard } from "../../lib/shortcuts";
+  import { createFile } from "../../ipc/commands";
+  import { toastStore } from "../../store/toastStore";
+  import { treeRefreshStore } from "../../store/treeRefreshStore";
 
   const SIDEBAR_WIDTH_KEY = "vaultcore-sidebar-width";
   const DEFAULT_SIDEBAR_WIDTH = 240;
@@ -172,6 +176,27 @@
     sidebarCollapsed = !sidebarCollapsed;
   }
 
+  /** T-05-03-03: Suppress global shortcuts when an inline rename input is focused. */
+  function inlineRenameActive(): boolean {
+    const el = document.activeElement;
+    return !!el && typeof (el as Element).closest === "function" && !!(el as Element).closest('.vc-inline-rename');
+  }
+
+  /** EDIT-11 / D-12: Create "Unbenannte Notiz.md" at vault root and open in a new tab. */
+  async function createNewNote() {
+    let vaultPath: string | null = null;
+    const unsub = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
+    unsub();
+    if (!vaultPath) return;
+    try {
+      const newPath = await createFile(vaultPath, "Unbenannte Notiz.md");
+      tabStore.openTab(newPath);
+      treeRefreshStore.requestRefresh();
+    } catch {
+      toastStore.push({ variant: "error", message: "Neue Notiz konnte nicht erstellt werden." });
+    }
+  }
+
   function handleSelect(path: string) {
     selectedPath = path;
   }
@@ -182,48 +207,30 @@
     tabStore.openTab(path);
   }
 
-  // Global keyboard shortcuts for tab management
-  // Registered here (not per-TabBar) to avoid duplicate handlers
+  // Global keyboard shortcuts — delegated to the central SHORTCUTS registry (UI-05 / D-11).
+  // Registered here (not per-TabBar) to avoid duplicate handlers.
   function handleKeydown(e: KeyboardEvent) {
-    const isMeta = e.metaKey || e.ctrlKey;
-    if (!isMeta) return;
-
-    if (e.shiftKey && e.key.toLowerCase() === "b") {
-      e.preventDefault();
-      backlinksStore.toggle();
-      return;
-    }
-
-    if (e.shiftKey && e.key === "F") {
-      e.preventDefault();
-      searchStore.setActiveTab("search");
-      return;
-    }
-
-    if (e.key === "p" || e.key === "P") {
-      e.preventDefault();
-      quickSwitcherOpen = true;
-      return;
-    }
-
-    if (e.key === "Tab") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        tabStore.cycleTab(-1);
-      } else {
-        tabStore.cycleTab(1);
-      }
-    } else if (e.key === "w" || e.key === "W") {
-      e.preventDefault();
-      const state = tabStore;
-      // Get active tab ID from store snapshot
-      let activeId: string | null = null;
-      const unsub = tabStore.subscribe((s) => { activeId = s.activeTabId; });
-      unsub();
-      if (activeId) {
-        tabStore.closeTab(activeId);
-      }
-    }
+    const ctx: ShortcutContext = {
+      openQuickSwitcher: () => { quickSwitcherOpen = true; },
+      toggleSidebar: () => { toggleSidebar(); },
+      openBacklinks: () => { backlinksStore.toggle(); },
+      activateSearchTab: () => { searchStore.setActiveTab("search"); },
+      cycleTabNext: () => { tabStore.cycleTab(1); },
+      cycleTabPrev: () => { tabStore.cycleTab(-1); },
+      closeActiveTab: () => {
+        let activeId: string | null = null;
+        const unsub = tabStore.subscribe((s) => { activeId = s.activeTabId; });
+        unsub();
+        if (activeId) tabStore.closeTab(activeId);
+      },
+      createNewNote: () => { void createNewNote(); },
+    };
+    const guard: ShortcutGuard = {
+      settingsOpen,
+      quickSwitcherOpen,
+      inlineRenameActive: inlineRenameActive(),
+    };
+    handleShortcut(e, ctx, guard);
   }
 
   const isSplit = $derived(rightPaneIds.length > 0);

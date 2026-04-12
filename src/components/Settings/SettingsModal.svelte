@@ -9,6 +9,7 @@
     type BodyFont,
     type MonoFont,
   } from "../../store/settingsStore";
+  import { SHORTCUTS, formatShortcut } from "../../lib/shortcuts";
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
 
@@ -122,12 +123,19 @@
         />
       </section>
 
-      <!-- Section C — Tastaturkürzel (Plan 03 fills in) -->
-      <section class="vc-settings-section" data-testid="settings-shortcuts-placeholder">
+      <!-- Section C — Tastaturkürzel (UI-05 / D-11) -->
+      <section class="vc-settings-section" data-testid="settings-shortcuts">
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
-        <p style="font-size:12px;color:var(--color-text-muted);margin:0;">
-          (wird in Plan 03 ergänzt)
-        </p>
+        <table class="vc-shortcuts-table" role="table">
+          <tbody>
+            {#each SHORTCUTS as s (s.id)}
+              <tr role="row">
+                <td role="cell" class="vc-shortcut-action">{s.label}</td>
+                <td role="cell" class="vc-shortcut-keys"><kbd>{formatShortcut(s.keys)}</kbd></td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </section>
     </div>
   </div>
@@ -210,4 +218,20 @@
   }
   .vc-settings-size-value { font-size: 14px; color: var(--color-text-muted); }
   .vc-settings-slider { width: 100%; }
+
+  /* Section C — Tastaturkürzel */
+  .vc-shortcuts-table { width: 100%; border-collapse: collapse; }
+  .vc-shortcuts-table tr:nth-child(even) { background: var(--color-bg); }
+  .vc-shortcuts-table td { padding: 6px 16px; font-size: 14px; color: var(--color-text); }
+  .vc-shortcut-keys { text-align: right; }
+  .vc-shortcut-keys kbd {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 6px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text);
+    font-family: var(--vc-font-mono);
+  }
 </style>
