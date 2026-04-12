@@ -22,7 +22,7 @@ export const markdownTheme = EditorView.theme({
     backgroundColor: "var(--color-surface)",
     color: "var(--color-text)",
     height: "100%",
-    fontSize: "15px",
+    fontSize: "var(--vc-font-size)",
     fontFamily: "var(--vc-font-body)",
   },
   ".cm-scroller": { overflow: "auto" },
