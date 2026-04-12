@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { themeStore } from "./store/themeStore";
+  import { settingsStore } from "./store/settingsStore";
   import { vaultStore } from "./store/vaultStore";
   import { toastStore } from "./store/toastStore";
   import { progressStore } from "./store/progressStore";
@@ -66,6 +68,9 @@
   }
 
   onMount(async () => {
+    themeStore.init();
+    settingsStore.init();
+
     // Subscribe to progress events before any vault open happens
     unlistenProgress = await listenIndexProgress((payload) => {
       progressStore.update(payload.current, payload.total, payload.current_file);
