@@ -7,4 +7,8 @@ export interface DirEntry {
   is_dir: boolean;
   is_symlink: boolean;
   is_md: boolean;     // true for .md extension
+  /** Seconds since UNIX_EPOCH; null if metadata unavailable. */
+  modified: number | null;
+  /** Seconds since UNIX_EPOCH; null on Linux ext4 or if metadata unavailable. */
+  created: number | null;
 }

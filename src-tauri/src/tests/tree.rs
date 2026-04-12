@@ -153,3 +153,75 @@ fn three_way_merge_skeleton_compiles() {
     // Since it's a todo!(), we just verify the types compile correctly
     let _: fn(&str, &str, &str) -> crate::merge::MergeOutcome = crate::merge::three_way_merge;
 }
+
+// ── Phase 5 Plan 00: DirEntry timestamp tests ─────────────────────────────────
+
+// Test 8 (Behavior 1): list_directory_impl returns modified: Some(u64) within ±5s of now.
+#[test]
+fn direntry_modified_is_populated() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("test.md"), "content").unwrap();
+
+    let state = state_with_vault(dir.path());
+    let result = list_directory_impl(&state, dir.path().to_string_lossy().into_owned()).unwrap();
+
+    let entry = result.iter().find(|e| e.name == "test.md").expect("test.md must appear");
+    let modified = entry.modified.expect("modified must be Some on all platforms");
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before UNIX_EPOCH")
+        .as_secs();
+
+    assert!(
+        modified.abs_diff(now_secs) <= 5,
+        "modified {} should be within ±5s of now {}",
+        modified,
+        now_secs
+    );
+}
+
+// Test 9 (Behavior 2): list_directory_impl never panics on created — returns Some or None.
+#[test]
+fn direntry_created_never_panics() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("any.md"), "").unwrap();
+
+    let state = state_with_vault(dir.path());
+    // Must not panic regardless of platform (Linux ext4 may return None; macOS returns Some)
+    let result = list_directory_impl(&state, dir.path().to_string_lossy().into_owned()).unwrap();
+
+    let entry = result.iter().find(|e| e.name == "any.md").expect("any.md must appear");
+    // Acceptable: either Some(_) or None — the test just asserts no panic occurred.
+    let _created: Option<u64> = entry.created;
+    // No assertion needed beyond "we got here without panic"
+}
+
+// Test 10 (Behavior 3): Serde serialises DirEntry with snake_case keys "modified" and "created".
+#[test]
+fn direntry_serde_uses_snake_case_keys() {
+    use crate::commands::tree::DirEntry;
+
+    let entry = DirEntry {
+        name: "note.md".to_string(),
+        path: "/vault/note.md".to_string(),
+        is_dir: false,
+        is_symlink: false,
+        is_md: true,
+        modified: Some(1_700_000_000),
+        created: None,
+    };
+
+    let value = serde_json::to_value(&entry).expect("DirEntry must serialise to JSON");
+    let obj = value.as_object().expect("JSON value must be an object");
+
+    assert!(obj.contains_key("modified"), "JSON must have key 'modified' (not 'modifiedAt')");
+    assert!(obj.contains_key("created"), "JSON must have key 'created' (not 'createdAt')");
+    // Verify camelCase variants are absent (no rename_all on the struct)
+    assert!(!obj.contains_key("modifiedAt"), "camelCase key 'modifiedAt' must not appear");
+    assert!(!obj.contains_key("createdAt"), "camelCase key 'createdAt' must not appear");
+    assert_eq!(value["modified"], 1_700_000_000u64, "modified value must round-trip");
+    assert!(value["created"].is_null(), "created None must serialise as JSON null");
+}
