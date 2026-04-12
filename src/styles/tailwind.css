@@ -26,3 +26,45 @@ html, body, #app {
   font-size: 14px;
   line-height: 1.5;
 }
+
+/* Phase 3 — Sidebar tabs */
+.vc-sidebar-tabs {
+  display: flex;
+  height: 32px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.vc-sidebar-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: none;
+}
+.vc-sidebar-tab[aria-selected="true"] {
+  color: var(--color-text);
+  background: var(--color-accent-bg);
+  border-bottom: 2px solid var(--color-accent);
+}
+
+/* Phase 3 — Search panel */
+.vc-search-snippet b {
+  background: #FEF9C3;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+@keyframes vc-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.vc-spin {
+  animation: vc-spin 1s linear infinite;
+}
