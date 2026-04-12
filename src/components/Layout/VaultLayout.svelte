@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { PanelRight } from "lucide-svelte";
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
   import QuickSwitcher from "../Search/QuickSwitcher.svelte";
@@ -291,6 +292,17 @@
         >
           &#9664;
         </button>
+        <div class="vc-editor-topbar-spacer"></div>
+        <button
+          class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
+          class:vc-backlinks-toggle-btn--active={backlinksOpen}
+          onclick={() => backlinksStore.toggle()}
+          aria-label="Backlinks-Panel umschalten"
+          aria-pressed={backlinksOpen}
+          title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
+        >
+          <PanelRight size={16} />
+        </button>
       </div>
     {/if}
 
@@ -419,6 +431,20 @@
     padding: 0 8px;
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
+  }
+
+  .vc-editor-topbar-spacer {
+    flex: 1;
+  }
+
+  .vc-backlinks-toggle-btn--active {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+  }
+
+  .vc-backlinks-toggle-btn--active:hover {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
   }
 
   .vc-editor-panes {
