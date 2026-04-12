@@ -1,4 +1,5 @@
 mod error_serialize;
 mod files;
+mod files_ops;
 mod vault_stats;
 mod tree;
