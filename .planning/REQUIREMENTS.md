@@ -36,11 +36,11 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **EDIT-04**: Keyboard shortcuts work: Cmd/Ctrl+B (bold), Cmd/Ctrl+I (italic), Cmd/Ctrl+K (link)
 - [x] **EDIT-05**: Multi-tab: user can open multiple notes simultaneously and switch with Cmd/Ctrl+Tab
 - [x] **EDIT-06**: Split-view: two notes can be displayed and edited side-by-side
-- [ ] **EDIT-07**: Undo/redo work within each tab (provided by CM6)
+- [x] **EDIT-07**: Undo/redo work within each tab (provided by CM6)
 - [ ] **EDIT-08**: There is no file-size limit — a 10,000-line note opens without degradation
 - [x] **EDIT-09**: Auto-save writes the active note to disk every 2 seconds (no manual save, no dirty indicator)
 - [ ] **EDIT-10**: Before each auto-save, the on-disk hash is compared to the expected hash; mismatch triggers the merge path
-- [ ] **EDIT-11**: New note creation via Cmd/Ctrl+N
+- [x] **EDIT-11**: New note creation via Cmd/Ctrl+N
 
 ### Search
 
@@ -97,9 +97,9 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 - [x] **UI-01**: Dark mode and Light mode are implemented and can be toggled at runtime
 - [x] **UI-02**: Font family and font size are configurable
-- [ ] **UI-03**: Sidebar can be collapsed/expanded with Cmd/Ctrl+\
+- [x] **UI-03**: Sidebar can be collapsed/expanded with Cmd/Ctrl+\
 - [x] **UI-04**: Toast component supports error, clean-merge, and conflict variants, auto-dismisses after 5 s, and is manually dismissable
-- [ ] **UI-05**: All MVP keyboard shortcuts from spec Section 13 are wired up
+- [x] **UI-05**: All MVP keyboard shortcuts from spec Section 13 are wired up
 - [ ] **UI-06**: All user-facing surfaces (errors, merge notices, rename prompt) use the unified toast / dialog components
 
 ### Errors
@@ -208,11 +208,11 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | EDIT-04 | Phase 1 — Skeleton | Complete |
 | EDIT-05 | Phase 2 — Vault | Complete |
 | EDIT-06 | Phase 2 — Vault | Complete |
-| EDIT-07 | Phase 5 — Polish | Pending |
+| EDIT-07 | Phase 5 — Polish | Complete |
 | EDIT-08 | Phase 5 — Polish | Pending |
 | EDIT-09 | Phase 1 — Skeleton | Complete |
 | EDIT-10 | Phase 5 — Polish | Pending |
-| EDIT-11 | Phase 5 — Polish | Pending |
+| EDIT-11 | Phase 5 — Polish | Complete |
 | SRCH-01 | Phase 3 — Search | Complete |
 | SRCH-02 | Phase 3 — Search | Complete |
 | SRCH-03 | Phase 3 — Search | Complete |
@@ -251,9 +251,9 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | SYNC-08 | Phase 2 — Vault | Complete |
 | UI-01 | Phase 5 — Polish | Complete |
 | UI-02 | Phase 5 — Polish | Complete |
-| UI-03 | Phase 5 — Polish | Pending |
+| UI-03 | Phase 5 — Polish | Complete |
 | UI-04 | Phase 1 — Skeleton | Complete |
-| UI-05 | Phase 5 — Polish | Pending |
+| UI-05 | Phase 5 — Polish | Complete |
 | UI-06 | Phase 5 — Polish | Pending |
 | ERR-01 | Phase 1 — Skeleton | Complete |
 | ERR-02 | Phase 3 — Search | Complete |
