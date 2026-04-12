@@ -592,22 +592,25 @@ export async function rebuildIndex(): Promise<void> {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **IndexWriter Send-ness in tantivy 0.26**
    - What we know: tantivy 0.21+ made IndexWriter Send in most configurations
    - What's unclear: whether the default MergePolicy is also Send in 0.26
    - Recommendation: Attempt `tokio::spawn(async move { ... writer ... })` in Wave 0; if compile fails, use `spawn_blocking` instead
+   - RESOLVED: Plan 03-01 Task 2 spawns the queue consumer via `tokio::spawn` with IndexWriter owned inside the task. If Send is not satisfied at compile time, the executor will fall back to `spawn_blocking` as recommended. The mpsc queue pattern isolates IndexWriter ownership regardless.
 
 2. **Tantivy index location inside vault**
    - What we know: Spec says "neben dem Tantivy-Index-Verzeichnis" (next to index dir)
    - What's unclear: Exact path not specified — `<vault>/.vaultcore/` would be ignored by `is_excluded` (dot prefix) but isn't in the spec
    - Recommendation: Use `<app_data_dir>/vaultcore/indexes/<vault_hash>/` — completely outside vault, no risk of appearing in file browser or being accidentally committed to git. Avoids contaminating the user's Obsidian vault.
+   - RESOLVED: Plan 03-01 Task 2 chose `<vault>/.vaultcore/index/tantivy/` (inside vault, dot-prefix hidden), deviating from the research recommendation of `<app_data_dir>`. Rationale: simpler implementation, `.vaultcore` is excluded from the file tree browser (Plan 01 Task 2 adds exclusion), and co-locating the index with the vault makes portability straightforward. Users can `.gitignore` the directory.
 
 3. **Warm start hash diff performance at 100k files**
    - What we know: `hash_bytes` is fast; reading 100k file stat mtimes is fast; reading file content to hash is slow
    - What's unclear: Whether to hash only changed files (by mtime first) or hash all files always
    - Recommendation: Two-pass — first check `fs::metadata().modified()` against stored `modified_at`; only read+hash files whose mtime changed. This makes warm start essentially O(mtime checks) not O(file reads).
+   - RESOLVED: Plan 03-01 Task 2 implements SHA-256 hash comparison for all files on warm start (single-pass, hash all). The mtime two-pass optimization is deferred. Current approach reads+hashes every file but skips Tantivy re-indexing for unchanged hashes. This is correct but not optimal at 100k scale; the mtime optimization can be added in Phase 6 if benchmarks show warm start exceeds budget.
 
 ---
 
