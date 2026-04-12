@@ -53,5 +53,9 @@ export function vaultErrorCopy(err: VaultError): string {
       return "Index corrupt. VaultCore will rebuild it.";
     case "MergeConflict":
       return `Conflict in ${err.data ?? "file"} — local version kept.`;
+    default: {
+      const _exhaustive: never = err.kind;
+      return "An unexpected error occurred.";
+    }
   }
 }
