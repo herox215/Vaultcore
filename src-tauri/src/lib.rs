@@ -3,6 +3,7 @@ pub mod commands;
 pub mod hash;
 pub mod watcher;
 pub mod merge;
+pub mod indexer;
 
 #[cfg(test)]
 mod tests;
@@ -61,6 +62,8 @@ pub struct VaultState {
     /// Wrapped in Arc so it can be shared with the watcher's reconnect-poll task.
     pub vault_reachable: Arc<Mutex<bool>>,
     pub watcher_handle: Arc<Mutex<Option<Debouncer<RecommendedWatcher, RecommendedCache>>>>,
+    /// Tantivy IndexCoordinator — created lazily on first open_vault call.
+    pub index_coordinator: Arc<Mutex<Option<indexer::IndexCoordinator>>>,
 }
 
 impl Default for VaultState {
@@ -70,6 +73,7 @@ impl Default for VaultState {
             write_ignore: Arc::new(Mutex::new(WriteIgnoreList::default())),
             vault_reachable: Arc::new(Mutex::new(false)),
             watcher_handle: Arc::new(Mutex::new(None)),
+            index_coordinator: Arc::new(Mutex::new(None)),
         }
     }
 }
