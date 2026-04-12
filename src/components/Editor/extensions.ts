@@ -22,6 +22,7 @@ import { vaultKeymap } from "./keymap";
 import { markdownTheme, markdownHighlightStyle } from "./theme";
 import { autoSaveExtension } from "./autoSave";
 import { flashField } from "./flashHighlight";
+import { wikiLinkPlugin } from "./wikiLink";
 
 export function buildExtensions(onSave: (text: string) => void): Extension[] {
   return [
@@ -45,5 +46,6 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
     markdownTheme,
     autoSaveExtension(onSave),
     flashField,
+    wikiLinkPlugin,
   ];
 }
