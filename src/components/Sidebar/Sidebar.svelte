@@ -210,7 +210,7 @@
             {onSelect}
             {onOpenFile}
             onRefreshParent={loadRoot}
-            {onPathChanged}
+            onPathChanged={handlePathChanged}
           />
         {/each}
       </ul>
