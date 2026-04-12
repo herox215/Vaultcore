@@ -23,6 +23,7 @@ use crate::error::VaultError;
 use crate::VaultState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 /// A single entry in a directory listing.
 #[derive(Serialize, Clone, Debug)]
@@ -32,6 +33,10 @@ pub struct DirEntry {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub is_md: bool,        // true for .md extension (case-insensitive)
+    /// Seconds since UNIX_EPOCH. None if metadata call failed.
+    pub modified: Option<u64>,
+    /// Seconds since UNIX_EPOCH. None if metadata unavailable (Linux ext4 often returns Err here).
+    pub created: Option<u64>,
 }
 
 /// T-02-01 mitigation: validate that `target` is inside the current vault.
@@ -104,12 +109,25 @@ pub fn list_directory_impl(state: &VaultState, path: String) -> Result<Vec<DirEn
         // joined via canonical parent to prevent path traversal.
         let entry_path = canonical_dir.join(&name);
 
+        // Compute timestamps from symlink_meta (already loaded above).
+        // Two .ok() calls per RESEARCH Pitfall 3: metadata().created() returns Err on
+        // Linux ext4 and duration_since() returns Err if time is before UNIX_EPOCH
+        // (possible on a misconfigured clock). Never panics.
+        let modified = symlink_meta.modified().ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let created = symlink_meta.created().ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+
         entries.push(DirEntry {
             name,
             path: entry_path.to_string_lossy().into_owned(),
             is_dir,
             is_symlink,
             is_md,
+            modified,
+            created,
         });
     }
 
