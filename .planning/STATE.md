@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 4 context gathered
-last_updated: "2026-04-12T16:19:21.230Z"
+status: executing
+stopped_at: Completed 04-links 04-01-PLAN.md
+last_updated: "2026-04-12T17:14:23.715Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_plans: 19
+  completed_plans: 16
+  percent: 84
 ---
 
 # Project State
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Stay fluid at 100,000+ notes — open, search, link, and edit a vault of that size without perceptible lag.
-**Current focus:** Phase 03 — Search
+**Current focus:** Phase 4 — Links
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
-Status: Phase complete — ready for verification
+Phase: 4 (Links) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-04-12
 
 Progress: [░░░░░░░░░░] 0%
@@ -75,6 +75,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-search P02 | 6min | 2 tasks | 6 files |
 | Phase 03-search P03 | 3min | 2 tasks | 7 files |
 | Phase 03-search P04 | 4min | 3 tasks | 9 files |
+| Phase 04-links P04-01 | 9min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,9 @@ Recent decisions affecting current work:
 - [Phase 03-search]: bind:this + export focus() pattern for SearchInput — parent-driven focus without reactive store coupling
 - [Phase 03-search]: scrollStore one-shot pattern: coordinator store decouples SearchPanel from EditorPane viewMap
 - [Phase 03-search]: inline doc.toString().indexOf() instead of SearchCursor — @codemirror/search not installed
+- [Phase 04-links]: OnceLock<Regex> for compiled wiki-link regex (no once_cell dep needed)
+- [Phase 04-links]: LinkGraph stores adjacency list (outgoing + incoming maps) in IndexCoordinator as Arc<Mutex<LinkGraph>>
+- [Phase 04-links]: Watcher receives Option<mpsc::Sender<IndexCmd>> for incremental link-graph updates (LINK-08)
 
 ### Pending Todos
 
@@ -146,6 +150,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T16:19:21.222Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-links/04-CONTEXT.md
+Last session: 2026-04-12T17:14:23.710Z
+Stopped at: Completed 04-links 04-01-PLAN.md
+Resume file: None
