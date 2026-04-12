@@ -597,22 +597,25 @@ export function listenFileChanged(
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **regex crate for wiki-link counting**
+1. **regex crate for wiki-link counting** (RESOLVED)
    - What we know: D-16 requires a simple regex scan `\[\[filename\]\]`; D-20's locked crate list doesn't include `regex`
    - What's unclear: Is D-20 an exhaustive list or a minimum list?
    - Recommendation: Treat D-20 as a minimum. Add `regex = "1"` — it is stable, has zero FFI, and is the idiomatic Rust choice. Flag in the plan for human acknowledgment.
+   - **Resolution:** D-20 is a minimum list. Add `regex = "1"` to Cargo.toml in Plan 01 alongside the other crate additions. The regex crate is standard Rust infrastructure with no external dependencies.
 
-2. **VaultState thread safety: Debouncer + Send**
+2. **VaultState thread safety: Debouncer + Send** (RESOLVED)
    - What we know: `Debouncer<RecommendedWatcher>` may not be `Send`; `Mutex<Option<Debouncer<...>>>` wrapping should handle this
    - What's unclear: Exact Send/Sync bounds — notify 8.x documentation doesn't explicitly state this
    - Recommendation: Confirm at compile time in Wave 1. If not Send, store the watcher in a separate `Arc<Mutex<>>` thread_local or use a oneshot channel to drop it.
+   - **Resolution:** Wrap the Debouncer in `Arc<Mutex<Option<Debouncer<...>>>>` inside VaultState. This is the standard Tauri pattern for non-Send resources. Plan 01 creates the skeleton with this wrapping; Plan 04 confirms at compile time and adjusts if needed.
 
-3. **Sidebar width persistence**
+3. **Sidebar width persistence** (RESOLVED)
    - What we know: D-02 says "persisted in app settings, not vault-specific"
    - What's unclear: "App settings" means Tauri's app-data directory JSON — no settings store exists yet in Phase 1
    - Recommendation: In Phase 2, persist sidebar width in a new `settings.json` alongside `recent-vaults.json` in app-data dir. Create a minimal `settings.rs` command.
+   - **Resolution:** Use `localStorage` in the Tauri WebView for Phase 2 sidebar width persistence. This is simpler and sufficient — the browser-side storage is scoped to the app and persists across restarts. A full `settings.json` in app-data dir is deferred to Phase 5 when multiple settings (theme, font, sort order) need centralized persistence.
 
 ---
 

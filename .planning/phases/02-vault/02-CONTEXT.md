@@ -58,8 +58,8 @@ User can navigate, create, rename, delete, and move files inside a real vault wi
 - **D-15:** **Delete moves to `.trash/` inside the vault** (Obsidian-compatible). `.trash/` is auto-created on first delete. Hidden in sidebar per D-04 (dot-directory rule). Confirmation dialog: "Datei in .trash/ verschieben?" with filename shown.
 - **D-16:** **Rename shows wiki-link count prompt.** When renaming a file: scan all `.md` files for `[[old-filename]]` patterns (simple regex, no full link parser — that's Phase 4). If count > 0: prompt "X Wiki-Links verweisen auf diese Datei. Trotzdem umbenennen? (Links werden in Phase 4 automatisch aktualisiert)". Phase 4 adds the actual rewrite logic.
 - **D-17:** **Drag-drop in sidebar = Move** (Obsidian-style). No copy on drag. Modifier-key copy is deferred to Phase 5. Move updates the file path on disk and any open tab's `filePath`.
-- **D-18:** **New file in selected folder.** Right-click → "Neue Datei" or toolbar button creates `Unbenannt.md` in the currently selected/focused folder. Filename is immediately inline-editable (focus + select-all). If no folder is selected: create in vault root. If `Unbenannt.md` already exists: auto-suffix (`Unbenannt 1.md`, `Unbenannt 2.md`, ...).
-- **D-19:** **New folder** via right-click → "Neuer Ordner" with inline rename. Same pattern as new file.
+- **D-18:** **New file in selected folder.** Right-click → "New file here" or toolbar button creates `Untitled.md` in the currently selected/focused folder. Filename is immediately inline-editable (focus + select-all). If no folder is selected: create in vault root. If `Untitled.md` already exists: auto-suffix (`Untitled 1.md`, `Untitled 2.md`, ...).
+- **D-19:** **New folder** via right-click → "New Folder" with inline rename. Same pattern as new file.
 
 ### Crate Additions
 - **D-20:** Phase 2 adds to `Cargo.toml`: `notify` (v7, file watching), `similar` (three-way merge/diff). No other new crates unless research identifies a specific need.
