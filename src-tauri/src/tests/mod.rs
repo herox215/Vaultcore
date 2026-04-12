@@ -5,3 +5,4 @@ mod vault_stats;
 mod tree;
 mod watcher;
 mod merge;
+mod indexer;

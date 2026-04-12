@@ -79,7 +79,8 @@ pub fn list_directory_impl(state: &VaultState, path: String) -> Result<Vec<DirEn
         let entry = entry_result.map_err(VaultError::Io)?;
         let name = entry.file_name().to_string_lossy().into_owned();
 
-        // D-04: exclude all dot-prefixed names (files and directories)
+        // D-04: exclude all dot-prefixed names (files and directories).
+        // This covers .obsidian, .vaultcore, .trash, .git, .DS_Store, etc.
         if name.starts_with('.') {
             continue;
         }
