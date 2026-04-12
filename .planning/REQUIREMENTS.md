@@ -71,7 +71,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **FILE-04**: Deleting a file moves it to `<vault>/.trash/` rather than permanently removing it
 - [x] **FILE-05**: User can move files by drag-and-drop
 - [x] **FILE-06**: Sorting options: name, modified date, created date; order is remembered
-- [ ] **FILE-07**: Folder expand/collapse state is persisted across sessions
+- [x] **FILE-07**: Folder expand/collapse state is persisted across sessions
 - [x] **FILE-08**: Symbolic links are displayed but not followed
 - [x] **FILE-09**: Non-UTF-8 files are displayed; attempting to open one shows a toast error and does not load them into the editor
 
@@ -100,7 +100,7 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **UI-03**: Sidebar can be collapsed/expanded with Cmd/Ctrl+\
 - [x] **UI-04**: Toast component supports error, clean-merge, and conflict variants, auto-dismisses after 5 s, and is manually dismissable
 - [x] **UI-05**: All MVP keyboard shortcuts from spec Section 13 are wired up
-- [ ] **UI-06**: All user-facing surfaces (errors, merge notices, rename prompt) use the unified toast / dialog components
+- [x] **UI-06**: All user-facing surfaces (errors, merge notices, rename prompt) use the unified toast / dialog components
 
 ### Errors
 
@@ -234,7 +234,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | FILE-04 | Phase 2 — Vault | Complete |
 | FILE-05 | Phase 2 — Vault | Complete |
 | FILE-06 | Phase 5 — Polish | Complete |
-| FILE-07 | Phase 5 — Polish | Pending |
+| FILE-07 | Phase 5 — Polish | Complete |
 | FILE-08 | Phase 2 — Vault | Complete |
 | FILE-09 | Phase 2 — Vault | Complete |
 | TAG-01 | Phase 5 — Polish | Complete |
@@ -254,7 +254,7 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | UI-03 | Phase 5 — Polish | Complete |
 | UI-04 | Phase 1 — Skeleton | Complete |
 | UI-05 | Phase 5 — Polish | Complete |
-| UI-06 | Phase 5 — Polish | Pending |
+| UI-06 | Phase 5 — Polish | Complete |
 | ERR-01 | Phase 1 — Skeleton | Complete |
 | ERR-02 | Phase 3 — Search | Complete |
 | ERR-03 | Phase 2 — Vault | Complete |

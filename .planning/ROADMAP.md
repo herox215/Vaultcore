@@ -19,7 +19,7 @@ VaultCore v0.1 delivers a local, Markdown-first note app built on Tauri 2 + Rust
 - [x] **Phase 2: Vault** - File browser tree, multi-tab, split-view, file watcher with three-way merge (completed 2026-04-12)
 - [x] **Phase 3: Search** - Tantivy full-text index with AND/OR/NOT, Quick Switcher, versioned rebuild (completed 2026-04-12)
 - [x] **Phase 4: Links** - Wiki-link parsing, 3-stage resolution, backlinks panel, rename-cascade (completed 2026-04-12)
-- [ ] **Phase 5: Polish** - Tags, themes, fonts, remaining shortcuts, editor quality-of-life
+- [x] **Phase 5: Polish** - Tags, themes, fonts, remaining shortcuts, editor quality-of-life (completed 2026-04-12)
 - [ ] **Phase 6: Benchmark & Release** - 100k-note benchmarks, 24h soak, cross-platform alpha builds
 
 ## Phase Details
@@ -129,7 +129,7 @@ Plans:
 - [x] 05-04-PLAN.md — Wave 4: Tag panel UI + third sidebar tab, nested tag tree, empty state, tag-click search wiring (TAG-03 UI, TAG-04)
 - [x] 05-05-PLAN.md — Wave 3: Fenced-code-block per-language highlighting via @codemirror/language-data + EDIT-08 10k-line regression test (EDIT-03, EDIT-08)
 - [x] 05-06-PLAN.md — Wave 5: Hash-verify merge path in autoSave — get_file_hash IPC, async-aware autoSaveExtension, EditorPane merge-on-mismatch branch reusing Phase 2 toasts (EDIT-10)
-- [ ] 05-07-PLAN.md — Wave 5: treeState.ts sort+persist library, SortMenu popover in sidebar topbar, TreeNode expand persistence, UI-06 regression audit (FILE-06, FILE-07, UI-06)
+- [x] 05-07-PLAN.md — Wave 5: treeState.ts sort+persist library, SortMenu popover in sidebar topbar, TreeNode expand persistence, UI-06 regression audit (FILE-06, FILE-07, UI-06)
 **UI hint**: yes
 
 ### Phase 6: Benchmark & Release
@@ -156,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Vault | 6/6 | Complete   | 2026-04-12 |
 | 3. Search | 4/4 | Complete   | 2026-04-12 |
 | 4. Links | 4/4 | Complete   | 2026-04-12 |
-| 5. Polish | 7/8 | In Progress|  |
+| 5. Polish | 8/8 | Complete   | 2026-04-12 |
 | 6. Benchmark & Release | 0/TBD | Not started | - |
 
 ## Coverage
