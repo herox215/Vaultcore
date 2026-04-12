@@ -33,16 +33,22 @@ export async function wikiLinkCompletionSource(
   const match = ctx.matchBefore(/\[\[([^\]]*)/);
   if (!match) return null;
 
-  // Don't trigger if there's already a ]] immediately after the cursor on the same line
-  // (prevents re-triggering inside completed [[links]])
+  // Detect if ]] already follows the cursor. closeBrackets() auto-inserts ]]
+  // after [[, producing [[|]] — we MUST still show suggestions in that state
+  // (that's the most common trigger path). Only bail when the user is clearly
+  // INSIDE a completed [[Foo]] (non-empty content between [[ and ]]).
   const line = ctx.state.doc.lineAt(ctx.pos);
   const posInLine = ctx.pos - line.from;
   const afterCursor = line.text.slice(posInLine);
-  if (afterCursor.startsWith("]]")) return null;
+  const hasClosingBrackets = afterCursor.startsWith("]]");
 
   // Don't trigger if the user is typing an alias (after |) — D-06
   const innerText = match.text.slice(2); // strip [[
   if (innerText.includes("|")) return null;
+
+  // Bail if cursor is inside a completed link: content already present AND ]] follows.
+  // Empty content ([[|]]) is the fresh-closeBrackets case — continue and show suggestions.
+  if (hasClosingBrackets && innerText.length > 0) return null;
 
   const query = innerText;
 
@@ -69,12 +75,16 @@ export async function wikiLinkCompletionSource(
     };
   }
 
+  // If closeBrackets already inserted ]] after the cursor, don't re-insert it
+  // in the apply string — otherwise we produce [[Filename]]]] (four brackets).
+  const closingSuffix = hasClosingBrackets ? "" : "]]";
+
   return {
     from: match.from + 2, // from is after the [[
     options: results.map((r) => ({
       label: basename(r.path),
       detail: r.path, // relative path shown in grey (D-04)
-      apply: `${basename(r.path)}]]`, // insert name + closing brackets
+      apply: `${basename(r.path)}${closingSuffix}`,
       type: "file",
       boost: r.score, // preserve nucleo ranking order
     })),
