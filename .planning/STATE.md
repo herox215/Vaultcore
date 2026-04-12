@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-polish-02-PLAN.md
-last_updated: "2026-04-12T21:09:44.177Z"
+stopped_at: Completed 05-polish-03-PLAN.md
+last_updated: "2026-04-12T21:20:37.111Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 23
-  percent: 85
+  completed_plans: 24
+  percent: 89
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 5 (Polish) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -82,6 +82,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-polish P00 | 18min | 3 tasks | 9 files |
 | Phase 05-polish P01 | 12min | 2 tasks | 10 files |
 | Phase 05-polish P02 | 11 | 2 tasks | 8 files |
+| Phase 05-polish P03 | 6min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -156,6 +157,8 @@ Recent decisions affecting current work:
 - [Phase 05-polish]: vi.stubGlobal('localStorage') required in tests — Tauri's --localstorage-file jsdom override removes clear/setItem/getItem from standard Storage interface
 - [Phase 05-polish]: themeStore/settingsStore use VALID_THEMES + BODY_STACKS/MONO_STACKS whitelists — values are mapped from safe tokens to CSS stacks, raw user input never written to DOM
 - [Phase 05-polish]: SettingsModal.svelte uses subscribe side-effects (not $derived) to stay compatible with D-06/RC-01 classic writable store pattern
+- [Phase 05-polish]: Central SHORTCUTS registry in shortcuts.ts: shift guard requires !shiftKey for non-shift bindings to prevent Cmd+Shift+N matching Cmd+N slot; next-tab exempted since shift picks direction
+- [Phase 05-polish]: createNewNote uses vault root (not selected folder) in MVP — D-12 vault root fallback; selected-folder targeting deferred
 
 ### Pending Todos
 
@@ -174,6 +177,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T21:09:44.175Z
-Stopped at: Completed 05-polish-02-PLAN.md
+Last session: 2026-04-12T21:20:37.108Z
+Stopped at: Completed 05-polish-03-PLAN.md
 Resume file: None
