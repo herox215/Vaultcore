@@ -7,7 +7,8 @@
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
-  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, createFile } from "../../ipc/commands";
+  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, createFile, getFileHash } from "../../ipc/commands";
+  import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
   import { scrollToMatch } from "./flashHighlight";
@@ -50,6 +51,14 @@
   // ERR-04: Disk-full toast debounce — max one toast per 30 seconds
   let lastDiskFullToast = 0;
   const DISK_FULL_DEBOUNCE_MS = 30_000;
+
+  // EDIT-10: Mirror editorStore.lastSavedHash for synchronous access inside onSave.
+  // Cannot call get(editorStore) from inside a setTimeout callback safely in Svelte 5,
+  // so we track it via subscribe (D-06/RC-01 classic writable store pattern).
+  let lastSavedHashSnapshot: string | null = null;
+  const unsubEditorHash = editorStore.subscribe((s) => {
+    lastSavedHashSnapshot = s.lastSavedHash;
+  });
 
   // Track the previously active tab for scroll save/restore
   let prevActiveTabId: string | null = null;
@@ -306,11 +315,58 @@
     // Initialize lastSavedContent snapshot for three-way merge base
     tabStore.setLastSavedContent(tab.id, content);
 
-    const onSave = async (text: string) => {
+    const onSave = async (text: string): Promise<void> => {
       // ERR-03: skip auto-save when vault is unreachable
       if (!vaultReachable) return;
 
       try {
+        // EDIT-10: Hash-verify branch — detect external modifications before writing.
+        let diskHash: string | null;
+        try {
+          diskHash = await getFileHash(tab.filePath);
+        } catch (e) {
+          // FileNotFound means the file was deleted externally → fall through to
+          // write (create path). Any other error re-throws via existing toast plumbing.
+          if (isVaultError(e) && e.kind === "FileNotFound") {
+            diskHash = null;
+          } else {
+            throw e;
+          }
+        }
+
+        // Snapshot the expected hash (what VaultCore last wrote / first read).
+        const expected = lastSavedHashSnapshot;
+
+        if (diskHash !== null && expected !== null && diskHash !== expected) {
+          // MISMATCH: external edit detected — route through three-way merge engine.
+          const baseContent = tab.lastSavedContent;
+          const result = await mergeExternalChange(tab.filePath, text, baseContent);
+
+          // Apply merged content back to the CM6 view for this tab.
+          const view = viewMap.get(tab.id);
+          if (view) {
+            view.dispatch({
+              changes: { from: 0, to: view.state.doc.length, insert: result.merged_content },
+            });
+          }
+
+          // Write the merged content to disk so hash converges.
+          const newHash = await writeFile(tab.filePath, result.merged_content);
+          editorStore.setLastSavedHash(newHash);
+          tabStore.setLastSavedContent(tab.id, result.merged_content);
+          tabStore.setDirty(tab.id, false);
+
+          // Toasts — reuse the exact Phase 2 German strings.
+          const filename = tab.filePath.split("/").pop() ?? tab.filePath;
+          if (result.outcome === "clean") {
+            toastStore.push({ variant: "clean-merge", message: "Externe Änderungen wurden eingebunden" });
+          } else {
+            toastStore.push({ variant: "conflict", message: `Konflikt in ${filename} – lokale Version behalten` });
+          }
+          return;
+        }
+
+        // Hashes match (or file missing → create-path) — safe to write directly.
         const hash = await writeFile(tab.filePath, text);
         tabStore.setDirty(tab.id, false);
         tabStore.setLastSavedContent(tab.id, text);
@@ -486,6 +542,7 @@
     unsubScroll();
     unsubTabReload();
     unsubVaultPath();
+    unsubEditorHash();
     unlistenFileChange?.();
     unlistenVaultStatus?.();
     for (const view of viewMap.values()) {
