@@ -66,10 +66,10 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 ### Files
 
 - [x] **FILE-01**: The sidebar shows a folder/file tree for the open vault with lazy loading of subtrees
-- [ ] **FILE-02**: User can create a new file from the file browser
-- [ ] **FILE-03**: User can rename files (triggers the LINK-09 cascade when links are affected)
-- [ ] **FILE-04**: Deleting a file moves it to `<vault>/.trash/` rather than permanently removing it
-- [ ] **FILE-05**: User can move files by drag-and-drop
+- [x] **FILE-02**: User can create a new file from the file browser
+- [x] **FILE-03**: User can rename files (triggers the LINK-09 cascade when links are affected)
+- [x] **FILE-04**: Deleting a file moves it to `<vault>/.trash/` rather than permanently removing it
+- [x] **FILE-05**: User can move files by drag-and-drop
 - [ ] **FILE-06**: Sorting options: name, modified date, created date; order is remembered
 - [ ] **FILE-07**: Folder expand/collapse state is persisted across sessions
 - [x] **FILE-08**: Symbolic links are displayed but not followed
@@ -229,10 +229,10 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | LINK-08 | Phase 4 — Links | Pending |
 | LINK-09 | Phase 4 — Links | Pending |
 | FILE-01 | Phase 2 — Vault | Complete |
-| FILE-02 | Phase 2 — Vault | Pending |
-| FILE-03 | Phase 2 — Vault | Pending |
-| FILE-04 | Phase 2 — Vault | Pending |
-| FILE-05 | Phase 2 — Vault | Pending |
+| FILE-02 | Phase 2 — Vault | Complete |
+| FILE-03 | Phase 2 — Vault | Complete |
+| FILE-04 | Phase 2 — Vault | Complete |
+| FILE-05 | Phase 2 — Vault | Complete |
 | FILE-06 | Phase 5 — Polish | Pending |
 | FILE-07 | Phase 5 — Polish | Pending |
 | FILE-08 | Phase 2 — Vault | Complete |
