@@ -18,6 +18,7 @@
 //   allow-list `time`.
 
 use crate::error::VaultError;
+use crate::watcher;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -188,6 +189,28 @@ pub async fn open_vault(
             last_emit = Instant::now();
         }
     }
+
+    // --- Spawn file watcher (Plan 04) ---
+    // Drop any previous watcher before starting a new one (vault re-open).
+    {
+        let mut handle = state.watcher_handle.lock().map_err(|_| VaultError::Io(
+            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        ))?;
+        *handle = None; // drops old debouncer, stops previous watch
+    }
+
+    let debouncer = watcher::spawn_watcher(
+        app.clone(),
+        canonical.clone(),
+        state.write_ignore.clone(),
+    );
+    *state.watcher_handle.lock().map_err(|_| VaultError::Io(
+        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+    ))? = Some(debouncer);
+
+    *state.vault_reachable.lock().map_err(|_| VaultError::Io(
+        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+    ))? = true;
 
     Ok(VaultInfo {
         path: canonical_str,
