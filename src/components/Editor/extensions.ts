@@ -18,6 +18,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap } from "@codemirror/
 import { wikiLinkCompletionSource } from "./wikiLinkAutocomplete";
 import { markdown } from "@codemirror/lang-markdown";
 import { GFM } from "@lezer/markdown";
+import { languages } from "@codemirror/language-data";
 
 import { vaultKeymap } from "./keymap";
 import { markdownTheme, markdownHighlightStyle } from "./theme";
@@ -47,7 +48,7 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
       indentWithTab,
       ...vaultKeymap,
     ]),
-    markdown({ extensions: [GFM] }),
+    markdown({ extensions: [GFM], codeLanguages: languages }),
     syntaxHighlighting(markdownHighlightStyle),
     markdownTheme,
     autoSaveExtension(onSave),
