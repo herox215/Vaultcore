@@ -89,9 +89,9 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 - [x] **SYNC-03**: Bulk external changes are debounced over a 200 ms window and processed as a batch
 - [x] **SYNC-04**: Batch parsing is parallelized with rayon; the full batch produces a single Tantivy commit
 - [x] **SYNC-05**: Batches of > 500 files trigger the progress UI
-- [ ] **SYNC-06**: A three-way merge is used when an open file is modified externally; conflict detection is based on CM6 `docChanged`, not cursor position
-- [ ] **SYNC-07**: On true conflict at the same location, the local editor state wins
-- [ ] **SYNC-08**: Clean merges surface a toast "Externe Änderungen wurden eingebunden"; lossy conflicts surface "Konflikt in <file> – lokale Version behalten"
+- [x] **SYNC-06**: A three-way merge is used when an open file is modified externally; conflict detection is based on CM6 `docChanged`, not cursor position
+- [x] **SYNC-07**: On true conflict at the same location, the local editor state wins
+- [x] **SYNC-08**: Clean merges surface a toast "Externe Änderungen wurden eingebunden"; lossy conflicts surface "Konflikt in <file> – lokale Version behalten"
 
 ### UI / UX
 
@@ -106,8 +106,8 @@ Requirements for MVP v0.1. Each maps to a roadmap phase. Sourced from `VaultCore
 
 - [x] **ERR-01**: `VaultError` enum exists in Rust with all variants from spec Section 5 (FileNotFound, PermissionDenied, DiskFull, IndexCorrupt, VaultUnavailable, MergeConflict, InvalidEncoding, Io)
 - [ ] **ERR-02**: Index-corrupt detection triggers an automatic rebuild with progress UI
-- [ ] **ERR-03**: If the vault folder becomes unreachable, the app stays open but disables editing and shows a toast
-- [ ] **ERR-04**: Disk-full failures during auto-save surface a toast but do not lose editor content
+- [x] **ERR-03**: If the vault folder becomes unreachable, the app stays open but disables editing and shows a toast
+- [x] **ERR-04**: Disk-full failures during auto-save surface a toast but do not lose editor content
 - [ ] **ERR-05**: Crash recovery loses at most 2 s of unsaved content (matches auto-save cadence)
 
 ### Performance
@@ -246,9 +246,9 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | SYNC-03 | Phase 2 — Vault | Complete |
 | SYNC-04 | Phase 2 — Vault | Complete |
 | SYNC-05 | Phase 2 — Vault | Complete |
-| SYNC-06 | Phase 2 — Vault | Pending |
-| SYNC-07 | Phase 2 — Vault | Pending |
-| SYNC-08 | Phase 2 — Vault | Pending |
+| SYNC-06 | Phase 2 — Vault | Complete |
+| SYNC-07 | Phase 2 — Vault | Complete |
+| SYNC-08 | Phase 2 — Vault | Complete |
 | UI-01 | Phase 5 — Polish | Pending |
 | UI-02 | Phase 5 — Polish | Pending |
 | UI-03 | Phase 5 — Polish | Pending |
@@ -257,8 +257,8 @@ Populated by the roadmapper 2026-04-11 against ROADMAP.md.
 | UI-06 | Phase 5 — Polish | Pending |
 | ERR-01 | Phase 1 — Skeleton | Complete |
 | ERR-02 | Phase 3 — Search | Pending |
-| ERR-03 | Phase 2 — Vault | Pending |
-| ERR-04 | Phase 2 — Vault | Pending |
+| ERR-03 | Phase 2 — Vault | Complete |
+| ERR-04 | Phase 2 — Vault | Complete |
 | ERR-05 | Phase 6 — Benchmark & Release | Pending |
 | PERF-01 | Phase 6 — Benchmark & Release | Pending |
 | PERF-02 | Phase 6 — Benchmark & Release | Pending |
