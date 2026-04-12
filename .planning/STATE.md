@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-links 04-02-PLAN.md
-last_updated: "2026-04-12T17:18:05.939Z"
+stopped_at: Completed 04-links 04-03-PLAN.md
+last_updated: "2026-04-12T17:20:58.422Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 19
-  completed_plans: 17
-  percent: 89
+  completed_plans: 18
+  percent: 95
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-11)
 ## Current Position
 
 Phase: 4 (Links) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-04-12
 
@@ -77,6 +77,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-search P04 | 4min | 3 tasks | 9 files |
 | Phase 04-links P04-01 | 9min | 2 tasks | 11 files |
 | Phase 04-links P04-02 | 7 | 2 tasks | 3 files |
+| Phase 04-links P03 | 68s | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,8 @@ Recent decisions affecting current work:
 - [Phase 04-links]: Watcher receives Option<mpsc::Sender<IndexCmd>> for incremental link-graph updates (LINK-08)
 - [Phase 04-links]: Module-level resolvedLinks Map in wikiLink.ts — zero-IPC decoration and click, populated once per vault open via setResolvedLinks(map)
 - [Phase 04-links]: CustomEvent('wiki-link-click') dispatched on EditorView DOM — decouples CM6 extension from Svelte stores
+- [Phase 04-links]: filter:false in wikiLinkCompletionSource — nucleo already ranks results; CM6 re-filtering would break nucleo ordering
+- [Phase 04-links]: autocompletion() override replaces default CM6 sources — closeBrackets is a separate extension, not a CompletionSource, so no conflict
 
 ### Pending Todos
 
@@ -153,6 +156,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T17:18:05.936Z
-Stopped at: Completed 04-links 04-02-PLAN.md
+Last session: 2026-04-12T17:20:58.420Z
+Stopped at: Completed 04-links 04-03-PLAN.md
 Resume file: None
