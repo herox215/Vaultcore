@@ -306,6 +306,16 @@ export const tabStore = {
   },
 
   /**
+   * Reorder the tab IDs in a specific pane (used by drag-to-reorder in TabBar).
+   */
+  _reorderPane(pane: "left" | "right", newIds: string[]): void {
+    _store.update((state) => ({
+      ...state,
+      splitState: { ...state.splitState, [pane]: newIds },
+    }));
+  },
+
+  /**
    * Test helper — resets to initial state.
    */
   _reset(): void {
