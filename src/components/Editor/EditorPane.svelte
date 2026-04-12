@@ -12,6 +12,7 @@
   import { buildExtensions } from "./extensions";
   import { scrollToMatch } from "./flashHighlight";
   import { scrollStore } from "../../store/scrollStore";
+  import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -129,6 +130,10 @@
           tabStore.openTab(newAbsPath);
           // Refresh map so the new file now resolves in future decorations
           await reloadResolvedLinks();
+          // Signal sidebar to re-fetch its tree — the watcher suppresses
+          // backend-initiated writes via write_ignore, so the tree won't
+          // otherwise learn that this file exists.
+          treeRefreshStore.requestRefresh();
         })
         .catch(() =>
           toastStore.push({
