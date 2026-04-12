@@ -20,6 +20,7 @@ use crate::VaultState;
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::Utf32Str;
+use rayon::prelude::*;
 use regex::Regex;
 
 // ── Result types ───────────────────────────────────────────────────────────────
@@ -215,91 +216,21 @@ pub async fn update_links_after_rename(
         VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
     })?;
 
-    // Get the list of source files from the link graph's incoming map.
-    let sources: Vec<String> = {
-        let (lg_arc,) = {
-            let guard = state
-                .index_coordinator
-                .lock()
-                .map_err(|_| VaultError::IndexCorrupt)?;
-            match guard.as_ref() {
-                Some(c) => (c.link_graph(),),
-                None => return Ok(RenameResult { updated_files: 0, updated_links: 0, failed_files: vec![] }),
-            }
-        };
-        let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        lg.incoming_for(&old_path).cloned().unwrap_or_default()
-    };
-
-    let mut updated_files = 0usize;
-    let mut updated_links = 0usize;
-    let mut failed_files: Vec<String> = Vec::new();
-
-    for source_rel in &sources {
-        let abs_path = vault_root.join(source_rel);
-
-        // T-04-01: vault-scope guard
-        let canonical = match abs_path.canonicalize() {
-            Ok(c) => c,
-            Err(_) => {
-                // Try parent for new files that don't exist yet
-                match abs_path.parent().and_then(|p| p.canonicalize().ok()) {
-                    Some(parent) if parent.starts_with(&vault_root) => abs_path.clone(),
-                    _ => {
-                        failed_files.push(source_rel.clone());
-                        continue;
-                    }
-                }
-            }
-        };
-        if !canonical.starts_with(&vault_root) {
-            failed_files.push(source_rel.clone());
-            continue;
-        }
-
-        let content = match std::fs::read_to_string(&abs_path) {
-            Ok(c) => c,
-            Err(_) => {
-                failed_files.push(source_rel.clone());
-                continue;
-            }
-        };
-
-        let mut link_count = 0usize;
-        let new_content = re.replace_all(&content, |caps: &regex::Captures| {
-            link_count += 1;
-            let alias_part = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            format!("[[{}{}]]", new_stem, alias_part)
-        }).into_owned();
-
-        if link_count == 0 {
-            continue; // Nothing to rewrite in this file
-        }
-
-        // T-04-02: record in write_ignore before writing
-        {
-            let mut ignore = state.write_ignore.lock().map_err(|_| VaultError::IndexCorrupt)?;
-            ignore.record(abs_path.clone());
-        }
-
-        if let Err(_) = std::fs::write(&abs_path, &new_content) {
-            failed_files.push(source_rel.clone());
-            continue;
-        }
-
-        updated_files += 1;
-        updated_links += link_count;
-    }
-
-    // Update link graph for each successfully rewritten file.
-    let (lg_arc, fi_arc) = {
+    // BUG-04.1 FIX: Iterate ALL vault files (parallel with rayon) instead of
+    // reading lg.incoming_for(&old_path). The link graph may already be out of
+    // sync because the watcher dispatched RemoveLinks(old_path) after the disk
+    // rename but before this function runs — incoming_for would return empty.
+    //
+    // This is also the RESEARCH.md Pattern 6 design (rayon parallel rewrite)
+    // which the original implementation silently substituted with a graph lookup.
+    let (fi_arc, lg_arc) = {
         let guard = state
             .index_coordinator
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
         match guard.as_ref() {
-            Some(c) => (c.link_graph(), c.file_index()),
-            None => return Ok(RenameResult { updated_files, updated_links, failed_files }),
+            Some(c) => (c.file_index(), c.link_graph()),
+            None => return Ok(RenameResult { updated_files: 0, updated_links: 0, failed_files: vec![] }),
         }
     };
 
@@ -308,12 +239,93 @@ pub async fn update_links_after_rename(
         fi.all_relative_paths()
     };
 
-    {
-        let mut lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        for source_rel in &sources {
-            if failed_files.contains(source_rel) {
+    /// Result of scanning one file: either it matched (carry the rewrite), errored, or was skipped.
+    enum ScanOutcome {
+        Match { link_count: usize, new_content: String },
+        Skip,
+        Error,
+    }
+
+    // Parallel regex scan + rewrite produced in a single pass.
+    // write_ignore requires mutex access, so writes happen sequentially in the second pass.
+    let rewrite_results: Vec<(String, ScanOutcome)> = all_paths
+        .par_iter()
+        .filter(|p| p.ends_with(".md") && p.as_str() != new_path)
+        .map(|source_rel| -> (String, ScanOutcome) {
+            let abs_path = vault_root.join(source_rel);
+
+            // T-04-01: vault-scope guard
+            let canonical = match abs_path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => return (source_rel.clone(), ScanOutcome::Error),
+            };
+            if !canonical.starts_with(&vault_root) {
+                return (source_rel.clone(), ScanOutcome::Error);
+            }
+
+            let content = match std::fs::read_to_string(&abs_path) {
+                Ok(c) => c,
+                Err(_) => return (source_rel.clone(), ScanOutcome::Error),
+            };
+
+            // Fast-path: skip files that don't mention the old stem at all.
+            if !content.contains(old_stem) {
+                return (source_rel.clone(), ScanOutcome::Skip);
+            }
+
+            let mut link_count = 0usize;
+            let new_content = re.replace_all(&content, |caps: &regex::Captures| {
+                link_count += 1;
+                let alias_part = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                format!("[[{}{}]]", new_stem, alias_part)
+            }).into_owned();
+
+            if link_count == 0 {
+                return (source_rel.clone(), ScanOutcome::Skip);
+            }
+
+            (source_rel.clone(), ScanOutcome::Match { link_count, new_content })
+        })
+        .collect();
+
+    // Second pass (sequential): record write_ignore then write for each match.
+    let mut updated_files = 0usize;
+    let mut updated_links = 0usize;
+    let mut failed_files: Vec<String> = Vec::new();
+    let mut rewritten_sources: Vec<String> = Vec::new();
+
+    for (source_rel, outcome) in rewrite_results {
+        let (link_count, new_content) = match outcome {
+            ScanOutcome::Error => {
+                failed_files.push(source_rel);
                 continue;
             }
+            ScanOutcome::Skip => continue,
+            ScanOutcome::Match { link_count, new_content } => (link_count, new_content),
+        };
+
+        let abs_path = vault_root.join(&source_rel);
+
+        // T-04-02: record in write_ignore before writing
+        {
+            let mut ignore = state.write_ignore.lock().map_err(|_| VaultError::IndexCorrupt)?;
+            ignore.record(abs_path.clone());
+        }
+
+        if std::fs::write(&abs_path, &new_content).is_err() {
+            failed_files.push(source_rel);
+            continue;
+        }
+
+        updated_files += 1;
+        updated_links += link_count;
+        rewritten_sources.push(source_rel);
+    }
+
+    // Update link graph for each successfully rewritten file + the renamed file.
+    {
+        let mut lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        for source_rel in &rewritten_sources {
             let abs_path = vault_root.join(source_rel);
             if let Ok(content) = std::fs::read_to_string(&abs_path) {
                 let links = link_graph::extract_links(&content);
