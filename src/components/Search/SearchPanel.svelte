@@ -86,11 +86,13 @@
     </button>
   </header>
 
-  <!-- Search input -->
+  <!-- Search input — externalValue syncs programmatic query changes
+       (e.g. TagsPanel tag-click → searchStore.runSearch). -->
   <SearchInput
     bind:this={inputRef}
     onSearch={handleSearch}
     disabled={$searchStore.isRebuilding}
+    externalValue={$searchStore.query}
   />
 
   <!-- Rebuild overlay or results -->

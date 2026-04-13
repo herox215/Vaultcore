@@ -13,6 +13,7 @@
 
 import { writable } from "svelte/store";
 import type { SearchResult } from "../types/search";
+import { searchFulltext } from "../ipc/commands";
 
 export interface SearchStoreState {
   query: string;
@@ -82,6 +83,35 @@ function createSearchStore() {
         totalFiles: 0,
         query: "",
       })),
+
+    /**
+     * Set the query AND execute the full-text search, populating results.
+     *
+     * Used by the Tags panel (tag-click) and any other caller that needs to
+     * programmatically run a search. Equivalent to typing `query` into the
+     * search box, but works from outside the SearchPanel component.
+     */
+    runSearch: async (query: string): Promise<void> => {
+      update((s) => ({ ...s, query, activeTab: "search" }));
+      if (!query.trim()) {
+        update((s) => ({ ...s, results: [], totalMatches: 0, totalFiles: 0 }));
+        return;
+      }
+      update((s) => ({ ...s, isSearching: true }));
+      try {
+        const results = await searchFulltext(query, 100);
+        const uniqueFileCount = new Set(results.map((r) => r.path)).size;
+        update((s) => ({
+          ...s,
+          results,
+          totalMatches: results.length,
+          totalFiles: uniqueFileCount,
+          isSearching: false,
+        }));
+      } catch {
+        update((s) => ({ ...s, isSearching: false }));
+      }
+    },
 
     /** Full reset to initial state (vault close / new vault open). */
     reset: () => set({ ...initial }),

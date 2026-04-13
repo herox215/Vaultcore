@@ -4,13 +4,29 @@
   interface Props {
     onSearch: (query: string) => void;
     disabled: boolean;
+    /**
+     * Optional external value — when provided and it differs from the current
+     * input, the input updates to match. Lets programmatic callers
+     * (TagsPanel → searchStore.runSearch) drive the input without relying on
+     * the user typing.
+     */
+    externalValue?: string;
   }
 
-  let { onSearch, disabled }: Props = $props();
+  let { onSearch, disabled, externalValue }: Props = $props();
 
   let value = $state("");
   let inputEl: HTMLInputElement | undefined = $state();
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // BUG-05.1: sync the input when an external caller (e.g. TagsPanel tag-click)
+  // updates the searchStore query. Skip if the external value matches what the
+  // user already typed to avoid clobbering mid-keystroke.
+  $effect(() => {
+    if (externalValue !== undefined && externalValue !== value) {
+      value = externalValue;
+    }
+  });
 
   function handleInput(e: Event) {
     const target = e.target as HTMLInputElement;
