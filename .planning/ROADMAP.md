@@ -152,7 +152,16 @@ Plans:
   3. Alpha builds are produced for macOS (Intel + Apple Silicon), Windows 10/11, and Linux (Ubuntu 22.04+ and Fedora 38+), all of which boot, open a vault, and search successfully on their respective platforms
   4. All unit tests (parser, indexer, link graph, merge engine, write-ignore-list), the 100k-vault integration/benchmark gate, and frontend component tests (editor, sidebar, welcome screen) are green in CI
   5. A security audit of the built binaries confirms zero network syscalls, zero telemetry code, and that nothing under the vault ever leaves the local filesystem
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+- [ ] 06-01-PLAN.md — Wave 1: Test-Vault-Generator Rust binary (gen-vault), Markov-chain content on bilingual wordlist, edge-case injection (non-UTF-8, symlinks, .obsidian/, unresolved links, Index.md collisions, 10k-line cohort), deterministic seed, smoke tests (D-01..D-08)
+- [ ] 06-02-PLAN.md — Wave 2: Rust criterion benchmark harness for PERF-01/02/05/07/08/09/10, env-var protocol (VAULTCORE_BENCH_VAULT/MINI), mini-mode via gen-vault, four bench files with stable group names
+- [ ] 06-03-PLAN.md — Wave 2: Frontend Vitest perf harness for PERF-03/04/06/11/12, separate vitest.perf.config.ts, BenchResult JSON schema, jsdom-proxy RAM measurement with documented caveat
+- [ ] 06-04-PLAN.md — Wave 2: CI pipeline skeleton — ci.yml (PR+nightly), benchmarks.yml (dispatch+weekly), release.yml (tag-triggered Tauri-bundle for 5 platforms), composite gen-vault action with D-07 cache key
+- [ ] 06-05-PLAN.md — Wave 1: Security audit toolchain — grep-telemetry.sh (static), capability-review.sh (Tauri permissions), network-trace.sh (strace runtime), security-audit.yml workflow, audit-report template (SEC-01/02/03)
+- [ ] 06-06-PLAN.md — Wave 3: 24h soak driver (xdotool + sampler.py + report), crash-recovery.sh E2E probe, Rust deterministic recovery unit tests, soak.yml workflow, human-verify checkpoint for report review (PERF-13, ERR-05)
+- [ ] 06-07-PLAN.md — Wave 3: Perf regression gate — gate.ts reads both harness outputs, hard-budget comparison against spec §7, Obsidian-vs-VaultCore comparison table (CONTEXT.md §Specific Ideas), perf-gate job in benchmarks.yml
+- [ ] 06-08-PLAN.md — Wave 4: Alpha release finalization — fill evidence artifacts (security/perf/soak), ALPHA-RELEASE-CHECKLIST, CHANGELOG + README, tag v0.1.0-alpha.1, human-action checkpoint for release.yml monitoring and platform smoke tests
 **UI hint**: no
 
 ## Progress
