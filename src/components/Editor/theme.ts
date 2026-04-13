@@ -53,11 +53,24 @@ export const markdownTheme = EditorView.theme({
     fontSize: "var(--vc-font-size)",
     fontFamily: "var(--vc-font-body)",
   },
-  ".cm-scroller": { overflow: "auto" },
+  // BUG-05.1: .cm-scroller is a flex container in CM6 6.x with
+  // justify-content: flex-start by default — that keeps .cm-content
+  // pinned to the left even though it has margin:0 auto and a max-width.
+  // justifyContent: "center" centers the flex child horizontally so
+  // whitespace sits on both sides equally.
+  ".cm-scroller": {
+    overflow: "auto",
+    justifyContent: "center",
+  },
   ".cm-content": {
     padding: "16px",
     maxWidth: "720px",
+    // Keep margin auto as a belt-and-suspenders safeguard for
+    // embedders that override justify-content on .cm-scroller.
     margin: "0 auto",
+    // flex: "0 1 720px" makes the content shrink down past 720px on
+    // narrow viewports (no horizontal scroll) while honoring the cap.
+    flex: "0 1 720px",
     caretColor: "var(--color-accent)",
   },
   ".cm-line": { lineHeight: "1.6" },
