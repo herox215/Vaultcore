@@ -71,6 +71,22 @@ pub fn extract_inline_tags(content: &str) -> Vec<String> {
     result
 }
 
+/// Extract EVERY occurrence of an inline tag (duplicates preserved, lowercased).
+///
+/// Used by `TagIndex::update_file` to compute total-occurrence counts — user UAT
+/// feedback (05.1): `#test` written 3× in one file should surface as `test (3)`,
+/// not `test (1)`. The per-file dedup form stays available via `extract_inline_tags`
+/// for callers that need it.
+pub fn extract_inline_tag_occurrences(content: &str) -> Vec<String> {
+    if !content.contains('#') {
+        return Vec::new();
+    }
+    let re = inline_tag_regex();
+    re.captures_iter(content)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_lowercase()))
+        .collect()
+}
+
 // ── extract_yaml_tags ──────────────────────────────────────────────────────────
 
 /// Extract YAML frontmatter `tags` (list OR scalar).
@@ -132,20 +148,19 @@ impl TagIndex {
     /// Update (or insert) all tags for `rel_path`.
     ///
     /// Idempotent: calling twice for the same file replaces the previous entries.
-    /// Merges inline tags + YAML frontmatter tags; deduplicates per-file.
+    /// BUG-05.1 FIXES:
+    /// - YAML frontmatter tag extraction (TAG-02) descoped per user UAT feedback.
+    ///   Only inline `#tag` / `#parent/child` tags are collected. `extract_yaml_tags`
+    ///   remains in the module as dead code for future re-enablement.
+    /// - Counts are now total-occurrence (not per-file unique). Writing `#test` three
+    ///   times in one file yields `test (3)` in the tag panel — matches user expectation.
     pub fn update_file(&mut self, rel_path: &str, content: &str) {
         // Clear previous state for this file so updates are idempotent.
         self.remove_file(rel_path);
 
-        // Collect inline tags first, then add YAML tags (skip duplicates).
-        let mut all_tags: Vec<String> = extract_inline_tags(content);
-        for yt in extract_yaml_tags(content) {
-            if !all_tags.contains(&yt) {
-                all_tags.push(yt);
-            }
-        }
+        let all_tags: Vec<String> = extract_inline_tag_occurrences(content);
 
-        // Record one occurrence per tag per file.
+        // Record one occurrence per tag match (duplicates preserved for count).
         for t in &all_tags {
             self.occurrences
                 .entry(t.clone())
