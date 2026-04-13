@@ -150,7 +150,9 @@
   .vc-settings-modal {
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
-    width: 520px; max-height: 80vh;
+    /* BUG-05.1: previously flat (min-height not set), sections crowded.
+       Give the modal a generous default size so all three sections breathe. */
+    width: 600px; min-height: 560px; max-height: 85vh;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
@@ -160,8 +162,8 @@
     z-index: 301;
   }
   .vc-settings-header {
-    height: 32px; flex-shrink: 0;
-    padding: 0 16px;
+    height: 48px; flex-shrink: 0;
+    padding: 0 24px;
     display: flex; align-items: center; justify-content: space-between;
     border-bottom: 1px solid var(--color-border);
   }

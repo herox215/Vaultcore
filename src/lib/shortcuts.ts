@@ -70,6 +70,16 @@ export const SHORTCUTS: readonly Shortcut[] = [
     handler: (ctx) => { ctx.toggleSidebar(); },
   },
   {
+    // BUG-05.1 alias: Cmd/Ctrl+\ needs AltGr+ß on German QWERTZ and isn't
+    // practical. Ctrl+Shift+E mirrors VSCode's "Explorer toggle" and is
+    // ergonomic on every layout. Displayed under the same "Seitenleiste"
+    // action so users see both bindings in the Settings table.
+    id: "toggle-sidebar-alt",
+    keys: { meta: true, shift: true, key: "e" },
+    label: "Seitenleiste ein-/ausblenden (Alternative)",
+    handler: (ctx) => { ctx.toggleSidebar(); },
+  },
+  {
     id: "next-tab",
     keys: { meta: true, key: "Tab" },
     label: "Nächster Tab",
