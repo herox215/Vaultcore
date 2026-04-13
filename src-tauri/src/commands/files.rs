@@ -21,6 +21,7 @@
 
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
+use crate::indexer::IndexCmd;
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -116,9 +117,62 @@ pub async fn write_file(
         std::io::ErrorKind::StorageFull => VaultError::DiskFull,
         _ => VaultError::Io(e),
     })?;
+
+    // BUG-05.1 FIX: the watcher would normally dispatch UpdateLinks/UpdateTags
+    // for any modify event, but write_ignore suppresses self-writes to avoid
+    // double-indexing. That leaves the in-memory LinkGraph and TagIndex stale
+    // after every auto-save, so user observes stale tag counts, broken
+    // backlinks, and dangling unresolved-link colors until cold restart.
+    //
+    // Dispatch the updates directly here so the in-memory indexes stay in sync.
+    dispatch_index_updates(&state, &final_path, &content).await;
+
     // Return hash so the frontend can track the last-known disk state
     // (EDIT-10 groundwork — Phase 5 will compare against this).
     Ok(hash_bytes(bytes))
+}
+
+/// Dispatch IndexCmd::UpdateLinks and IndexCmd::UpdateTags for a path we just
+/// wrote from the backend. Called from write_file because write_ignore
+/// suppresses the natural watcher-driven dispatch.
+///
+/// Best-effort: if the IndexCoordinator is not yet initialized (vault not
+/// open, or during boot) or the channel is full, we silently drop — the
+/// next cold-start rebuild will re-populate correctly.
+async fn dispatch_index_updates(state: &VaultState, abs_path: &Path, content: &str) {
+    // Get vault root so we can compute a vault-relative path.
+    let vault_root = {
+        let Ok(guard) = state.current_vault.lock() else { return };
+        match guard.as_ref() {
+            Some(p) => p.clone(),
+            None => return,
+        }
+    };
+
+    let Ok(rel) = abs_path.strip_prefix(&vault_root) else { return };
+    let rel_path = rel.to_string_lossy().replace('\\', "/");
+
+    // Clone the sender Arc — do NOT hold the coordinator lock across .await.
+    let tx = {
+        let Ok(guard) = state.index_coordinator.lock() else { return };
+        match guard.as_ref() {
+            Some(c) => c.tx.clone(),
+            None => return,
+        }
+    };
+
+    let _ = tx
+        .send(IndexCmd::UpdateLinks {
+            rel_path: rel_path.clone(),
+            content: content.to_string(),
+        })
+        .await;
+    let _ = tx
+        .send(IndexCmd::UpdateTags {
+            rel_path,
+            content: content.to_string(),
+        })
+        .await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

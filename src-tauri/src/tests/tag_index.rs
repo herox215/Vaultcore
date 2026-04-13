@@ -101,13 +101,13 @@ fn test_tag_index_update_remove() {
     assert!(tags.is_empty());
 }
 
-// ── Test 11: TagIndex alpha sort + count; per-file uniqueness ─────────────────
+// ── Test 11: TagIndex alpha sort + total-occurrence count (BUG-05.1 semantics) ─
 
 #[test]
 fn test_tag_index_alpha_sort_and_count() {
     let mut idx = TagIndex::new();
 
-    // File 1: #rust (same tag twice inline — should count once per file)
+    // File 1: #rust twice inline — counts TWICE (total occurrences, not per-file)
     idx.update_file("a.md", "#rust is cool, I love #rust");
     // File 2: #rust and #python
     idx.update_file("b.md", "#python is great #rust too");
@@ -120,10 +120,10 @@ fn test_tag_index_alpha_sort_and_count() {
     assert_eq!(tags[0].tag, "python");
     assert_eq!(tags[1].tag, "rust");
 
-    // #python: 2 files (b.md, c.md)
+    // #python: 1 (b.md) + 1 (c.md) = 2 total
     assert_eq!(tags[0].count, 2);
-    // #rust: 2 files (a.md, b.md) — a.md mentioned it twice but counts once
-    assert_eq!(tags[1].count, 2);
+    // #rust: 2 (a.md) + 1 (b.md) = 3 total (matches user-facing #test(3) expectation)
+    assert_eq!(tags[1].count, 3);
 }
 
 // ── Tests 12–15: Task 2 — watcher dispatch + serde shape ──────────────────────
