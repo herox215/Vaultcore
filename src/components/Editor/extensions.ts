@@ -25,6 +25,7 @@ import { markdownTheme, markdownHighlightStyle } from "./theme";
 import { autoSaveExtension } from "./autoSave";
 import { flashField } from "./flashHighlight";
 import { wikiLinkPlugin } from "./wikiLink";
+import { livePreviewPlugin } from "./livePreview";
 
 export function buildExtensions(onSave: (text: string) => void): Extension[] {
   return [
@@ -54,5 +55,6 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
     autoSaveExtension(onSave),
     flashField,
     wikiLinkPlugin,
+    livePreviewPlugin,
   ];
 }

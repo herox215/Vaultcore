@@ -15,6 +15,8 @@ import { RangeSetBuilder } from "@codemirror/state";
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 
+const HIDE = Decoration.replace({});
+
 // ── Wiki-link regex ────────────────────────────────────────────────────────────
 
 /** Matches [[target]] and [[target|alias]]. Global flag — reset lastIndex before use. */
@@ -86,47 +88,113 @@ interface WikiMatch {
   to: number;
   target: string;
   resolved: boolean;
+  aliasStart: number | null;
+  aliasEnd: number | null;
+}
+
+interface DecoratedRange {
+  from: number;
+  to: number;
+  decoration: Decoration;
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const text = view.state.doc.toString();
+  const head = view.state.selection.main.head;
 
-  // Collect all matches first, then sort by from-position.
-  // RangeSetBuilder panics if ranges are added out of order.
   const matches: WikiMatch[] = [];
 
   WIKI_LINK_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = WIKI_LINK_RE.exec(text)) !== null) {
-    const rawTarget: string | undefined = m[1]; // group 1: target (before | or end)
-    if (rawTarget === undefined) continue;       // regex group 1 is non-optional but guard for strict TS
+    const rawTarget: string | undefined = m[1];
+    if (rawTarget === undefined) continue;
 
     const from = m.index;
     const to = from + m[0].length;
 
-    // Skip links inside code blocks / inline code
     if (isInsideCodeBlock(view.state, from)) continue;
 
-    // Strip .md suffix for resolution lookup (matches Rust side)
     const stem: string = rawTarget.endsWith(".md") ? rawTarget.slice(0, -3) : rawTarget;
     const resolved = resolvedLinks.has(stem.toLowerCase());
 
-    matches.push({ from, to, target: stem, resolved });
+    const aliasText = m[2];
+    let aliasStart: number | null = null;
+    let aliasEnd: number | null = null;
+    if (aliasText !== undefined) {
+      const pipePos = text.indexOf("|", from + 2);
+      if (pipePos !== -1) {
+        aliasStart = pipePos;
+        aliasEnd = to - 2;
+      }
+    }
+
+    matches.push({ from, to, target: stem, resolved, aliasStart, aliasEnd });
   }
 
-  // Sort by position (should already be in order, but guarantee it)
   matches.sort((a, b) => a.from - b.from);
 
+  const allRanges: DecoratedRange[] = [];
+
   for (const match of matches) {
-    const decoration = Decoration.mark({
-      class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
-      attributes: {
-        "data-wiki-target": match.target,
-        "data-wiki-resolved": match.resolved ? "true" : "false",
-      },
-    });
-    builder.add(match.from, match.to, decoration);
+    const cursorInLink = head >= match.from && head <= match.to;
+
+    if (cursorInLink) {
+      allRanges.push({
+        from: match.from,
+        to: match.to,
+        decoration: Decoration.mark({
+          class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
+          attributes: {
+            "data-wiki-target": match.target,
+            "data-wiki-resolved": match.resolved ? "true" : "false",
+          },
+        }),
+      });
+    } else {
+      allRanges.push({ from: match.from, to: match.from + 2, decoration: HIDE });
+      allRanges.push({ from: match.to - 2, to: match.to, decoration: HIDE });
+
+      if (match.aliasStart !== null && match.aliasEnd !== null) {
+        allRanges.push({ from: match.aliasStart, to: match.aliasStart + 1, decoration: HIDE });
+        const visibleFrom = match.aliasStart + 1;
+        const visibleTo = match.aliasEnd;
+        allRanges.push({
+          from: visibleFrom,
+          to: visibleTo,
+          decoration: Decoration.mark({
+            class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
+            attributes: {
+              "data-wiki-target": match.target,
+              "data-wiki-resolved": match.resolved ? "true" : "false",
+            },
+          }),
+        });
+      } else {
+        const visibleFrom = match.from + 2;
+        const visibleTo = match.to - 2;
+        if (visibleFrom < visibleTo) {
+          allRanges.push({
+            from: visibleFrom,
+            to: visibleTo,
+            decoration: Decoration.mark({
+              class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
+              attributes: {
+                "data-wiki-target": match.target,
+                "data-wiki-resolved": match.resolved ? "true" : "false",
+              },
+            }),
+          });
+        }
+      }
+    }
+  }
+
+  allRanges.sort((a, b) => a.from - b.from || a.to - b.to);
+
+  for (const r of allRanges) {
+    builder.add(r.from, r.to, r.decoration);
   }
 
   return builder.finish();
@@ -143,7 +211,7 @@ export const wikiLinkPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
         this.decorations = buildDecorations(update.view);
       }
     }

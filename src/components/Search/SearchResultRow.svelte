@@ -1,8 +1,8 @@
 <script lang="ts">
-  import type { SearchResult } from "../../types/search";
+  import type { SearchResult as SearchResultType } from "../../types/search";
 
   interface Props {
-    result: SearchResult;
+    result: SearchResultType;
     onclick: () => void;
   }
 
