@@ -65,12 +65,13 @@ describe("SHORTCUTS array", () => {
     "search",
     "backlinks-toggle",
     "toggle-sidebar",
+    "toggle-sidebar-alt", // BUG-05.1: Cmd+Shift+E alias for German keyboards
     "next-tab",
     "close-tab",
   ];
 
-  it("contains exactly 7 entries with the correct ids in order", () => {
-    expect(SHORTCUTS).toHaveLength(7);
+  it("contains exactly 8 entries with the correct ids in order", () => {
+    expect(SHORTCUTS).toHaveLength(8);
     const ids = SHORTCUTS.map((s) => s.id);
     expect(ids).toEqual(EXPECTED_IDS);
   });

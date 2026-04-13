@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { FilePlus, FolderPlus, ArrowUpDown } from "lucide-svelte";
+  import { FilePlus, FolderPlus } from "lucide-svelte";
   import { listDirectory, createFile, createFolder } from "../../ipc/commands";
-  import SortMenu from "./SortMenu.svelte";
+  // BUG-05.1: SortMenu was descoped per UAT — keep treeState for FILE-07
+  // (expand persistence) but default sortBy stays "name" without a UI toggle.
   import {
     loadTreeState,
     saveTreeState,
-    sortEntries,
     type TreeState,
-    type SortBy,
     DEFAULT_TREE_STATE,
   } from "../../lib/treeState";
   import { vaultStore } from "../../store/vaultStore";
@@ -48,7 +47,6 @@
   let bulkActive = $state(false);
   let bulkCount = $state(0);
   let treeState = $state<TreeState>({ ...DEFAULT_TREE_STATE });
-  let sortMenuOpen = $state(false);
 
   // Watcher unlisten handles — cleaned up on destroy
   let unlistenFileChange: UnlistenFn | null = null;
@@ -146,20 +144,29 @@
     await saveTreeState($vaultStore.currentPath ?? "", treeState);
   }
 
-  onMount(async () => {
-    // Load persisted tree state BEFORE first render so sort + expanded are applied
-    if ($vaultStore.currentPath) {
-      treeState = await loadTreeState($vaultStore.currentPath);
+  // BUG-05.1 (#11): on cold start, vault auto-load is async in App.svelte.
+  // Sidebar might mount before $vaultStore.currentPath is populated — the
+  // onMount loadTreeState() call would run with a null path and skip,
+  // leaving treeState at DEFAULT (empty expanded). Fix by subscribing to
+  // vaultStore and re-loading treeState whenever currentPath transitions
+  // from null/old to a new value. Mirrors EditorPane's reloadResolvedLinks pattern.
+  let prevVaultPathSeen: string | null = null;
+  const unsubVaultPathSidebar = vaultStore.subscribe(async (state) => {
+    if (state.currentPath !== prevVaultPathSeen) {
+      prevVaultPathSeen = state.currentPath;
+      if (state.currentPath) {
+        treeState = await loadTreeState(state.currentPath);
+        void loadRoot();
+        void tagsStore.reload();
+      }
     }
-    void loadRoot();
+  });
 
+  onMount(async () => {
     // Subscribe to watcher events (SYNC-01, SYNC-05)
     unlistenFileChange = await listenFileChange(handleFileChange);
     unlistenBulkStart = await listenBulkChangeStart(handleBulkStart);
     unlistenBulkEnd = await listenBulkChangeEnd(handleBulkEnd);
-
-    // Initial tags load (vault already open at mount time)
-    void tagsStore.reload();
 
     // Subscribe to tree-refresh signal — callers that create files through
     // backend paths (which bypass the watcher via write-ignore) use this
@@ -180,6 +187,7 @@
     unlistenBulkStart?.();
     unlistenBulkEnd?.();
     unsubTreeRefresh?.();
+    unsubVaultPathSidebar?.();
     tagsStore.reset();
   });
 
@@ -219,13 +227,6 @@
 
   function handlePathChanged(_oldPath: string, _newPath: string) {
     void loadRoot();
-  }
-
-  async function handleSortSelect(next: SortBy) {
-    treeState = { ...treeState, sortBy: next };
-    sortMenuOpen = false;
-    await saveTreeState($vaultStore.currentPath ?? "", treeState);
-    rootEntries = sortEntries(rootEntries, next);
   }
 </script>
 
@@ -298,25 +299,6 @@
         >
           <FolderPlus size={16} strokeWidth={1.5} />
         </button>
-        <button
-          type="button"
-          class="vc-sidebar-action-btn"
-          class:vc-sidebar-action-btn--active={sortMenuOpen}
-          onclick={() => (sortMenuOpen = !sortMenuOpen)}
-          aria-label="Sortierung"
-          aria-haspopup="menu"
-          aria-expanded={sortMenuOpen}
-          title="Sortierung"
-        >
-          <ArrowUpDown size={16} strokeWidth={1.5} />
-        </button>
-        {#if sortMenuOpen}
-          <SortMenu
-            value={treeState.sortBy}
-            onSelect={handleSortSelect}
-            onDismiss={() => (sortMenuOpen = false)}
-          />
-        {/if}
       </div>
     {/if}
   </header>
