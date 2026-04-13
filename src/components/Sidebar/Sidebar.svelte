@@ -7,6 +7,7 @@
   import {
     loadTreeState,
     saveTreeState,
+    sortEntries,
     type TreeState,
     DEFAULT_TREE_STATE,
   } from "../../lib/treeState";
