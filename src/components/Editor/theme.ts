@@ -53,20 +53,25 @@ export const markdownTheme = EditorView.theme({
     fontSize: "var(--vc-font-size)",
     fontFamily: "var(--vc-font-body)",
   },
-  ".cm-scroller": { overflow: "auto" },
-  // BUG-05.1: CM6's .cm-scroller is a flex container with align-items set
-  // to stretch and a !important on display:flex — so max-width + margin:auto
-  // on .cm-content does not center (flex layout overrides block margin
-  // collapsing rules). Instead, the .cm-content element becomes full-width
-  // of the scroller and we use LEFT/RIGHT PADDING to create the centered
-  // 720px reading zone. max(16px, ...) keeps a minimum gutter on narrow
-  // viewports; on wide viewports the content text-area visually sits at 720px
-  // with equal whitespace on both sides.
+  // BUG-05.1: center the content properly — using multiple overlapping rules
+  // because CM6 layers base-theme !important rules on .cm-scroller/.cm-content.
+  // 1. Make .cm-scroller center its flex child (.cm-content).
+  // 2. Clamp .cm-content's flex-basis so it doesn't grow beyond 720px.
+  // 3. Also apply margin-auto + max-width on content as a fallback for base
+  //    themes that leave justifyContent alone.
+  ".cm-scroller": {
+    overflow: "auto",
+    justifyContent: "center",
+  },
   ".cm-content": {
-    paddingTop: "16px",
-    paddingBottom: "16px",
-    paddingLeft: "max(16px, calc((100% - 720px) / 2))",
-    paddingRight: "max(16px, calc((100% - 720px) / 2))",
+    padding: "16px",
+    width: "100%",
+    maxWidth: "720px",
+    marginLeft: "auto",
+    marginRight: "auto",
+    flexBasis: "720px",
+    flexGrow: "0",
+    flexShrink: "1",
     caretColor: "var(--color-accent)",
   },
   ".cm-line": { lineHeight: "1.6" },
