@@ -53,24 +53,20 @@ export const markdownTheme = EditorView.theme({
     fontSize: "var(--vc-font-size)",
     fontFamily: "var(--vc-font-body)",
   },
-  // BUG-05.1: .cm-scroller is a flex container in CM6 6.x with
-  // justify-content: flex-start by default — that keeps .cm-content
-  // pinned to the left even though it has margin:0 auto and a max-width.
-  // justifyContent: "center" centers the flex child horizontally so
-  // whitespace sits on both sides equally.
-  ".cm-scroller": {
-    overflow: "auto",
-    justifyContent: "center",
-  },
+  ".cm-scroller": { overflow: "auto" },
+  // BUG-05.1: CM6's .cm-scroller is a flex container with align-items set
+  // to stretch and a !important on display:flex — so max-width + margin:auto
+  // on .cm-content does not center (flex layout overrides block margin
+  // collapsing rules). Instead, the .cm-content element becomes full-width
+  // of the scroller and we use LEFT/RIGHT PADDING to create the centered
+  // 720px reading zone. max(16px, ...) keeps a minimum gutter on narrow
+  // viewports; on wide viewports the content text-area visually sits at 720px
+  // with equal whitespace on both sides.
   ".cm-content": {
-    padding: "16px",
-    maxWidth: "720px",
-    // Keep margin auto as a belt-and-suspenders safeguard for
-    // embedders that override justify-content on .cm-scroller.
-    margin: "0 auto",
-    // flex: "0 1 720px" makes the content shrink down past 720px on
-    // narrow viewports (no horizontal scroll) while honoring the cap.
-    flex: "0 1 720px",
+    paddingTop: "16px",
+    paddingBottom: "16px",
+    paddingLeft: "max(16px, calc((100% - 720px) / 2))",
+    paddingRight: "max(16px, calc((100% - 720px) / 2))",
     caretColor: "var(--color-accent)",
   },
   ".cm-line": { lineHeight: "1.6" },
