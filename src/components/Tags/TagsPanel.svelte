@@ -44,9 +44,10 @@
   }
 
   function runSearchFor(fullTag: string): void {
-    searchStore.setActiveTab("search");
-    searchStore.setQuery("#" + fullTag);
-    // SearchPanel's 200ms debounced effect picks this up and runs search_fulltext.
+    // BUG-05.1: previously only setActiveTab + setQuery, so the SearchPanel
+    // would show the query in the input but never actually run. runSearch
+    // switches the tab, sets the query, AND dispatches search_fulltext.
+    void searchStore.runSearch("#" + fullTag);
   }
 </script>
 
