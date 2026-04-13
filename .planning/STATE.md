@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: verifying
-stopped_at: Phase 5 (Polish) code-complete — 8 plans shipped, 5/5 must-haves verified, 7 human-verify items pending
-last_updated: "2026-04-12T22:10:11.455Z"
+stopped_at: Phase 5.1 bugfixes shipped — 6 bugs fixed, 124 Rust tests + 116 frontend tests green
+last_updated: "2026-04-13T17:53:21.272Z"
 last_activity: 2026-04-12
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 28
+  completed_plans: 29
   percent: 100
 ---
 
@@ -188,6 +188,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-12T22:10:11.453Z
-Stopped at: Phase 5 (Polish) code-complete — 8 plans shipped, 5/5 must-haves verified, 7 human-verify items pending
-Resume file: .planning/phases/05-polish/05-VERIFICATION.md
+Last session: 2026-04-13T17:53:21.267Z
+Stopped at: Phase 5.1 bugfixes shipped — 6 bugs fixed, 124 Rust tests + 116 frontend tests green
+Resume file: .planning/phases/05.1-phase-5-uat-bugfixes/05.1-SUMMARY.md
