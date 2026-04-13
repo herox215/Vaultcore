@@ -327,10 +327,14 @@
 
     <!-- Editor panes area -->
     <div class="vc-editor-panes">
-      <!-- Left pane (always present) -->
+      <!-- Left pane (always present).
+           BUG-05.1: when not in split view, must be flex-grow: 1 (not
+           splitRatio, which defaults to 0.5). CSS spec: when sum of flex-grow
+           values is < 1, items only take that proportion of free space — so
+           grow:0.5 with a single flex child leaves 50% empty on the right. -->
       <div
         class="vc-pane-wrapper"
-        style="flex-grow: {splitRatio}; flex-shrink: 1; flex-basis: 0; min-width: {MIN_PANE_WIDTH}px"
+        style="flex-grow: {isSplit ? splitRatio : 1}; flex-shrink: 1; flex-basis: 0; min-width: {MIN_PANE_WIDTH}px"
       >
         <EditorPane paneId="left" />
       </div>
