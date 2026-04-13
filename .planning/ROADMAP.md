@@ -132,6 +132,16 @@ Plans:
 - [x] 05-07-PLAN.md — Wave 5: treeState.ts sort+persist library, SortMenu popover in sidebar topbar, TreeNode expand persistence, UI-06 regression audit (FILE-06, FILE-07, UI-06)
 **UI hint**: yes
 
+### Phase 05.1: Phase 5 UAT Bugfixes (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 5
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 05.1 to break down)
+
 ### Phase 6: Benchmark & Release
 **Goal**: Prove VaultCore's core value — fluid at 100,000 notes — by hitting every spec Section 7 performance budget on a generated 100k-note vault, passing a 24-hour soak, and shipping cross-platform alpha builds with clean test suites and verified zero-network behavior.
 **Depends on**: Phase 5
