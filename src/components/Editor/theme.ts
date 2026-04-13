@@ -59,19 +59,21 @@ export const markdownTheme = EditorView.theme({
   // 2. Clamp .cm-content's flex-basis so it doesn't grow beyond 720px.
   // 3. Also apply margin-auto + max-width on content as a fallback for base
   //    themes that leave justifyContent alone.
+  // BUG-05.1: CM6 base theme has .cm-content { flexGrow: 2 } which overrides
+  // max-width alone. Force !important so our values win the cascade.
   ".cm-scroller": {
     overflow: "auto",
-    justifyContent: "center",
+    justifyContent: "center !important",
   },
   ".cm-content": {
-    padding: "16px",
-    width: "100%",
-    maxWidth: "720px",
-    marginLeft: "auto",
-    marginRight: "auto",
-    flexBasis: "720px",
-    flexGrow: "0",
-    flexShrink: "1",
+    padding: "16px !important",
+    width: "100% !important",
+    maxWidth: "720px !important",
+    marginLeft: "auto !important",
+    marginRight: "auto !important",
+    flexGrow: "0 !important",
+    flexShrink: "1 !important",
+    flexBasis: "720px !important",
     caretColor: "var(--color-accent)",
   },
   ".cm-line": { lineHeight: "1.6" },
