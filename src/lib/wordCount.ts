@@ -92,17 +92,15 @@ export function countWords(text: string): number {
 }
 
 /**
- * Count characters as code points (spread-and-length). Obsidian counts all
- * characters including spaces and newlines — we do the same. Operates on
- * the raw text, NOT the frontmatter-stripped body, because when nothing is
- * selected the user expects to see the full document length.
+ * Count characters as code points. Frontmatter is stripped (same policy as
+ * word count): frontmatter isn't visible prose and shouldn't inflate the
+ * character total either. Whitespace and newlines in the body still count.
  */
 export function countCharacters(text: string): number {
   if (text.length === 0) return 0;
-  // eslint-disable-next-line @typescript-eslint/prefer-spread
+  const body = stripLeadingFrontmatter(text);
   let n = 0;
-  // Iterating with for-of walks code points, avoiding UTF-16 surrogate double-counting.
-  for (const _ of text) n += 1;
+  for (const _ of body) n += 1;
   return n;
 }
 

@@ -113,9 +113,9 @@ describe("countCharacters", () => {
     expect(countCharacters("ab🌳cd")).toBe(5);
   });
 
-  it("does NOT strip frontmatter — characters reflect raw document length", () => {
+  it("strips leading frontmatter from the character count", () => {
     const doc = "---\nx: y\n---\nhi";
-    expect(countCharacters(doc)).toBe(doc.length);
+    expect(countCharacters(doc)).toBe(2);
   });
 });
 
