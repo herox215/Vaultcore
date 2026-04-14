@@ -15,6 +15,8 @@
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
 
+  let { onSwitchVault }: { onSwitchVault: () => void } = $props();
+
   const SIDEBAR_WIDTH_KEY = "vaultcore-sidebar-width";
   const DEFAULT_SIDEBAR_WIDTH = 240;
   const MIN_SIDEBAR_WIDTH = 160;
@@ -391,7 +393,11 @@
   onOpenFile={handleOpenFile}
 />
 
-<SettingsModal open={settingsOpen} onClose={() => { settingsOpen = false; }} />
+<SettingsModal
+  open={settingsOpen}
+  onClose={() => { settingsOpen = false; }}
+  {onSwitchVault}
+/>
 
 <style>
   .vc-vault-layout {

@@ -3,6 +3,7 @@
   import { themeStore } from "./store/themeStore";
   import { settingsStore } from "./store/settingsStore";
   import { vaultStore } from "./store/vaultStore";
+  import { tabStore } from "./store/tabStore";
   import { toastStore } from "./store/toastStore";
   import { progressStore } from "./store/progressStore";
   import {
@@ -63,6 +64,22 @@
     }
   }
 
+  async function handleSwitchVault(): Promise<void> {
+    try {
+      const picked = await pickVaultFolder();
+      if (picked === null) return;
+      let currentPath: string | null = null;
+      const unsub = vaultStore.subscribe((s) => { currentPath = s.currentPath; });
+      unsub();
+      if (currentPath === picked) return;
+      tabStore.closeAll();
+      await loadVault(picked);
+    } catch (err) {
+      const ve = toVaultError(err);
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
   function handleOpenRecent(path: string): void {
     void loadVault(path);
   }
@@ -97,7 +114,7 @@
 </script>
 
 {#if $vaultStore.status === "ready"}
-  <VaultLayout />
+  <VaultLayout onSwitchVault={handleSwitchVault} />
 {:else}
   <WelcomeScreen
     {recent}

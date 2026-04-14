@@ -319,6 +319,15 @@ export const tabStore = {
   },
 
   /**
+   * Close every tab and collapse the split. Used when the vault changes at
+   * runtime — tabs reference absolute paths inside the old vault and must not
+   * leak across a switch.
+   */
+  closeAll(): void {
+    _store.set(makeInitial());
+  },
+
+  /**
    * Reorder the tab IDs in a specific pane (used by drag-to-reorder in TabBar).
    */
   _reorderPane(pane: "left" | "right", newIds: string[]): void {
