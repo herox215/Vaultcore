@@ -117,4 +117,17 @@ export const markdownTheme = EditorView.theme({
   ".cm-frontmatter-hidden": {
     display: "none",
   },
+  // Task list checkboxes
+  ".cm-task-checkbox": {
+    verticalAlign: "middle",
+    marginRight: "0.35em",
+    marginTop: "-2px",
+    cursor: "pointer",
+    accentColor: "var(--color-accent)",
+  },
+  // Checked task item text: strikethrough + muted color
+  ".cm-task-done": {
+    textDecoration: "line-through",
+    color: "var(--color-text-muted)",
+  },
 });
