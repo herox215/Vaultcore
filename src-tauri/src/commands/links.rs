@@ -22,6 +22,15 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::Utf32Str;
 use rayon::prelude::*;
 use regex::Regex;
+use walkdir::WalkDir;
+
+/// Image extensions whose files are exposed as wiki-embed targets
+/// (`![[image.png]]`). Everything else is ignored during the walk.
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg"];
+
+/// Directories skipped by the attachment walk. `.md` files are excluded
+/// separately since they're already covered by `get_resolved_links`.
+const SKIP_DIRS: &[&str] = &[".obsidian", ".git", ".vaultcore", ".trash", "templates"];
 
 // ── Result types ───────────────────────────────────────────────────────────────
 
@@ -386,4 +395,86 @@ pub async fn get_resolved_links(
     };
 
     Ok(link_graph::resolved_map(&paths))
+}
+
+// ── get_resolved_attachments ───────────────────────────────────────────────────
+
+/// Return a `filename (lowercased, with extension) → vault-relative path` map
+/// for every image attachment reachable from the vault root.
+///
+/// Images are not indexed by the main FileIndex (which only tracks `.md`
+/// files), so this command walks the filesystem directly with `walkdir`.
+/// Skips dotfiles, `.git`, `.obsidian`, `.vaultcore`, `.trash`, and `templates`
+/// (if present). `.md` files are excluded — those are covered by
+/// `get_resolved_links`.
+///
+/// The frontend uses this map for the wiki-embed plugin: `![[foo.png]]` looks
+/// up the lowercased filename to resolve to a vault-relative path, which is
+/// then passed through `convertFileSrc` to get an asset-protocol URL.
+///
+/// On a missing or unopened vault the command returns an empty map so the
+/// frontend can still render without surfacing an error to the user.
+#[tauri::command]
+pub async fn get_resolved_attachments(
+    state: tauri::State<'_, VaultState>,
+) -> Result<HashMap<String, String>, VaultError> {
+    let vault_root: PathBuf = {
+        let guard = state
+            .current_vault
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        match guard.as_ref() {
+            Some(p) => p.clone(),
+            None => return Ok(HashMap::new()),
+        }
+    };
+
+    let mut map: HashMap<String, String> = HashMap::new();
+
+    for entry in WalkDir::new(&vault_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            // Keep the root, skip dotfiles and known junk directories.
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_str().unwrap_or("");
+            if name.starts_with('.') {
+                return false;
+            }
+            if e.file_type().is_dir() && SKIP_DIRS.iter().any(|d| name.eq_ignore_ascii_case(d)) {
+                return false;
+            }
+            true
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let ext_lower = match path.extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_ascii_lowercase(),
+            None => continue,
+        };
+        if ext_lower == "md" {
+            continue;
+        }
+        if !IMAGE_EXTENSIONS.iter().any(|e| *e == ext_lower) {
+            continue;
+        }
+
+        let Ok(rel) = path.strip_prefix(&vault_root) else { continue };
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let Some(filename) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let key = filename.to_ascii_lowercase();
+
+        // First-hit wins; ambiguous duplicates (same filename in different
+        // folders) are rare in practice for image assets and a follow-up can
+        // add shortest-path disambiguation if needed.
+        map.entry(key).or_insert(rel_str);
+    }
+
+    Ok(map)
 }
