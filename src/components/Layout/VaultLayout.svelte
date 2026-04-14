@@ -144,8 +144,14 @@
     };
   });
 
-  // Subscribe to tabStore to sync active file to backlinksStore
+  // Subscribe to tabStore to sync active file to backlinksStore.
+  // tabStore emits on every per-keystroke mutation (setDirty, scroll position,
+  // lastSavedContent); re-dispatching setActiveFile on every emit flips the
+  // panel into loading state and fires an IPC round-trip, causing the sidebar
+  // to flicker as the user types. Only push through when the resolved rel
+  // path actually changes.
   let unsubBacklinksTab: (() => void) | null = null;
+  let lastDispatchedRelPath: string | null | undefined = undefined;
   onMount(() => {
     unsubBacklinksTab = tabStore.subscribe((state) => {
       const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
@@ -155,15 +161,20 @@
         u();
         return v;
       })();
+
+      let nextRelPath: string | null;
       if (!activeTab || !vault) {
-        backlinksStore.setActiveFile(null);
-        return;
+        nextRelPath = null;
+      } else {
+        const absPath = activeTab.filePath;
+        nextRelPath = absPath.startsWith(vault + "/")
+          ? absPath.slice((vault as string).length + 1)
+          : absPath;
       }
-      const absPath = activeTab.filePath;
-      const relPath = absPath.startsWith(vault + "/")
-        ? absPath.slice((vault as string).length + 1)
-        : absPath;
-      backlinksStore.setActiveFile(relPath);
+
+      if (nextRelPath === lastDispatchedRelPath) return;
+      lastDispatchedRelPath = nextRelPath;
+      backlinksStore.setActiveFile(nextRelPath);
     });
   });
 
