@@ -27,6 +27,7 @@
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { treeRevealStore } from "../../store/treeRevealStore";
   import { tagsStore } from "../../store/tagsStore";
   import { Hash } from "lucide-svelte";
   import TreeNode from "./TreeNode.svelte";
@@ -136,6 +137,23 @@
 
   let prevRefreshToken: string | null = null;
   let unsubTreeRefresh: (() => void) | null = null;
+  let prevRevealToken: string | null = null;
+  let unsubTreeReveal: (() => void) | null = null;
+
+  /**
+   * Collect every ancestor folder rel path of the target. For
+   * "notes/daily/today.md" this returns ["notes", "notes/daily"]. The target
+   * itself is not included (only its enclosing folders need to be expanded).
+   */
+  function ancestorFolderPaths(relPath: string): string[] {
+    const parts = relPath.split("/").filter((p) => p.length > 0);
+    if (parts.length <= 1) return [];
+    const out: string[] = [];
+    for (let i = 1; i < parts.length; i += 1) {
+      out.push(parts.slice(0, i).join("/"));
+    }
+    return out;
+  }
 
   async function onExpandToggle(relPath: string, isExpanded: boolean) {
     const expanded = new Set(treeState.expanded);
@@ -181,6 +199,34 @@
         if ($vaultStore.currentPath) void tagsStore.reload();
       }
     });
+
+    // Reveal requests — issued by the breadcrumb bar. Flip to the files
+    // tab and ensure every ancestor folder is in the persisted expanded
+    // list so freshly rendered TreeNodes mount expanded. TreeNode owns
+    // the scroll-into-view + per-instance expansion via its own
+    // treeRevealStore subscription.
+    unsubTreeReveal = treeRevealStore.subscribe(async (state) => {
+      if (!state.pending) return;
+      if (state.pending.token === prevRevealToken) return;
+      prevRevealToken = state.pending.token;
+
+      searchStore.setActiveTab("files");
+
+      const ancestors = ancestorFolderPaths(state.pending.relPath);
+      if (ancestors.length === 0) return;
+      const expanded = new Set(treeState.expanded);
+      let changed = false;
+      for (const p of ancestors) {
+        if (!expanded.has(p)) {
+          expanded.add(p);
+          changed = true;
+        }
+      }
+      if (changed) {
+        treeState = { ...treeState, expanded: Array.from(expanded) };
+        await saveTreeState($vaultStore.currentPath ?? "", treeState);
+      }
+    });
   });
 
   onDestroy(() => {
@@ -188,6 +234,7 @@
     unlistenBulkStart?.();
     unlistenBulkEnd?.();
     unsubTreeRefresh?.();
+    unsubTreeReveal?.();
     unsubVaultPathSidebar?.();
     tagsStore.reset();
   });

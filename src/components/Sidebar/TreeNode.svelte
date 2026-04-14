@@ -8,8 +8,9 @@
   import InlineRename from "./InlineRename.svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
+  import { treeRevealStore } from "../../store/treeRevealStore";
   import { sortEntries, type SortBy } from "../../lib/treeState";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
 
   interface Props {
     entry: DirEntry;
@@ -83,11 +84,53 @@
 
   const isActive = $derived(selectedPath === entry.path);
 
+  // DOM ref for scroll-into-view on reveal requests.
+  let rowEl = $state<HTMLDivElement | undefined>();
+
   // Auto-load children if this node starts expanded (restored from persisted state, FILE-07)
   onMount(() => {
     if (initiallyExpanded && entry.is_dir && !childrenLoaded) {
       void loadChildren();
     }
+  });
+
+  // ─── Reveal-in-tree support ────────────────────────────────────────────────
+  // Subscribe to treeRevealStore. When a request lands we either:
+  //   - scroll our row into view (our rel path matches exactly), or
+  //   - auto-expand + load children (our rel path is an ancestor of the target),
+  // so the descendant row becomes visible in the DOM before it too scrolls into view.
+  let prevRevealToken: string | null = null;
+  const unsubTreeReveal = treeRevealStore.subscribe((state) => {
+    if (!state.pending) return;
+    if (state.pending.token === prevRevealToken) return;
+    prevRevealToken = state.pending.token;
+
+    const vault = getVaultRoot();
+    if (!vault) return;
+    const myRel = toRelPath(entry.path, vault);
+    const target = state.pending.relPath;
+    if (!myRel || !target) return;
+
+    if (myRel === target) {
+      // Exact match — scroll our row into view (AC-03). Defer so any
+      // ancestor-triggered expansion has landed in the DOM first.
+      requestAnimationFrame(() => {
+        rowEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+      return;
+    }
+
+    // Ancestor match — expand ourselves so the descendant becomes renderable.
+    if (entry.is_dir && (target === myRel + "/" || target.startsWith(myRel + "/"))) {
+      if (!expanded) {
+        expanded = true;
+        if (!childrenLoaded) void loadChildren();
+      }
+    }
+  });
+
+  onDestroy(() => {
+    unsubTreeReveal();
   });
 
   async function loadChildren() {
@@ -403,6 +446,7 @@
   <div
     class="vc-tree-row"
     style="padding-left: calc({depth} * 16px + 8px)"
+    bind:this={rowEl}
     onclick={handleClick}
     role="button"
     tabindex="-1"

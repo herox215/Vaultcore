@@ -3,6 +3,7 @@
   import { EditorView } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
   import TabBar from "../Tabs/TabBar.svelte";
+  import Breadcrumbs from "./Breadcrumbs.svelte";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
@@ -77,6 +78,14 @@
     activePane === paneId && activeTabId !== null && paneTabIds.includes(activeTabId)
       ? activeTabId
       : paneTabIds[0] ?? null
+  );
+
+  // Active tab file path for this pane — drives the breadcrumb bar.
+  // Null when no tab is open in the pane, which hides the bar (AC-06).
+  const paneActiveFilePath = $derived(
+    paneActiveTabId !== null
+      ? (paneTabs.find((t) => t.id === paneActiveTabId)?.filePath ?? null)
+      : null
   );
 
   // Subscribe to tabStore for our pane's tabs and active state
@@ -612,6 +621,9 @@
     tabs={paneTabs}
     activeTabId={paneActiveTabId}
   />
+
+  <!-- Breadcrumb path bar — self-hides when no tab is open (AC-06). -->
+  <Breadcrumbs filePath={paneActiveFilePath} />
 
   <!-- Editor content area -->
   <div class="vc-editor-content">
