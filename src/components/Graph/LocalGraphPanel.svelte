@@ -18,7 +18,7 @@
 
   const STORAGE_KEY_COLLAPSED = "vaultcore-graph-collapsed";
   const DEBOUNCE_MS = 200;
-  const DEPTH = 2;
+  const DEPTH = 1;
 
   function loadCollapsed(): boolean {
     try {
