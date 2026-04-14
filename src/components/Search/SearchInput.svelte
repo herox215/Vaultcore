@@ -19,11 +19,18 @@
   let inputEl: HTMLInputElement | undefined = $state();
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // BUG-05.1: sync the input when an external caller (e.g. TagsPanel tag-click)
-  // updates the searchStore query. Skip if the external value matches what the
-  // user already typed to avoid clobbering mid-keystroke.
+  // BUG-05.1 (feedback-loop fix): the naive check `externalValue !== value`
+  // caused a reset on every keystroke — the effect tracked both `externalValue`
+  // AND `value`, so typing updated `value`, the effect re-ran, saw the stale
+  // store value still differing (search is debounced 200ms), and overwrote the
+  // input. Fix: track only changes to `externalValue` via a snapshot variable.
+  // The effect now only cares whether `externalValue` itself changed since the
+  // last time we saw it; typing changes `value` but not `lastSeenExternal`, so
+  // the guard fires false and the input is left alone.
+  let lastSeenExternal: string | undefined = $state(undefined);
   $effect(() => {
-    if (externalValue !== undefined && externalValue !== value) {
+    if (externalValue !== undefined && externalValue !== lastSeenExternal) {
+      lastSeenExternal = externalValue;
       value = externalValue;
     }
   });
