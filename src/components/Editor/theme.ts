@@ -65,6 +65,7 @@ export const markdownTheme = EditorView.theme({
   // .cm-content = the centered "page". Surface-white background contrasts
   // gently with the gutter (--color-bg). Subtle border + shadow give it a
   // document-card feel without being heavy.
+  // CSS variable defaults for each callout type. Themes may override these.
   ".cm-content": {
     padding: "32px 24px !important",
     width: "100% !important",
@@ -80,6 +81,19 @@ export const markdownTheme = EditorView.theme({
     borderRadius: "8px !important",
     boxShadow: "0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06) !important",
     caretColor: "var(--color-accent)",
+    "--callout-note-color": "#4A90D9",
+    "--callout-info-color": "#4A90D9",
+    "--callout-tip-color": "#38A169",
+    "--callout-success-color": "#38A169",
+    "--callout-question-color": "#D69E2E",
+    "--callout-warning-color": "#E67E22",
+    "--callout-failure-color": "#E53E3E",
+    "--callout-danger-color": "#C53030",
+    "--callout-bug-color": "#E53E3E",
+    "--callout-example-color": "#805AD5",
+    "--callout-quote-color": "#718096",
+    "--callout-abstract-color": "#3182CE",
+    "--callout-todo-color": "#38A169",
   },
   ".cm-line": { lineHeight: "1.6" },
   ".cm-cursor, .cm-dropCursor": {
@@ -116,5 +130,73 @@ export const markdownTheme = EditorView.theme({
   // collapses to zero height so there is no visible gap at the top.
   ".cm-frontmatter-hidden": {
     display: "none",
+  },
+
+  // ── Callout blockquotes ────────────────────────────────────────────────────
+
+  ".cm-callout": {
+    borderLeft: "3px solid currentColor",
+    paddingLeft: "12px",
+    marginLeft: "0",
+    position: "relative",
+  },
+  ".cm-callout-note": { color: "var(--callout-note-color)" },
+  ".cm-callout-info": { color: "var(--callout-info-color)" },
+  ".cm-callout-tip": { color: "var(--callout-tip-color)" },
+  ".cm-callout-success": { color: "var(--callout-success-color)" },
+  ".cm-callout-question": { color: "var(--callout-question-color)" },
+  ".cm-callout-warning": { color: "var(--callout-warning-color)" },
+  ".cm-callout-failure": { color: "var(--callout-failure-color)" },
+  ".cm-callout-danger": { color: "var(--callout-danger-color)" },
+  ".cm-callout-bug": { color: "var(--callout-bug-color)" },
+  ".cm-callout-example": { color: "var(--callout-example-color)" },
+  ".cm-callout-quote": { color: "var(--callout-quote-color)" },
+  ".cm-callout-abstract": { color: "var(--callout-abstract-color)" },
+  ".cm-callout-todo": { color: "var(--callout-todo-color)" },
+
+  // Title-line styles
+  ".cm-callout-title-line": {
+    fontWeight: "600",
+    fontSize: "0.95em",
+  },
+
+  // Body lines: reset text color to editor default
+  ".cm-callout-body-line": {
+    color: "var(--color-text)",
+  },
+
+  // Title widget elements
+  ".cm-callout-title-wrap": {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    lineHeight: "1.6",
+  },
+  ".cm-callout-icon": {
+    display: "inline-flex",
+    alignItems: "center",
+    flexShrink: "0",
+    color: "inherit",
+  },
+  ".cm-callout-icon svg": {
+    display: "block",
+  },
+  ".cm-callout-title": {
+    fontWeight: "600",
+    color: "inherit",
+  },
+  ".cm-callout-chevron": {
+    display: "inline-flex",
+    alignItems: "center",
+    marginLeft: "auto",
+    paddingLeft: "8px",
+    cursor: "pointer",
+    color: "inherit",
+    opacity: "0.7",
+    transition: "transform 0.15s ease",
+    transform: "rotate(0deg)",
+  },
+  ".cm-callout-chevron-collapsed": {
+    transform: "rotate(-90deg)",
   },
 });
