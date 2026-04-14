@@ -89,6 +89,11 @@ async function handleSaveMany(view: EditorView, files: File[]): Promise<void> {
   view.focus();
 }
 
+function hasFileDrag(dt: DataTransfer | null): boolean {
+  if (!dt) return false;
+  return Array.from(dt.types).includes("Files");
+}
+
 export function imageAttachmentExtension(): Extension {
   return EditorView.domEventHandlers({
     paste(event: ClipboardEvent, view: EditorView): boolean {
@@ -113,6 +118,15 @@ export function imageAttachmentExtension(): Extension {
       const filename = `Pasted image ${ts}.${ext}`;
 
       void handleSave(view, blob, filename);
+      return true;
+    },
+
+    // The browser only fires `drop` on a target whose `dragover` had its
+    // default prevented — otherwise the OS treats it as "copy not allowed"
+    // and the drop never happens.
+    dragover(event: DragEvent): boolean {
+      if (!hasFileDrag(event.dataTransfer)) return false;
+      event.preventDefault();
       return true;
     },
 
