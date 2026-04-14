@@ -2,7 +2,6 @@
   import { backlinksStore } from "../../store/backlinksStore";
   import { tabStore } from "../../store/tabStore";
   import BacklinkRow from "./BacklinkRow.svelte";
-  import { X } from "lucide-svelte";
   import { vaultStore } from "../../store/vaultStore";
 
   function handleBacklinkClick(relPath: string): void {
@@ -11,22 +10,11 @@
     const absPath = `${vault}/${relPath}`;
     tabStore.openTab(absPath);
   }
-  function handleClose(): void {
-    backlinksStore.setOpen(false);
-  }
 </script>
 
 <div class="vc-backlinks-panel" role="complementary" aria-label="Backlinks">
   <div class="vc-backlinks-header">
     <span class="vc-backlinks-label">Backlinks</span>
-    <button
-      class="vc-backlinks-close"
-      on:click={handleClose}
-      aria-label="Backlinks-Panel schließen"
-      type="button"
-    >
-      <X size={16} />
-    </button>
   </div>
   <div class="vc-backlinks-body">
     {#if $backlinksStore.loading}
@@ -58,7 +46,6 @@
   .vc-backlinks-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     padding: 16px;
     border-bottom: 1px solid var(--color-border);
   }
@@ -68,19 +55,6 @@
     color: var(--color-text-muted);
     text-transform: none;
   }
-  .vc-backlinks-close {
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    color: var(--color-text-muted);
-    border-radius: 4px;
-  }
-  .vc-backlinks-close:hover { background: var(--color-accent-bg); }
   .vc-backlinks-body {
     flex: 1;
     overflow-y: auto;

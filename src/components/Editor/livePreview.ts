@@ -1,6 +1,7 @@
 import { ViewPlugin, Decoration, type EditorView, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import { detectFrontmatter } from "./frontmatterPlugin";
 
 const HIDE = Decoration.replace({});
 
@@ -17,6 +18,12 @@ function buildDecorations(view: EditorView): DecorationSet {
   const cursorLine = view.state.doc.lineAt(head).number;
   const doc = view.state.doc;
 
+  // Lezer parses `title: X\n---` as a setext H2, so the closing fence of a
+  // YAML frontmatter block gets tagged as `HeaderMark`. Skip hiding inside
+  // the frontmatter region — otherwise the closing `---` vanishes whenever
+  // the cursor sits on a different line.
+  const frontmatter = detectFrontmatter(doc.toString());
+
   syntaxTree(view.state).iterate({
     from: view.viewport.from,
     to: view.viewport.to,
@@ -24,6 +31,9 @@ function buildDecorations(view: EditorView): DecorationSet {
       const name = node.name;
 
       if (name === "HeaderMark") {
+        if (frontmatter && node.from >= frontmatter.from && node.to <= frontmatter.to) {
+          return;
+        }
         const nodeLine = doc.lineAt(node.from).number;
         if (cursorLine !== nodeLine) {
           let from = node.from;
