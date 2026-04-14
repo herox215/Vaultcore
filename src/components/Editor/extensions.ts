@@ -27,6 +27,7 @@ import { flashField } from "./flashHighlight";
 import { wikiLinkPlugin } from "./wikiLink";
 import { livePreviewPlugin } from "./livePreview";
 import { frontmatterPlugin } from "./frontmatterPlugin";
+import { taskListPlugin } from "./taskList";
 import { countsPlugin } from "./countsPlugin";
 import type { PaneId } from "../../store/countsStore";
 import { activeViewStore } from "../../store/activeViewStore";
@@ -79,6 +80,7 @@ export function buildExtensions(
     wikiLinkPlugin,
     livePreviewPlugin,
     frontmatterPlugin,
+    taskListPlugin,
     docVersionBumpListener,
   ];
 
