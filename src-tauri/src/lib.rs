@@ -100,6 +100,7 @@ pub fn run() {
             commands::files::create_folder,
             commands::files::count_wiki_links,
             commands::files::get_file_hash,
+            commands::files::save_attachment,
             commands::tree::list_directory,
             commands::vault::merge_external_change,
             commands::search::search_fulltext,
