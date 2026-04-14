@@ -109,4 +109,9 @@ export const markdownTheme = EditorView.theme({
     padding: "8px 12px",
     borderRadius: "4px",
   },
+  // Frontmatter is fully hidden in the editor — the block-replace widget
+  // collapses to zero height so there is no visible gap at the top.
+  ".cm-frontmatter-hidden": {
+    display: "none",
+  },
 });

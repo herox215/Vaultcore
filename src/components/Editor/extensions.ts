@@ -26,6 +26,12 @@ import { autoSaveExtension } from "./autoSave";
 import { flashField } from "./flashHighlight";
 import { wikiLinkPlugin } from "./wikiLink";
 import { livePreviewPlugin } from "./livePreview";
+import { frontmatterPlugin } from "./frontmatterPlugin";
+import { activeViewStore } from "../../store/activeViewStore";
+
+const docVersionBumpListener = EditorView.updateListener.of((update) => {
+  if (update.docChanged) activeViewStore.bumpDocVersion();
+});
 
 export function buildExtensions(onSave: (text: string) => void): Extension[] {
   return [
@@ -56,5 +62,7 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
     flashField,
     wikiLinkPlugin,
     livePreviewPlugin,
+    frontmatterPlugin,
+    docVersionBumpListener,
   ];
 }
