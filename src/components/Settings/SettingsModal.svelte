@@ -6,6 +6,7 @@
     settingsStore,
     FONT_SIZE_MIN,
     FONT_SIZE_MAX,
+    ATTACHMENT_FOLDER_DEFAULT,
     type BodyFont,
     type MonoFont,
   } from "../../store/settingsStore";
@@ -22,11 +23,13 @@
   let currentBody = $state<BodyFont>("system");
   let currentMono = $state<MonoFont>("system");
   let currentSize = $state<number>(14);
+  let currentAttachmentFolder = $state<string>(ATTACHMENT_FOLDER_DEFAULT);
   let currentVaultPath = $state<string | null>(null);
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
   const unsubSettings = settingsStore.subscribe((s) => {
     currentBody = s.fontBody; currentMono = s.fontMono; currentSize = s.fontSize;
+    currentAttachmentFolder = s.attachmentFolder;
   });
   const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
 
@@ -50,6 +53,9 @@
   }
   function onSizeInput(e: Event) {
     settingsStore.setFontSize(Number((e.target as HTMLInputElement).value));
+  }
+  function onAttachmentFolderInput(e: Event) {
+    settingsStore.setAttachmentFolder((e.target as HTMLInputElement).value);
   }
 
   onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); });
@@ -149,7 +155,24 @@
         />
       </section>
 
-      <!-- Section C — Tastaturkürzel (UI-05 / D-11) -->
+      <!-- Section C — Anhänge -->
+      <section class="vc-settings-section" data-testid="settings-attachments">
+        <h3 class="vc-settings-section-title">ANHÄNGE</h3>
+        <div class="vc-settings-row">
+          <label for="attachment-folder-input">Anhangsordner</label>
+          <input
+            id="attachment-folder-input"
+            class="vc-settings-text-input"
+            type="text"
+            value={currentAttachmentFolder}
+            oninput={onAttachmentFolderInput}
+            placeholder={ATTACHMENT_FOLDER_DEFAULT}
+            aria-label="Anhangsordner"
+          />
+        </div>
+      </section>
+
+      <!-- Section D — Tastaturkürzel (UI-05 / D-11) -->
       <section class="vc-settings-section" data-testid="settings-shortcuts">
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
         <table class="vc-shortcuts-table" role="table">
@@ -246,6 +269,12 @@
   }
   .vc-settings-size-value { font-size: 14px; color: var(--color-text-muted); }
   .vc-settings-slider { width: 100%; }
+  .vc-settings-text-input {
+    font-size: 14px; padding: 4px 8px;
+    border: 1px solid var(--color-border); border-radius: 4px;
+    background: var(--color-surface); color: var(--color-text);
+    min-width: 180px;
+  }
 
   .vc-vault-row { align-items: flex-start; margin-bottom: 0; }
   .vc-vault-path-wrap { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
