@@ -3,6 +3,7 @@
   import OutgoingLinksPanel from "../OutgoingLinks/OutgoingLinksPanel.svelte";
   import OutlinePanel from "../Outline/OutlinePanel.svelte";
   import PropertiesPanel from "../Properties/PropertiesPanel.svelte";
+  import LocalGraphPanel from "../Graph/LocalGraphPanel.svelte";
 </script>
 <div class="vc-right-sidebar">
   <PropertiesPanel />
@@ -11,6 +12,7 @@
   <div class="vc-right-sidebar-backlinks">
     <BacklinksPanel />
   </div>
+  <LocalGraphPanel />
 </div>
 <style>
   .vc-right-sidebar {

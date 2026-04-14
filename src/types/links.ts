@@ -23,6 +23,32 @@ export interface UnresolvedLink {
   lineNumber: number;
 }
 
+/** A single node in the local-graph payload returned by `get_local_graph`. */
+export interface GraphNode {
+  /** Vault-relative path for resolved files, `unresolved:<raw>` for dangling links. */
+  id: string;
+  /** Display label — filename stem for resolved, link text for unresolved. */
+  label: string;
+  /** Vault-relative path (empty string for unresolved pseudo-nodes). */
+  path: string;
+  /** Number of resolved incoming links — drives node sizing. */
+  backlinkCount: number;
+  /** `true` when the node maps to an indexed file in the vault. */
+  resolved: boolean;
+}
+
+/** An undirected edge between two graph nodes. */
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+
+/** Result returned by `get_local_graph`. */
+export interface LocalGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 /** Result returned by update_links_after_rename. */
 export interface RenameResult {
   /** Number of files that had their links rewritten. */

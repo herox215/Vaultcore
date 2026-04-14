@@ -8,13 +8,14 @@
 // Pattern: Clone Arc handles before releasing Mutex (same as search.rs).
 // MutexGuard is not Send and cannot be held across await points.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use serde::Serialize;
 
 use crate::error::VaultError;
-use crate::indexer::link_graph::{self, BacklinkEntry, ParsedLink, UnresolvedLink};
+use crate::indexer::link_graph::{self, BacklinkEntry, LinkGraph, ParsedLink, UnresolvedLink};
+use crate::indexer::memory::FileIndex;
 use crate::commands::search::FileMatch;
 use crate::VaultState;
 
@@ -477,4 +478,236 @@ pub async fn get_resolved_attachments(
     }
 
     Ok(map)
+}
+
+// ── get_local_graph ────────────────────────────────────────────────────────────
+
+/// Hard cap on the total number of nodes returned by a single local-graph
+/// query. Pathologically-linked hubs would otherwise produce thousands of
+/// nodes for a 2-hop neighborhood and stall the sigma renderer on mount.
+const LOCAL_GRAPH_NODE_CAP: usize = 500;
+
+/// A single node in the local graph view. Serialized to the frontend with
+/// camelCase field names to match the wrapping TS interface.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    /// Node id — the vault-relative path for resolved files, or the raw
+    /// wiki-link target (prefixed `unresolved:`) for dangling links.
+    pub id: String,
+    /// Display label — filename stem for resolved files, link text as-written
+    /// for unresolved targets.
+    pub label: String,
+    /// Vault-relative path (equal to `id` for resolved, empty string for
+    /// unresolved synthetic nodes).
+    pub path: String,
+    /// Resolved-incoming-link count for node sizing. Zero for unresolved.
+    pub backlink_count: usize,
+    /// `true` when the node corresponds to an actual file in the vault.
+    pub resolved: bool,
+}
+
+/// An undirected edge between two graph nodes. Dedupe is performed at build
+/// time via a sorted-pair `HashSet`, so no `(a, b)` / `(b, a)` duplicates
+/// reach the renderer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+}
+
+/// Result payload returned by `get_local_graph`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// Derive a filename stem from a vault-relative path (strip folder + `.md`).
+fn file_stem_label(rel_path: &str) -> String {
+    let base = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    base.strip_suffix(".md").unwrap_or(base).to_string()
+}
+
+/// Pure helper that computes the 2-hop (or arbitrary-depth) local graph for
+/// a center note. Split out from the Tauri command so it can be exercised by
+/// `cargo test local_graph` without standing up a full `VaultState`.
+///
+/// BFS in both directions (outgoing links + backlinks). Every node visited
+/// within `depth` hops is emitted; every edge discovered while expanding is
+/// emitted as an undirected pair (smaller id first). Unresolved link targets
+/// are synthesized as pseudo-nodes with `resolved: false` and an
+/// `unresolved:<raw>` id so they never collide with real paths.
+pub fn compute_local_graph(
+    center: &str,
+    depth: u32,
+    lg: &LinkGraph,
+    fi: &FileIndex,
+) -> LocalGraph {
+    let mut nodes: HashMap<String, GraphNode> = HashMap::new();
+    let mut edges: HashSet<(String, String)> = HashSet::new();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    // Build a rel_path → title map once so label lookups are O(1).
+    let mut titles: HashMap<String, String> = HashMap::new();
+    for (_, meta) in fi.all_entries() {
+        titles.insert(meta.relative_path.clone(), meta.title.clone());
+    }
+
+    let is_resolved = |id: &str| titles.contains_key(id);
+
+    // Node factory — resolved vs unresolved handled uniformly.
+    let make_node = |id: &str, lg: &LinkGraph, raw_fallback: Option<&str>| -> GraphNode {
+        if let Some(_title) = titles.get(id) {
+            GraphNode {
+                id: id.to_string(),
+                label: file_stem_label(id),
+                path: id.to_string(),
+                backlink_count: lg.backlink_count(id),
+                resolved: true,
+            }
+        } else {
+            // Unresolved pseudo-node. `label` is the raw link text if supplied,
+            // otherwise the (already prefix-stripped) id itself.
+            let label = raw_fallback
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| id.trim_start_matches("unresolved:").to_string());
+            GraphNode {
+                id: id.to_string(),
+                label,
+                path: String::new(),
+                backlink_count: 0,
+                resolved: false,
+            }
+        }
+    };
+
+    // Seed the frontier with the center node. Even if the center doesn't
+    // exist in the FileIndex (e.g. a just-created file whose indexing is
+    // lagging), we still emit it as a lone, resolved-looking node so the
+    // panel has something to render.
+    let center_node = if is_resolved(center) {
+        make_node(center, lg, None)
+    } else {
+        GraphNode {
+            id: center.to_string(),
+            label: file_stem_label(center),
+            path: center.to_string(),
+            backlink_count: lg.backlink_count(center),
+            resolved: true,
+        }
+    };
+    nodes.insert(center.to_string(), center_node);
+    visited.insert(center.to_string());
+
+    // Insert an edge keyed by a canonical ordering so (a, b) == (b, a).
+    let insert_edge = |edges: &mut HashSet<(String, String)>, a: &str, b: &str| {
+        if a == b {
+            return;
+        }
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        edges.insert((lo.to_string(), hi.to_string()));
+    };
+
+    let mut frontier: VecDeque<(String, u32)> = VecDeque::new();
+    frontier.push_back((center.to_string(), 0));
+
+    while let Some((current, hop)) = frontier.pop_front() {
+        if hop >= depth {
+            continue;
+        }
+        if nodes.len() >= LOCAL_GRAPH_NODE_CAP {
+            break;
+        }
+
+        // Outgoing links (resolved + unresolved).
+        if let Some(targets) = lg.outgoing_targets_for(&current) {
+            for (resolved, raw) in targets {
+                let (neighbor_id, raw_for_label): (String, Option<&str>) = match resolved {
+                    Some(path) => (path, None),
+                    None => (format!("unresolved:{}", raw), Some(raw.as_str())),
+                };
+
+                if nodes.len() >= LOCAL_GRAPH_NODE_CAP && !nodes.contains_key(&neighbor_id) {
+                    continue;
+                }
+
+                insert_edge(&mut edges, &current, &neighbor_id);
+                nodes
+                    .entry(neighbor_id.clone())
+                    .or_insert_with(|| make_node(&neighbor_id, lg, raw_for_label));
+
+                if visited.insert(neighbor_id.clone()) {
+                    frontier.push_back((neighbor_id, hop + 1));
+                }
+            }
+        }
+
+        // Incoming links (backlinks). Always resolved — incoming only records
+        // the source rel_path of files that themselves exist in the graph.
+        if let Some(sources) = lg.incoming_for(&current) {
+            for source in sources.clone() {
+                if nodes.len() >= LOCAL_GRAPH_NODE_CAP && !nodes.contains_key(&source) {
+                    continue;
+                }
+                insert_edge(&mut edges, &current, &source);
+                nodes
+                    .entry(source.clone())
+                    .or_insert_with(|| make_node(&source, lg, None));
+
+                if visited.insert(source.clone()) {
+                    frontier.push_back((source, hop + 1));
+                }
+            }
+        }
+    }
+
+    // Stable output order — alphabetical ids. Helps snapshot tests and keeps
+    // the force layout's initial random placement reproducible run-to-run.
+    let mut node_list: Vec<GraphNode> = nodes.into_values().collect();
+    node_list.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut edge_list: Vec<GraphEdge> = edges
+        .into_iter()
+        .map(|(from, to)| GraphEdge { from, to })
+        .collect();
+    edge_list.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
+
+    LocalGraph {
+        nodes: node_list,
+        edges: edge_list,
+    }
+}
+
+/// Tauri command — return the 2-hop (or `depth`-hop) local link graph around
+/// a center note. Both outgoing links and backlinks are traversed. Unresolved
+/// wiki-link targets surface as synthetic nodes with `resolved: false`.
+#[tauri::command]
+pub async fn get_local_graph(
+    path: String,
+    depth: u32,
+    state: tauri::State<'_, VaultState>,
+) -> Result<LocalGraph, VaultError> {
+    let (lg_arc, fi_arc) = {
+        let guard = state
+            .index_coordinator
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        match guard.as_ref() {
+            Some(c) => (c.link_graph(), c.file_index()),
+            None => {
+                return Ok(LocalGraph {
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                })
+            }
+        }
+    };
+
+    let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+    let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+
+    Ok(compute_local_graph(&path, depth, &lg, &fi))
 }
