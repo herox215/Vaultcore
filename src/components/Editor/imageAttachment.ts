@@ -35,7 +35,7 @@ function getAttachmentFolder(): string {
   return s.attachmentFolder || ATTACHMENT_FOLDER_DEFAULT;
 }
 
-async function handleSave(view: EditorView, blob: Blob, filename: string): Promise<void> {
+async function handleSave(view: EditorView, blob: Blob, filename: string, userEvent: string): Promise<void> {
   try {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const folder = getAttachmentFolder();
@@ -44,9 +44,13 @@ async function handleSave(view: EditorView, blob: Blob, filename: string): Promi
     const encoded = encodeURI(relPath);
     const md = `![](${encoded})`;
     const head = view.state.selection.main.head;
+    // The userEvent annotation lets the frontmatter boundary guard
+    // transactionFilter redirect inserts that land inside the frontmatter
+    // region (e.g. head === 0 because the drop missed any text target).
     view.dispatch({
       changes: { from: head, insert: md },
       selection: { anchor: head + md.length },
+      userEvent,
     });
     view.focus();
   } catch (err) {
@@ -85,6 +89,7 @@ async function handleSaveMany(view: EditorView, files: File[]): Promise<void> {
   view.dispatch({
     changes: { from: head, insert },
     selection: { anchor: head + insert.length },
+    userEvent: "input.drop",
   });
   view.focus();
 }
@@ -117,7 +122,7 @@ export function imageAttachmentExtension(): Extension {
       const ts = nowTimestamp();
       const filename = `Pasted image ${ts}.${ext}`;
 
-      void handleSave(view, blob, filename);
+      void handleSave(view, blob, filename, "input.paste");
       return true;
     },
 
