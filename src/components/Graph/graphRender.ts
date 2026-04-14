@@ -37,9 +37,9 @@ export interface ForceSettings {
 
 export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
   gravity: 1,
-  scalingRatio: 20,
+  scalingRatio: 40,
   edgeWeightInfluence: 1,
-  slowDown: 5,
+  slowDown: 10,
 };
 
 /** Interface shape of the running FA2 supervisor we care about. */
