@@ -8,5 +8,6 @@ mod merge;
 mod indexer;
 mod link_graph;
 mod local_graph;
+mod global_graph;
 pub mod tag_index;
 mod hash_verify;

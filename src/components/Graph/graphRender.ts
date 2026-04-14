@@ -15,9 +15,46 @@
 import Graph from "graphology";
 import Sigma from "sigma";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import FA2LayoutSupervisor from "graphology-layout-forceatlas2/worker";
 import type { GraphEdge, GraphNode, LocalGraph } from "../../types/links";
 
-/** Options accepted by `mountGraph` — future-proofed for the #32 global view. */
+/**
+ * User-tunable force parameters. Mapped onto the subset of ForceAtlas2
+ * settings that actually shape the "organic" feel — gravity, repulsion,
+ * edge-weight influence, and the motion damping (`slowDown`). Defaults are
+ * tuned for an Obsidian-like drift rather than FA2's aggressive convergence.
+ */
+export interface ForceSettings {
+  /** Center pull. 0 = graph drifts apart, 5 = strong clump. */
+  gravity: number;
+  /** Node repulsion strength. Higher = nodes push apart more. */
+  scalingRatio: number;
+  /** How much edge weight / existence attracts endpoints. */
+  edgeWeightInfluence: number;
+  /** Motion damping. Higher = slower, calmer movement. */
+  slowDown: number;
+}
+
+export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
+  gravity: 1,
+  scalingRatio: 40,
+  edgeWeightInfluence: 1,
+  slowDown: 10,
+};
+
+/** Interface shape of the running FA2 supervisor we care about. */
+interface FA2Supervisor {
+  start(): unknown;
+  stop(): unknown;
+  kill(): unknown;
+  isRunning(): boolean;
+  settings: Record<string, unknown>;
+}
+
+/** Options accepted by `mountGraph` — future-proofed for the #32 global view.
+ *  The `| undefined` on every optional member is deliberate: svelte-check runs
+ *  with `exactOptionalPropertyTypes` and would otherwise reject callers that
+ *  forward `undefined` explicitly. */
 export interface GraphRenderOptions {
   /** Node id to highlight as the center/active node. Null = no accent. */
   centerId: string | null;
@@ -30,9 +67,30 @@ export interface GraphRenderOptions {
   /** Edge color (thin lines, low alpha). */
   edgeColor: string;
   /** Callback for single-click on a resolved node — receives the node id. */
-  onNodeClick?: (id: string, node: GraphNode) => void;
+  onNodeClick?: ((id: string, node: GraphNode) => void) | undefined;
   /** Callback for double-click on a resolved node. */
-  onNodeDoubleClick?: (id: string, node: GraphNode) => void;
+  onNodeDoubleClick?: ((id: string, node: GraphNode) => void) | undefined;
+  /** Callback for double-click on empty space (used by the global graph's
+   *  "fit to view" reset). */
+  onStageDoubleClick?: (() => void) | undefined;
+  /** Number of ForceAtlas2 iterations. Local graph uses the default 50
+   *  for snappy redraws; global graph passes ~300 for a 2 s warm-up. */
+  layoutIterations?: number | undefined;
+  /** Enable drag-to-reposition on individual nodes. Defaults to false. */
+  enableNodeDrag?: boolean | undefined;
+  /** Per-node dim alpha multiplier — 0..1. 0 effectively hides, 1 is fully
+   *  visible. Called every nodeReducer tick; return undefined to use the
+   *  default. */
+  dimForNode?: ((id: string, attrs: Record<string, unknown>) => number | undefined) | undefined;
+  /** Labels always shown for these node ids regardless of zoom threshold. */
+  alwaysShowLabel?: ((id: string) => boolean) | undefined;
+  /** Force-simulation parameters. Passing this enables continuous (live)
+   *  layout via the ForceAtlas2 worker — the default batch `layoutIterations`
+   *  path is used when this field is absent. */
+  forceSettings?: ForceSettings | undefined;
+  /** Start the continuous simulation paused. Toggle later via
+   *  `setLayoutFrozen`. No effect when `forceSettings` is absent. */
+  startFrozen?: boolean | undefined;
 }
 
 /** Opaque handle returned by `mountGraph`. Callers pass it to update/destroy. */
@@ -47,7 +105,31 @@ export interface GraphHandle {
   neighborMap: Map<string, Set<string>>;
   /** Disposers for DOM listeners attached outside sigma. */
   disposers: Array<() => void>;
+  /** Live ForceAtlas2 supervisor when continuous sim is active. */
+  layoutSupervisor: FA2Supervisor | null;
+  /** Frozen state mirror — drives pause/resume without reading the supervisor. */
+  frozen: boolean;
+  /** Active cooling monitor — responsible for stopping the supervisor once
+   *  the graph has settled. Null when no monitor is running. */
+  cooling: CoolingMonitor | null;
 }
+
+/** RAF-driven settlement watcher. Each frame samples node positions, computes
+ *  average per-node movement², and stops the supervisor once motion falls
+ *  below the threshold for enough consecutive frames (or a hard time cap). */
+interface CoolingMonitor {
+  raf: number | null;
+  lastSample: Map<string, { x: number; y: number }>;
+  lowEnergyFrames: number;
+  startTime: number;
+}
+
+/** Average per-node movement² below this counts as "quiet" for cooldown. */
+const COOLING_STOP_ENERGY = 0.005;
+/** Consecutive quiet frames needed to declare the graph settled. */
+const COOLING_STOP_FRAMES = 30;
+/** Hard cap on simulation runtime — safety net for pathological graphs. */
+const COOLING_MAX_MS = 15_000;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -113,14 +195,114 @@ function populateGraph(graph: Graph, data: LocalGraph): void {
   }
 }
 
-/** Run ForceAtlas2 for 50 iterations and assign final positions in place. */
-function runLayout(graph: Graph): void {
+/** Start (or restart) the cooling monitor. Cancels any previous monitor,
+ *  seeds with current node positions, and polls each frame. When the graph
+ *  settles or the time cap is hit the supervisor is stopped. */
+function startCooling(handle: GraphHandle): void {
+  stopCooling(handle);
+  if (!handle.layoutSupervisor) return;
+
+  const state: CoolingMonitor = {
+    raf: null,
+    lastSample: new Map(),
+    lowEnergyFrames: 0,
+    startTime: performance.now(),
+  };
+  handle.cooling = state;
+
+  // Seed snapshot so the first tick's delta is against the current frame.
+  handle.graph.forEachNode((id, attrs) => {
+    state.lastSample.set(id, {
+      x: Number(attrs.x ?? 0),
+      y: Number(attrs.y ?? 0),
+    });
+  });
+
+  const tick = (): void => {
+    const sv = handle.layoutSupervisor;
+    if (!sv || !sv.isRunning()) {
+      state.raf = null;
+      return;
+    }
+
+    let totalSq = 0;
+    let count = 0;
+    handle.graph.forEachNode((id, attrs) => {
+      const prev = state.lastSample.get(id);
+      const x = Number(attrs.x ?? 0);
+      const y = Number(attrs.y ?? 0);
+      if (prev) {
+        const dx = x - prev.x;
+        const dy = y - prev.y;
+        totalSq += dx * dx + dy * dy;
+        count += 1;
+      }
+      state.lastSample.set(id, { x, y });
+    });
+    const avg = count > 0 ? totalSq / count : 0;
+
+    if (avg < COOLING_STOP_ENERGY) {
+      state.lowEnergyFrames += 1;
+    } else {
+      state.lowEnergyFrames = 0;
+    }
+
+    const elapsed = performance.now() - state.startTime;
+    if (
+      state.lowEnergyFrames >= COOLING_STOP_FRAMES ||
+      elapsed > COOLING_MAX_MS
+    ) {
+      try {
+        sv.stop();
+      } catch {
+        /* ignore */
+      }
+      state.raf = null;
+      return;
+    }
+
+    state.raf = requestAnimationFrame(tick);
+  };
+
+  state.raf = requestAnimationFrame(tick);
+}
+
+/** Cancel the cooling monitor without touching the supervisor. */
+function stopCooling(handle: GraphHandle): void {
+  if (!handle.cooling) return;
+  if (handle.cooling.raf !== null) {
+    try {
+      cancelAnimationFrame(handle.cooling.raf);
+    } catch {
+      /* ignore */
+    }
+  }
+  handle.cooling = null;
+}
+
+/** Reheat the sim: ensure the supervisor is running (unless frozen) and
+ *  restart the cooldown clock. Called after drag-release, slider tweaks,
+ *  and data updates so the user sees movement in response. */
+function reheat(handle: GraphHandle): void {
+  if (!handle.layoutSupervisor || handle.frozen) return;
+  if (!handle.layoutSupervisor.isRunning()) {
+    try {
+      handle.layoutSupervisor.start();
+    } catch {
+      return;
+    }
+  }
+  startCooling(handle);
+}
+
+/** Run ForceAtlas2 and assign final positions in place. */
+function runLayout(graph: Graph, iterations = 50): void {
   if (graph.order === 0) return;
   const settings = forceAtlas2.inferSettings(graph);
   // Speed up convergence on small graphs.
   settings.slowDown = 2;
   settings.gravity = 1;
-  forceAtlas2.assign(graph, { iterations: 50, settings });
+  forceAtlas2.assign(graph, { iterations, settings });
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -138,7 +320,10 @@ export function mountGraph(
 ): GraphHandle {
   const graph = new Graph({ type: "undirected", multi: false });
   populateGraph(graph, data);
-  runLayout(graph);
+  // Short seed pass so nodes spread out before the live supervisor (or the
+  // final rendered frame) takes over. Without this FA2 starts from near-zero
+  // positions and the first few frames look like a single cluster.
+  runLayout(graph, options.forceSettings ? 30 : (options.layoutIterations ?? 50));
 
   const accent = resolveColor(container, options.accentColor);
   const nodeColor = resolveColor(container, options.nodeColor);
@@ -147,9 +332,14 @@ export function mountGraph(
 
   const neighborMap = buildNeighborMap(data.edges);
 
+  // Label threshold: 0 = always show (local graph). Global graph raises this
+  // so only higher-zoom / larger nodes show labels; hovered+neighbors are
+  // force-labeled via the reducer.
+  const labelThreshold = options.layoutIterations && options.layoutIterations > 50 ? 6 : 0;
+
   const renderer = new Sigma(graph, container, {
     renderLabels: true,
-    labelRenderedSizeThreshold: 0,
+    labelRenderedSizeThreshold: labelThreshold,
     labelSize: 11,
     labelWeight: "500",
     minEdgeThickness: 1,
@@ -165,7 +355,39 @@ export function mountGraph(
     hoveredNode: null,
     neighborMap,
     disposers: [],
+    layoutSupervisor: null,
+    frozen: options.startFrozen === true,
+    cooling: null,
   };
+
+  // Live ForceAtlas2 supervisor — organic, Obsidian-style drift. Sigma
+  // listens to node-attr changes emitted by the worker and redraws each
+  // time, so we don't need an explicit requestAnimationFrame loop here.
+  if (options.forceSettings) {
+    try {
+      const supervisor = new (FA2LayoutSupervisor as unknown as {
+        new (g: Graph, p: { settings: Record<string, unknown> }): FA2Supervisor;
+      })(graph, {
+        settings: {
+          ...forceAtlas2.inferSettings(graph),
+          ...options.forceSettings,
+          barnesHutOptimize: graph.order > 200,
+          adjustSizes: true,
+        },
+      });
+      handle.layoutSupervisor = supervisor;
+      if (!handle.frozen) {
+        supervisor.start();
+        startCooling(handle);
+      }
+    } catch (err) {
+      // Worker spawn can fail in CSP-restricted or jsdom environments.
+      // Fall back to the existing static layout and log so we notice.
+      // eslint-disable-next-line no-console
+      console.warn("[graphRender] live layout unavailable, static fallback:", err);
+      handle.layoutSupervisor = null;
+    }
+  }
 
   // Node reducer — color + size per frame. Reflects center, unresolved,
   // and hover-dim state without mutating node attributes.
@@ -182,23 +404,54 @@ export function mountGraph(
       resolved,
     };
 
-    let dim = false;
+    // External dim filter (text/tag/folder filters in the global graph).
+    const externalAlpha = handle.options.dimForNode?.(node, attrs);
+
+    // Hover dim: non-hovered, non-neighbor nodes get dimmed.
+    let hoverDim = false;
     if (handle.hoveredNode && handle.hoveredNode !== node) {
       const neighbors = handle.neighborMap.get(handle.hoveredNode);
       if (!neighbors || !neighbors.has(node)) {
-        dim = true;
+        hoverDim = true;
       }
     }
 
-    return {
+    // Always-label contract: hovered node + direct neighbors always show
+    // labels regardless of the renderer threshold.
+    const neighborsOfHover = handle.hoveredNode
+      ? handle.neighborMap.get(handle.hoveredNode)
+      : null;
+    const isHoverNeighbor =
+      handle.hoveredNode === node ||
+      (neighborsOfHover ? neighborsOfHover.has(node) : false);
+    const forceLabel =
+      labelThreshold === 0 ||
+      isHoverNeighbor ||
+      (handle.options.alwaysShowLabel?.(node) ?? false);
+
+    let finalColor = color;
+    let finalLabelColor: string | undefined;
+    if (hoverDim) {
+      finalColor = applyAlpha(color, 0.2);
+      finalLabelColor = applyAlpha(color, 0.2);
+    }
+    if (typeof externalAlpha === "number" && externalAlpha < 1) {
+      finalColor = applyAlpha(finalColor, externalAlpha);
+      finalLabelColor = applyAlpha(finalColor, externalAlpha);
+    }
+
+    const result: Record<string, unknown> = {
       ...attrs,
       size: nodeSize(nodeData, isCenter),
-      color,
+      color: finalColor,
       label: nodeData.label,
       zIndex: isCenter ? 2 : 1,
-      forceLabel: true,
-      ...(dim ? { color: applyAlpha(color, 0.2), labelColor: applyAlpha(color, 0.2) } : {}),
+      forceLabel,
     };
+    if (finalLabelColor !== undefined) {
+      result.labelColor = finalLabelColor;
+    }
+    return result;
   });
 
   // Edge reducer — hover dim for non-adjacent edges.
@@ -255,6 +508,64 @@ export function mountGraph(
   renderer.on("enterNode", enter);
   renderer.on("leaveNode", leave);
 
+  // Stage double-click — used by the global graph to reset zoom.
+  if (options.onStageDoubleClick) {
+    renderer.on("doubleClickStage", ({ event }) => {
+      event.preventSigmaDefault();
+      handle.options.onStageDoubleClick?.();
+    });
+  }
+
+  // Drag-to-reposition — sigma 3 exposes raw mouse events; capture & convert
+  // viewport coords to graph coords and write back to the node attributes.
+  if (options.enableNodeDrag) {
+    let draggedNode: string | null = null;
+    let draggingActive = false;
+
+    let resumeOnRelease = false;
+
+    renderer.on("downNode", ({ node, event }) => {
+      draggedNode = node;
+      draggingActive = true;
+      // Pause cooling + supervisor while dragging so they don't fight the
+      // user's finger. On release we reheat so the drop rings through.
+      stopCooling(handle);
+      if (handle.layoutSupervisor && handle.layoutSupervisor.isRunning()) {
+        handle.layoutSupervisor.stop();
+      }
+      resumeOnRelease = true;
+      // Disable camera movement while dragging a node.
+      renderer.getCamera().disable();
+      event.preventSigmaDefault();
+    });
+
+    const mouseCaptor = renderer.getMouseCaptor();
+    const onMouseMove = (ev: { x: number; y: number; preventSigmaDefault: () => void }) => {
+      if (!draggingActive || !draggedNode) return;
+      const coords = renderer.viewportToGraph({ x: ev.x, y: ev.y });
+      graph.setNodeAttribute(draggedNode, "x", coords.x);
+      graph.setNodeAttribute(draggedNode, "y", coords.y);
+      ev.preventSigmaDefault();
+    };
+    const onMouseUp = () => {
+      if (draggingActive) {
+        draggingActive = false;
+        draggedNode = null;
+        renderer.getCamera().enable();
+        // Reheat after drop so neighbors physically respond to the released
+        // node. reheat() is a no-op when the sim is frozen by the user.
+        if (resumeOnRelease) reheat(handle);
+        resumeOnRelease = false;
+      }
+    };
+    mouseCaptor.on("mousemovebody", onMouseMove);
+    mouseCaptor.on("mouseup", onMouseUp);
+    handle.disposers.push(() => {
+      mouseCaptor.removeListener("mousemovebody", onMouseMove);
+      mouseCaptor.removeListener("mouseup", onMouseUp);
+    });
+  }
+
   // Scroll-wheel inside the panel zooms the graph rather than scrolling the
   // sidebar. Sigma already binds wheel events on its container, but it doesn't
   // call preventDefault by default when the mouse is outside a node. We catch
@@ -273,13 +584,63 @@ export function mountGraph(
 /**
  * Replace the graph's nodes + edges with a fresh payload. Re-runs the layout
  * so newly added nodes snap into place.
+ *
+ * If `relayout` is false, existing node positions are preserved for any id
+ * still present in the new dataset — useful for incremental refreshes in the
+ * global graph so the view doesn't jump on every file-save.
  */
-export function updateGraph(handle: GraphHandle, data: LocalGraph): void {
-  populateGraph(handle.graph, data);
-  runLayout(handle.graph);
+export function updateGraph(
+  handle: GraphHandle,
+  data: LocalGraph,
+  opts: { relayout?: boolean; iterations?: number } = {},
+): void {
+  const relayout = opts.relayout ?? true;
+  const iterations = opts.iterations ?? handle.options.layoutIterations ?? 50;
+
+  // Pause the live supervisor so it doesn't race with `graph.clear()` /
+  // re-seed. We'll restart it at the end if it was running and the view is
+  // not frozen.
+  const wasRunning =
+    handle.layoutSupervisor !== null &&
+    handle.layoutSupervisor.isRunning();
+  if (wasRunning && handle.layoutSupervisor) handle.layoutSupervisor.stop();
+
+  if (!relayout) {
+    // Preserve positions for nodes that already exist.
+    const prevPos = new Map<string, { x: number; y: number }>();
+    handle.graph.forEachNode((id, attrs) => {
+      prevPos.set(id, {
+        x: Number(attrs.x ?? 0),
+        y: Number(attrs.y ?? 0),
+      });
+    });
+    populateGraph(handle.graph, data);
+    for (const [id, pos] of prevPos) {
+      if (handle.graph.hasNode(id)) {
+        handle.graph.setNodeAttribute(id, "x", pos.x);
+        handle.graph.setNodeAttribute(id, "y", pos.y);
+      }
+    }
+    // Only run a short refinement pass if there are new nodes.
+    let newCount = 0;
+    handle.graph.forEachNode((id) => {
+      if (!prevPos.has(id)) newCount += 1;
+    });
+    if (newCount > 0) {
+      runLayout(handle.graph, Math.min(iterations, 30));
+    }
+  } else {
+    populateGraph(handle.graph, data);
+    runLayout(handle.graph, iterations);
+  }
+
   handle.neighborMap = buildNeighborMap(data.edges);
   handle.hoveredNode = null;
   handle.renderer.refresh();
+
+  if (wasRunning && handle.layoutSupervisor && !handle.frozen) {
+    reheat(handle);
+  }
 }
 
 /** Tear down the sigma renderer and remove all listeners. */
@@ -292,12 +653,57 @@ export function destroyGraph(handle: GraphHandle): void {
     }
   }
   handle.disposers.length = 0;
+  stopCooling(handle);
+  if (handle.layoutSupervisor) {
+    try {
+      handle.layoutSupervisor.kill();
+    } catch {
+      /* ignore */
+    }
+    handle.layoutSupervisor = null;
+  }
   try {
     handle.renderer.kill();
   } catch {
     /* ignore */
   }
   handle.graph.clear();
+}
+
+/**
+ * Update the live force parameters. Mutates the supervisor's settings in place
+ * — the next iteration message to the worker picks them up. No-op when the
+ * handle has no supervisor (static-layout mode).
+ */
+export function setForceSettings(
+  handle: GraphHandle,
+  settings: ForceSettings,
+): void {
+  handle.options = { ...handle.options, forceSettings: settings };
+  if (!handle.layoutSupervisor) return;
+  Object.assign(handle.layoutSupervisor.settings, settings);
+  // Reheat so the change is visible — the graph may have already settled.
+  reheat(handle);
+}
+
+/**
+ * Pause or resume the live simulation. When a node drag is in progress the
+ * drag handler still pauses on mousedown and only resumes on mouseup — this
+ * function mirrors the frozen state so the drag handler knows whether to
+ * resume.
+ */
+export function setLayoutFrozen(handle: GraphHandle, frozen: boolean): void {
+  handle.frozen = frozen;
+  if (!handle.layoutSupervisor) return;
+  const running = handle.layoutSupervisor.isRunning();
+  if (frozen) {
+    stopCooling(handle);
+    if (running) handle.layoutSupervisor.stop();
+    return;
+  }
+  // Un-freezing — reheat so the user sees motion resume.
+  if (!running) handle.layoutSupervisor.start();
+  startCooling(handle);
 }
 
 /**

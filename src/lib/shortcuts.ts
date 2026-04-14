@@ -29,6 +29,7 @@ export interface ShortcutContext {
   cycleTabPrev: () => void;
   closeActiveTab: () => void;
   createNewNote: () => void;
+  openGraph: () => void;
 }
 
 export interface Shortcut {
@@ -99,6 +100,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     keys: { meta: true, key: "w" },
     label: "Tab schließen",
     handler: (ctx) => { ctx.closeActiveTab(); },
+  },
+  {
+    id: "open-graph",
+    keys: { meta: true, shift: true, key: "g" },
+    label: "Graph-Ansicht öffnen",
+    handler: (ctx) => { ctx.openGraph(); },
   },
 ] as const;
 
