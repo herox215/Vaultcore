@@ -1,9 +1,11 @@
 <script lang="ts">
   import BacklinksPanel from "../Backlinks/BacklinksPanel.svelte";
+  import OutgoingLinksPanel from "../OutgoingLinks/OutgoingLinksPanel.svelte";
   import PropertiesPanel from "../Properties/PropertiesPanel.svelte";
 </script>
 <div class="vc-right-sidebar">
   <PropertiesPanel />
+  <OutgoingLinksPanel />
   <div class="vc-right-sidebar-backlinks">
     <BacklinksPanel />
   </div>
