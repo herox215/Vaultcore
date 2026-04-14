@@ -109,7 +109,27 @@ export interface GraphHandle {
   layoutSupervisor: FA2Supervisor | null;
   /** Frozen state mirror — drives pause/resume without reading the supervisor. */
   frozen: boolean;
+  /** Active cooling monitor — responsible for stopping the supervisor once
+   *  the graph has settled. Null when no monitor is running. */
+  cooling: CoolingMonitor | null;
 }
+
+/** RAF-driven settlement watcher. Each frame samples node positions, computes
+ *  average per-node movement², and stops the supervisor once motion falls
+ *  below the threshold for enough consecutive frames (or a hard time cap). */
+interface CoolingMonitor {
+  raf: number | null;
+  lastSample: Map<string, { x: number; y: number }>;
+  lowEnergyFrames: number;
+  startTime: number;
+}
+
+/** Average per-node movement² below this counts as "quiet" for cooldown. */
+const COOLING_STOP_ENERGY = 0.005;
+/** Consecutive quiet frames needed to declare the graph settled. */
+const COOLING_STOP_FRAMES = 30;
+/** Hard cap on simulation runtime — safety net for pathological graphs. */
+const COOLING_MAX_MS = 15_000;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -175,6 +195,106 @@ function populateGraph(graph: Graph, data: LocalGraph): void {
   }
 }
 
+/** Start (or restart) the cooling monitor. Cancels any previous monitor,
+ *  seeds with current node positions, and polls each frame. When the graph
+ *  settles or the time cap is hit the supervisor is stopped. */
+function startCooling(handle: GraphHandle): void {
+  stopCooling(handle);
+  if (!handle.layoutSupervisor) return;
+
+  const state: CoolingMonitor = {
+    raf: null,
+    lastSample: new Map(),
+    lowEnergyFrames: 0,
+    startTime: performance.now(),
+  };
+  handle.cooling = state;
+
+  // Seed snapshot so the first tick's delta is against the current frame.
+  handle.graph.forEachNode((id, attrs) => {
+    state.lastSample.set(id, {
+      x: Number(attrs.x ?? 0),
+      y: Number(attrs.y ?? 0),
+    });
+  });
+
+  const tick = (): void => {
+    const sv = handle.layoutSupervisor;
+    if (!sv || !sv.isRunning()) {
+      state.raf = null;
+      return;
+    }
+
+    let totalSq = 0;
+    let count = 0;
+    handle.graph.forEachNode((id, attrs) => {
+      const prev = state.lastSample.get(id);
+      const x = Number(attrs.x ?? 0);
+      const y = Number(attrs.y ?? 0);
+      if (prev) {
+        const dx = x - prev.x;
+        const dy = y - prev.y;
+        totalSq += dx * dx + dy * dy;
+        count += 1;
+      }
+      state.lastSample.set(id, { x, y });
+    });
+    const avg = count > 0 ? totalSq / count : 0;
+
+    if (avg < COOLING_STOP_ENERGY) {
+      state.lowEnergyFrames += 1;
+    } else {
+      state.lowEnergyFrames = 0;
+    }
+
+    const elapsed = performance.now() - state.startTime;
+    if (
+      state.lowEnergyFrames >= COOLING_STOP_FRAMES ||
+      elapsed > COOLING_MAX_MS
+    ) {
+      try {
+        sv.stop();
+      } catch {
+        /* ignore */
+      }
+      state.raf = null;
+      return;
+    }
+
+    state.raf = requestAnimationFrame(tick);
+  };
+
+  state.raf = requestAnimationFrame(tick);
+}
+
+/** Cancel the cooling monitor without touching the supervisor. */
+function stopCooling(handle: GraphHandle): void {
+  if (!handle.cooling) return;
+  if (handle.cooling.raf !== null) {
+    try {
+      cancelAnimationFrame(handle.cooling.raf);
+    } catch {
+      /* ignore */
+    }
+  }
+  handle.cooling = null;
+}
+
+/** Reheat the sim: ensure the supervisor is running (unless frozen) and
+ *  restart the cooldown clock. Called after drag-release, slider tweaks,
+ *  and data updates so the user sees movement in response. */
+function reheat(handle: GraphHandle): void {
+  if (!handle.layoutSupervisor || handle.frozen) return;
+  if (!handle.layoutSupervisor.isRunning()) {
+    try {
+      handle.layoutSupervisor.start();
+    } catch {
+      return;
+    }
+  }
+  startCooling(handle);
+}
+
 /** Run ForceAtlas2 and assign final positions in place. */
 function runLayout(graph: Graph, iterations = 50): void {
   if (graph.order === 0) return;
@@ -237,6 +357,7 @@ export function mountGraph(
     disposers: [],
     layoutSupervisor: null,
     frozen: options.startFrozen === true,
+    cooling: null,
   };
 
   // Live ForceAtlas2 supervisor — organic, Obsidian-style drift. Sigma
@@ -255,7 +376,10 @@ export function mountGraph(
         },
       });
       handle.layoutSupervisor = supervisor;
-      if (!handle.frozen) supervisor.start();
+      if (!handle.frozen) {
+        supervisor.start();
+        startCooling(handle);
+      }
     } catch (err) {
       // Worker spawn can fail in CSP-restricted or jsdom environments.
       // Fall back to the existing static layout and log so we notice.
@@ -403,14 +527,13 @@ export function mountGraph(
     renderer.on("downNode", ({ node, event }) => {
       draggedNode = node;
       draggingActive = true;
-      // Pause the live supervisor while dragging so it doesn't fight the
-      // user's finger. Remember whether it was running so we can resume.
+      // Pause cooling + supervisor while dragging so they don't fight the
+      // user's finger. On release we reheat so the drop rings through.
+      stopCooling(handle);
       if (handle.layoutSupervisor && handle.layoutSupervisor.isRunning()) {
         handle.layoutSupervisor.stop();
-        resumeOnRelease = true;
-      } else {
-        resumeOnRelease = false;
       }
+      resumeOnRelease = true;
       // Disable camera movement while dragging a node.
       renderer.getCamera().disable();
       event.preventSigmaDefault();
@@ -429,11 +552,9 @@ export function mountGraph(
         draggingActive = false;
         draggedNode = null;
         renderer.getCamera().enable();
-        // Resume only if the user hasn't frozen the sim via the Forces panel
-        // while the drag was in flight.
-        if (resumeOnRelease && handle.layoutSupervisor && !handle.frozen) {
-          handle.layoutSupervisor.start();
-        }
+        // Reheat after drop so neighbors physically respond to the released
+        // node. reheat() is a no-op when the sim is frozen by the user.
+        if (resumeOnRelease) reheat(handle);
         resumeOnRelease = false;
       }
     };
@@ -518,7 +639,7 @@ export function updateGraph(
   handle.renderer.refresh();
 
   if (wasRunning && handle.layoutSupervisor && !handle.frozen) {
-    handle.layoutSupervisor.start();
+    reheat(handle);
   }
 }
 
@@ -532,6 +653,7 @@ export function destroyGraph(handle: GraphHandle): void {
     }
   }
   handle.disposers.length = 0;
+  stopCooling(handle);
   if (handle.layoutSupervisor) {
     try {
       handle.layoutSupervisor.kill();
@@ -560,6 +682,8 @@ export function setForceSettings(
   handle.options = { ...handle.options, forceSettings: settings };
   if (!handle.layoutSupervisor) return;
   Object.assign(handle.layoutSupervisor.settings, settings);
+  // Reheat so the change is visible — the graph may have already settled.
+  reheat(handle);
 }
 
 /**
@@ -572,8 +696,14 @@ export function setLayoutFrozen(handle: GraphHandle, frozen: boolean): void {
   handle.frozen = frozen;
   if (!handle.layoutSupervisor) return;
   const running = handle.layoutSupervisor.isRunning();
-  if (frozen && running) handle.layoutSupervisor.stop();
-  if (!frozen && !running) handle.layoutSupervisor.start();
+  if (frozen) {
+    stopCooling(handle);
+    if (running) handle.layoutSupervisor.stop();
+    return;
+  }
+  // Un-freezing — reheat so the user sees motion resume.
+  if (!running) handle.layoutSupervisor.start();
+  startCooling(handle);
 }
 
 /**
