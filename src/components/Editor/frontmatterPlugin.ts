@@ -3,7 +3,7 @@ import type { DecorationSet } from "@codemirror/view";
 import { StateField } from "@codemirror/state";
 import type { EditorState, Extension } from "@codemirror/state";
 
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n)?/;
 
 export interface FrontmatterRegion {
   from: number;
