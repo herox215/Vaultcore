@@ -1,11 +1,14 @@
 // Image paste and drop handler for the CodeMirror 6 editor.
-// Saves images to the vault's attachment folder and inserts markdown references.
+// Saves images next to the active note's .md file and inserts `![[name.ext]]`
+// wiki-embed references. Works together with embedPlugin.ts for inline rendering.
 
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { get } from "svelte/store";
-import { settingsStore, ATTACHMENT_FOLDER_DEFAULT } from "../../store/settingsStore";
+import { tabStore } from "../../store/tabStore";
+import { vaultStore } from "../../store/vaultStore";
 import { saveAttachment } from "../../ipc/commands";
+import { addResolvedAttachment } from "./embeds";
 
 function extFromMime(mime: string): string | null {
   switch (mime) {
@@ -30,19 +33,61 @@ function nowTimestamp(): string {
   );
 }
 
-function getAttachmentFolder(): string {
-  const s = get(settingsStore);
-  return s.attachmentFolder || ATTACHMENT_FOLDER_DEFAULT;
+/**
+ * Return the vault-relative directory of the currently-active tab's file,
+ * e.g. `"foo/bar"` for `/vault/foo/bar/note.md`, or `""` for a file at the
+ * vault root or when no tab is active. Uses forward slashes regardless of
+ * the host OS so it matches the save_attachment IPC's expectation.
+ */
+function getActiveNoteDir(): string {
+  const vault = get(vaultStore).currentPath;
+  if (!vault) return "";
+  const tabs = get(tabStore);
+  if (!tabs.activeTabId) return "";
+  const activeTab = tabs.tabs.find((t) => t.id === tabs.activeTabId);
+  if (!activeTab) return "";
+
+  const abs = activeTab.filePath;
+  // Normalize to forward slashes so the prefix strip and `lastIndexOf("/")`
+  // below are consistent across Windows and Unix.
+  const absFwd = abs.replace(/\\/g, "/");
+  const vaultFwd = vault.replace(/\\/g, "/").replace(/\/$/, "");
+  if (!absFwd.startsWith(vaultFwd + "/")) return "";
+  const rel = absFwd.slice(vaultFwd.length + 1);
+  const lastSlash = rel.lastIndexOf("/");
+  return lastSlash === -1 ? "" : rel.slice(0, lastSlash);
+}
+
+/**
+ * Format a vault-relative attachment path as a wiki-embed reference.
+ * Uses just the basename — the embed resolver looks up by filename.
+ */
+export function formatEmbedReference(relPath: string): string {
+  const idx = relPath.lastIndexOf("/");
+  const basename = idx === -1 ? relPath : relPath.slice(idx + 1);
+  return `![[${basename}]]`;
+}
+
+/**
+ * Register the just-saved attachment with the embed resolver so the upcoming
+ * decoration rebuild (triggered by our own view.dispatch below) finds it.
+ * Without this, the file-watcher event for our own write is suppressed via
+ * write_ignore, so the resolver map would stay stale until vault reopen and
+ * the user would briefly see a "nicht gefunden" placeholder.
+ */
+function registerSavedAttachment(relPath: string): void {
+  const idx = relPath.lastIndexOf("/");
+  const basename = idx === -1 ? relPath : relPath.slice(idx + 1);
+  addResolvedAttachment(basename, relPath);
 }
 
 async function handleSave(view: EditorView, blob: Blob, filename: string, userEvent: string): Promise<void> {
   try {
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    const folder = getAttachmentFolder();
+    const folder = getActiveNoteDir();
     const relPath = await saveAttachment(folder, filename, bytes);
-    // URL-encode path but preserve slashes (encodeURI, not encodeURIComponent)
-    const encoded = encodeURI(relPath);
-    const md = `![](${encoded})`;
+    registerSavedAttachment(relPath);
+    const md = formatEmbedReference(relPath);
     const head = view.state.selection.main.head;
     // The userEvent annotation lets the frontmatter boundary guard
     // transactionFilter redirect inserts that land inside the frontmatter
@@ -59,7 +104,7 @@ async function handleSave(view: EditorView, blob: Blob, filename: string, userEv
 }
 
 async function handleSaveMany(view: EditorView, files: File[]): Promise<void> {
-  const folder = getAttachmentFolder();
+  const folder = getActiveNoteDir();
   const parts: string[] = [];
   for (const file of files) {
     try {
@@ -67,8 +112,8 @@ async function handleSaveMany(view: EditorView, files: File[]): Promise<void> {
       // Strip any path prefix (some browsers include full path in name)
       const basename = file.name.replace(/.*[/\\]/, "");
       const relPath = await saveAttachment(folder, basename, bytes);
-      const encoded = encodeURI(relPath);
-      parts.push(`![](${encoded})`);
+      registerSavedAttachment(relPath);
+      parts.push(formatEmbedReference(relPath));
     } catch (err) {
       console.error("[imageAttachment] drop save failed:", err);
     }

@@ -25,6 +25,7 @@ import { markdownTheme, markdownHighlightStyle } from "./theme";
 import { autoSaveExtension } from "./autoSave";
 import { flashField } from "./flashHighlight";
 import { wikiLinkPlugin } from "./wikiLink";
+import { embedPlugin } from "./embedPlugin";
 import { livePreviewPlugin } from "./livePreview";
 import { frontmatterPlugin } from "./frontmatterPlugin";
 import { calloutPlugin } from "./callouts";
@@ -80,6 +81,7 @@ export function buildExtensions(
     autoSaveExtension(onSave),
     flashField,
     wikiLinkPlugin,
+    embedPlugin,
     livePreviewPlugin,
     frontmatterPlugin,
     calloutPlugin,

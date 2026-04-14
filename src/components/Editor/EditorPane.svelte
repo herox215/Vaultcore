@@ -9,7 +9,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
   import { activeViewStore } from "../../store/activeViewStore";
-  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, createFile, getFileHash } from "../../ipc/commands";
+  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
@@ -21,6 +21,7 @@
   import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
+  import { setResolvedAttachments } from "./embeds";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -104,20 +105,28 @@
   // ─── Wiki-link resolution map ──────────────────────────────────────────────
 
   /**
-   * Reload the stem->relPath resolution map from the Rust backend.
-   * Called on vault open and after click-to-create so the new file resolves.
+   * Reload the stem->relPath resolution maps from the Rust backend. Handles
+   * both wiki-link and attachment resolution so the embed plugin (issue #9)
+   * can resolve `![[image.png]]` synchronously. Each call fires two IPC
+   * requests in parallel and then nudges every mounted view to rebuild
+   * decorations — `refreshWikiLinks` dispatches an empty transaction which
+   * picks up both the wiki-link plugin and the embed plugin at once.
    */
   async function reloadResolvedLinks(): Promise<void> {
     try {
-      const map = await getResolvedLinks();
-      setResolvedLinks(map);
-      // Refresh decorations on all mounted views in this pane
+      const [linksMap, attachmentsMap] = await Promise.all([
+        getResolvedLinks(),
+        getResolvedAttachments(),
+      ]);
+      setResolvedLinks(linksMap);
+      setResolvedAttachments(attachmentsMap);
       for (const view of viewMap.values()) {
         refreshWikiLinks(view);
       }
     } catch {
-      // Soft-fail: all links render as unresolved until next reload
+      // Soft-fail: all links/embeds render as unresolved until next reload
       setResolvedLinks(new Map());
+      setResolvedAttachments(new Map());
     }
   }
 

@@ -3,6 +3,7 @@
 // integration-tested manually (paste/drop require a running Tauri app).
 
 import { describe, it, expect } from "vitest";
+import { formatEmbedReference } from "../imageAttachment";
 
 // Re-implement the pure helpers here so tests don't depend on Svelte store
 // imports (which require a browser context).
@@ -77,22 +78,22 @@ describe("filename base parsing", () => {
   });
 });
 
-describe("URL encoding for markdown reference", () => {
-  it("encodes spaces as %20 in path", () => {
-    const relPath = "attachments/Pasted image 20260414203000.png";
-    const encoded = encodeURI(relPath);
-    expect(encoded).toBe("attachments/Pasted%20image%2020260414203000.png");
-    expect(encoded).not.toContain(" ");
+describe("formatEmbedReference", () => {
+  it("wraps a bare filename as a wiki-embed", () => {
+    expect(formatEmbedReference("photo.png")).toBe("![[photo.png]]");
   });
-  it("does not encode forward slashes", () => {
-    const relPath = "my folder/sub/image.png";
-    const encoded = encodeURI(relPath);
-    expect(encoded).toContain("/");
-    expect(encoded).toBe("my%20folder/sub/image.png");
+  it("reduces a vault-relative path to its basename", () => {
+    // save_attachment returns something like "foo/bar/photo.png" — we only
+    // keep the last segment because the embed resolver looks up by filename.
+    expect(formatEmbedReference("foo/bar/photo.png")).toBe("![[photo.png]]");
   });
-  it("produces valid markdown image reference", () => {
-    const relPath = "attachments/Pasted image 20260414203000.png";
-    const md = `![](${encodeURI(relPath)})`;
-    expect(md).toBe("![](attachments/Pasted%20image%2020260414203000.png)");
+  it("preserves spaces in filenames (no URL encoding)", () => {
+    const rel = "notes/sub/Pasted image 20260414203000.png";
+    const md = formatEmbedReference(rel);
+    expect(md).toBe("![[Pasted image 20260414203000.png]]");
+    expect(md).not.toContain("%20");
+  });
+  it("handles a filename at vault root", () => {
+    expect(formatEmbedReference("root.png")).toBe("![[root.png]]");
   });
 });

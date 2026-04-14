@@ -214,4 +214,30 @@ export const markdownTheme = EditorView.theme({
     textDecoration: "line-through",
     color: "var(--color-text-muted)",
   },
+
+  // ── Embeds (issue #9) ─────────────────────────────────────────────────────
+  // Images render inline via convertFileSrc + the asset protocol. Note embeds
+  // show a bordered monospace block until a real markdown renderer is wired up.
+  ".cm-embed-img": {
+    display: "inline-block",
+    maxWidth: "100%",
+    borderRadius: "4px",
+  },
+  ".cm-embed-note": {
+    display: "block",
+    border: "1px solid var(--color-border)",
+    borderRadius: "6px",
+    padding: "12px 16px",
+    margin: "8px 0",
+    backgroundColor: "var(--color-surface-2, var(--color-bg))",
+    fontFamily: "var(--vc-font-mono)",
+    fontSize: "12px",
+    whiteSpace: "pre-wrap",
+    maxHeight: "320px",
+    overflow: "auto",
+  },
+  ".cm-embed-broken": {
+    color: "var(--color-text-muted)",
+    fontStyle: "italic",
+  },
 });
