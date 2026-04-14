@@ -112,6 +112,7 @@ pub fn run() {
             commands::links::suggest_links,
             commands::links::update_links_after_rename,
             commands::links::get_resolved_links,
+            commands::links::get_resolved_attachments,
             commands::tags::list_tags,
             commands::tags::get_tag_occurrences,
         ])

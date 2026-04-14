@@ -301,6 +301,20 @@ export async function getResolvedLinks(): Promise<Map<string, string>> {
   }
 }
 
+/**
+ * Return a lowercased `filename.ext` → vault-relative path map for every image
+ * attachment in the vault. Drives the `![[image.png]]` wiki-embed resolver
+ * with zero IPC per render.
+ */
+export async function getResolvedAttachments(): Promise<Map<string, string>> {
+  try {
+    const record = await invoke<Record<string, string>>("get_resolved_attachments");
+    return new Map(Object.entries(record));
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 // ── Attachment commands ────────────────────────────────────────────────────────
 
 /**
