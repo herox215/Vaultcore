@@ -256,7 +256,8 @@
     display: flex;
     flex-direction: column;
     background: var(--color-bg);
-    border-bottom: 1px solid var(--color-border);
+    height: 100%;
+    min-height: 0;
   }
   .vc-graph-header {
     display: flex;
@@ -286,8 +287,8 @@
   }
   .vc-graph-body {
     position: relative;
-    flex: 0 0 auto;
-    height: 250px;
+    flex: 1 1 auto;
+    min-height: 250px;
     overflow: hidden;
   }
   .vc-graph-canvas {
