@@ -510,6 +510,91 @@ pub async fn get_file_hash(
     get_file_hash_impl(&state, path)
 }
 
+// ─── save_attachment ─────────────────────────────────────────────────────────
+
+/// Save raw bytes as an attachment inside the vault's attachment folder.
+/// Returns the vault-relative path using forward slashes.
+///
+/// Security: the target folder is canonicalized and verified to sit inside the
+/// vault (T-02 guard), mirroring write_file. The folder is auto-created on
+/// first use. Collision avoidance appends ` 1`, ` 2`, … (capped at 1000).
+#[tauri::command]
+pub async fn save_attachment(
+    state: tauri::State<'_, VaultState>,
+    folder: String,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<String, VaultError> {
+    let vault_root = get_vault_root(&state)?;
+
+    // Build and create the target folder.
+    let target_folder = vault_root.join(&folder);
+    std::fs::create_dir_all(&target_folder).map_err(VaultError::Io)?;
+
+    // Canonicalize the folder now that it exists and verify it is inside the vault.
+    let canonical_folder = std::fs::canonicalize(&target_folder).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound {
+            path: target_folder.display().to_string(),
+        },
+        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied {
+            path: target_folder.display().to_string(),
+        },
+        _ => VaultError::Io(e),
+    })?;
+    if !canonical_folder.starts_with(&vault_root) {
+        return Err(VaultError::PermissionDenied {
+            path: canonical_folder.display().to_string(),
+        });
+    }
+
+    // Determine final filename with collision avoidance (cap at 1000).
+    let (stem, ext) = if let Some(dot) = filename.rfind('.') {
+        (&filename[..dot], &filename[dot..])
+    } else {
+        (filename.as_str(), "")
+    };
+    let mut final_path = canonical_folder.join(&filename);
+    if final_path.exists() {
+        let mut found = false;
+        for n in 1u32..=1000 {
+            let candidate_name = format!("{} {}{}", stem, n, ext);
+            let candidate = canonical_folder.join(&candidate_name);
+            if !candidate.exists() {
+                final_path = candidate;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "too many collisions for attachment filename",
+            )));
+        }
+    }
+
+    // D-12 self-filtering: record before the fs call.
+    if let Ok(mut list) = state.write_ignore.lock() {
+        list.record(final_path.clone());
+    }
+
+    std::fs::write(&final_path, &bytes).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied {
+            path: final_path.display().to_string(),
+        },
+        std::io::ErrorKind::StorageFull => VaultError::DiskFull,
+        _ => VaultError::Io(e),
+    })?;
+
+    // Return vault-relative path with forward slashes.
+    let rel = final_path.strip_prefix(&vault_root).map_err(|_| {
+        VaultError::PermissionDenied {
+            path: final_path.display().to_string(),
+        }
+    })?;
+    Ok(rel.to_string_lossy().replace('\\', "/"))
+}
+
 // ─── count_wiki_links ────────────────────────────────────────────────────────
 
 /// Testable implementation body for count_wiki_links.

@@ -301,6 +301,31 @@ export async function getResolvedLinks(): Promise<Map<string, string>> {
   }
 }
 
+// ── Attachment commands ────────────────────────────────────────────────────────
+
+/**
+ * Save raw image bytes into the vault's attachment folder.
+ * Returns the vault-relative path using forward slashes.
+ * folder: vault-relative path, e.g. "attachments"
+ * filename: desired base name with extension, collision-avoidance handled by Rust
+ * bytes: raw image bytes as a plain Array<number> (Tauri serializes Vec<u8> from JS Array)
+ */
+export async function saveAttachment(
+  folder: string,
+  filename: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  try {
+    return await invoke<string>("save_attachment", {
+      folder,
+      filename,
+      bytes: Array.from(bytes),
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 // ── Tag commands ───────────────────────────────────────────────────────────────
 
 /** TAG-03: list all tags with usage counts, sorted alphabetically. */
