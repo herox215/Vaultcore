@@ -31,8 +31,19 @@ import { countsPlugin } from "./countsPlugin";
 import type { PaneId } from "../../store/countsStore";
 import { activeViewStore } from "../../store/activeViewStore";
 
+// Debounce sidebar panel re-renders during typing: rapid docChanged updates
+// otherwise flood PropertiesPanel and OutgoingLinksPanel with re-parses on
+// every keystroke, causing visible flicker.
+let bumpTimer: ReturnType<typeof setTimeout> | null = null;
+const DOC_VERSION_DEBOUNCE_MS = 200;
+
 const docVersionBumpListener = EditorView.updateListener.of((update) => {
-  if (update.docChanged) activeViewStore.bumpDocVersion();
+  if (!update.docChanged) return;
+  if (bumpTimer !== null) clearTimeout(bumpTimer);
+  bumpTimer = setTimeout(() => {
+    bumpTimer = null;
+    activeViewStore.bumpDocVersion();
+  }, DOC_VERSION_DEBOUNCE_MS);
 });
 
 export function buildExtensions(
