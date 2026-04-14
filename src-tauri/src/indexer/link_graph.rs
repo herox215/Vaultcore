@@ -271,6 +271,33 @@ impl LinkGraph {
         self.incoming.get(target_rel)
     }
 
+    /// Return the outgoing link targets for `source_rel` as `(resolved_target,
+    /// target_raw)` pairs. If a link resolved successfully, `resolved_target`
+    /// is `Some(path)` and should be used as the neighbor id. If it did not
+    /// resolve, `resolved_target` is `None` and the caller may synthesize a
+    /// pseudo-node keyed by `target_raw`.
+    ///
+    /// Duplicates are preserved in source order — the caller is responsible
+    /// for deduplication if needed (the local-graph BFS dedupes via a visited
+    /// set).
+    pub fn outgoing_targets_for(
+        &self,
+        source_rel: &str,
+    ) -> Option<Vec<(Option<String>, String)>> {
+        self.outgoing.get(source_rel).map(|stored| {
+            stored
+                .iter()
+                .map(|s| (s.resolved_target.clone(), s.parsed.target_raw.clone()))
+                .collect()
+        })
+    }
+
+    /// Return the number of resolved incoming links for `target_rel`.
+    /// Used by the local graph to size nodes proportionally to popularity.
+    pub fn backlink_count(&self, target_rel: &str) -> usize {
+        self.incoming.get(target_rel).map(|v| v.len()).unwrap_or(0)
+    }
+
     /// Return all backlink entries for `target_rel`.
     ///
     /// Uses pre-resolved targets cached in `StoredLink::resolved_target`
