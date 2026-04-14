@@ -135,24 +135,26 @@ export const markdownTheme = EditorView.theme({
   // ── Callout blockquotes ────────────────────────────────────────────────────
 
   ".cm-callout": {
-    borderLeft: "3px solid currentColor",
+    borderLeft: "3px solid",
     paddingLeft: "12px",
     marginLeft: "0",
     position: "relative",
   },
-  ".cm-callout-note": { color: "var(--callout-note-color)" },
-  ".cm-callout-info": { color: "var(--callout-info-color)" },
-  ".cm-callout-tip": { color: "var(--callout-tip-color)" },
-  ".cm-callout-success": { color: "var(--callout-success-color)" },
-  ".cm-callout-question": { color: "var(--callout-question-color)" },
-  ".cm-callout-warning": { color: "var(--callout-warning-color)" },
-  ".cm-callout-failure": { color: "var(--callout-failure-color)" },
-  ".cm-callout-danger": { color: "var(--callout-danger-color)" },
-  ".cm-callout-bug": { color: "var(--callout-bug-color)" },
-  ".cm-callout-example": { color: "var(--callout-example-color)" },
-  ".cm-callout-quote": { color: "var(--callout-quote-color)" },
-  ".cm-callout-abstract": { color: "var(--callout-abstract-color)" },
-  ".cm-callout-todo": { color: "var(--callout-todo-color)" },
+  // Each type sets both color (for icon/title inheritance) and borderLeftColor
+  // explicitly, so body-line rules that reset `color` don't drop the border.
+  ".cm-callout-note": { color: "var(--callout-note-color)", borderLeftColor: "var(--callout-note-color)" },
+  ".cm-callout-info": { color: "var(--callout-info-color)", borderLeftColor: "var(--callout-info-color)" },
+  ".cm-callout-tip": { color: "var(--callout-tip-color)", borderLeftColor: "var(--callout-tip-color)" },
+  ".cm-callout-success": { color: "var(--callout-success-color)", borderLeftColor: "var(--callout-success-color)" },
+  ".cm-callout-question": { color: "var(--callout-question-color)", borderLeftColor: "var(--callout-question-color)" },
+  ".cm-callout-warning": { color: "var(--callout-warning-color)", borderLeftColor: "var(--callout-warning-color)" },
+  ".cm-callout-failure": { color: "var(--callout-failure-color)", borderLeftColor: "var(--callout-failure-color)" },
+  ".cm-callout-danger": { color: "var(--callout-danger-color)", borderLeftColor: "var(--callout-danger-color)" },
+  ".cm-callout-bug": { color: "var(--callout-bug-color)", borderLeftColor: "var(--callout-bug-color)" },
+  ".cm-callout-example": { color: "var(--callout-example-color)", borderLeftColor: "var(--callout-example-color)" },
+  ".cm-callout-quote": { color: "var(--callout-quote-color)", borderLeftColor: "var(--callout-quote-color)" },
+  ".cm-callout-abstract": { color: "var(--callout-abstract-color)", borderLeftColor: "var(--callout-abstract-color)" },
+  ".cm-callout-todo": { color: "var(--callout-todo-color)", borderLeftColor: "var(--callout-todo-color)" },
 
   // Title-line styles
   ".cm-callout-title-line": {

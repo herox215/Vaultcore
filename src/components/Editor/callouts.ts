@@ -44,11 +44,12 @@ export interface CalloutInfo {
 
 // ── Regex ──────────────────────────────────────────────────────────────────────
 
-// Matches the first line of a callout: `> [!type][+-]? Optional title`
-const CALLOUT_RE = /^>\s*\[!([a-zA-Z]+)\]([+\-]?)\s*(.*)$/;
+// Matches the first line of a callout. Accepts one or more `>` prefixes so
+// nested callouts (`> > [!note]`) parse as callouts of their own depth.
+const CALLOUT_RE = /^(?:>\s*)+\[!([a-zA-Z]+)\]([+\-]?)\s*(.*)$/;
 
-// Matches a blockquote prefix at the start of a line: `> ` or `>`
-const BQ_PREFIX_RE = /^(>\s?)/;
+// Matches every leading `>` prefix on a line — one or more levels.
+const BQ_PREFIX_RE = /^((?:>\s*)+)/;
 
 // ── Parser (pure, exported for tests) ─────────────────────────────────────────
 
@@ -181,34 +182,49 @@ function buildDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const head = state.selection.main.head;
 
-  // Collect all ranges before sorting and building the set
   const ranges: Array<{ from: number; to: number; decoration: Decoration }> = [];
 
+  // Pass 1: collect every Blockquote that parses as a callout. Nested
+  // blockquotes are visited too, so `> > [!note]` becomes its own entry.
+  const callouts: CalloutInfo[] = [];
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== "Blockquote") return;
+      const info = parseCallout(state, node.from, node.to);
+      if (info) callouts.push(info);
+    },
+  });
 
-      const blockFrom = node.from;
-      const blockTo = node.to;
+  // Pass 2: render each callout, but skip lines that belong to a nested
+  // callout so the inner one can render without the outer repainting over it.
+  for (const info of callouts) {
+    const innerRanges = callouts
+      .filter(
+        (other) =>
+          other !== info &&
+          other.blockFrom > info.blockFrom &&
+          other.blockTo <= info.blockTo,
+      )
+      .map((o) => ({ from: o.blockFrom, to: o.blockTo }));
 
-      const info = parseCallout(state, blockFrom, blockTo);
-      if (!info) return;
+    const lineInInner = (line: { from: number; to: number }): boolean =>
+      innerRanges.some((r) => line.from >= r.from && line.to <= r.to);
 
-      const cursorInside = head >= blockFrom && head <= blockTo;
+    const cursorInside = head >= info.blockFrom && head <= info.blockTo;
 
-      const isCollapsible = info.collapsibleMod !== "";
-      const defaultCollapsed = info.collapsibleMod === "-";
-      const collapsed =
-        isCollapsible &&
-        (collapsedState.has(blockFrom)
-          ? collapsedState.get(blockFrom)!
-          : defaultCollapsed);
+    const isCollapsible = info.collapsibleMod !== "";
+    const defaultCollapsed = info.collapsibleMod === "-";
+    const collapsed =
+      isCollapsible &&
+      (collapsedState.has(info.blockFrom)
+        ? collapsedState.get(info.blockFrom)!
+        : defaultCollapsed);
 
-      if (cursorInside) {
-        // Show raw markdown: apply only block line class decorations, no hiding
-        let lineStart = blockFrom;
-        while (lineStart <= blockTo) {
-          const line = doc.lineAt(lineStart);
+    if (cursorInside) {
+      let lineStart = info.blockFrom;
+      while (lineStart <= info.blockTo) {
+        const line = doc.lineAt(lineStart);
+        if (!lineInInner(line)) {
           ranges.push({
             from: line.from,
             to: line.from,
@@ -216,80 +232,79 @@ function buildDecorations(state: EditorState): DecorationSet {
               class: `cm-callout cm-callout-${info.type}`,
             }),
           });
-          if (line.to >= blockTo) break;
-          lineStart = line.to + 1;
         }
-        return;
+        if (line.to >= info.blockTo) break;
+        lineStart = line.to + 1;
       }
+      continue;
+    }
 
-      // ── First line: apply line decoration + replace the `> [!type][+-]? Title` ──
-      const firstLine = doc.lineAt(blockFrom);
+    // First line: line class + title widget (icon + title + optional chevron)
+    const firstLine = doc.lineAt(info.blockFrom);
+    ranges.push({
+      from: firstLine.from,
+      to: firstLine.from,
+      decoration: Decoration.line({
+        class: `cm-callout cm-callout-${info.type} cm-callout-title-line`,
+      }),
+    });
+    ranges.push({
+      from: firstLine.from,
+      to: firstLine.to,
+      decoration: Decoration.replace({
+        widget: new CalloutTitleWidget(
+          info.type,
+          info.title,
+          info.collapsibleMod,
+          info.blockFrom,
+          collapsed,
+        ),
+      }),
+    });
 
-      ranges.push({
-        from: firstLine.from,
-        to: firstLine.from,
-        decoration: Decoration.line({
-          class: `cm-callout cm-callout-${info.type} cm-callout-title-line`,
-        }),
-      });
+    // Body lines
+    if (firstLine.to < info.blockTo) {
+      let lineStart = firstLine.to + 1;
+      while (lineStart <= info.blockTo) {
+        const line = doc.lineAt(lineStart);
 
-      // Replace from start of first line to end of first line with icon+title widget
-      ranges.push({
-        from: firstLine.from,
-        to: firstLine.to,
-        decoration: Decoration.replace({
-          widget: new CalloutTitleWidget(
-            info.type,
-            info.title,
-            info.collapsibleMod,
-            blockFrom,
-            collapsed,
-          ),
-        }),
-      });
+        if (lineInInner(line)) {
+          if (line.to >= info.blockTo) break;
+          lineStart = line.to + 1;
+          continue;
+        }
 
-      // ── Body lines ────────────────────────────────────────────────────────────
-      if (firstLine.to < blockTo) {
-        let lineStart = firstLine.to + 1;
-        while (lineStart <= blockTo) {
-          const line = doc.lineAt(lineStart);
+        if (collapsed) {
+          ranges.push({
+            from: line.from,
+            to: line.to < info.blockTo ? line.to + 1 : line.to,
+            decoration: Decoration.replace({ block: true }),
+          });
+        } else {
+          ranges.push({
+            from: line.from,
+            to: line.from,
+            decoration: Decoration.line({
+              class: `cm-callout cm-callout-${info.type} cm-callout-body-line`,
+            }),
+          });
 
-          if (collapsed) {
-            // Hide body lines entirely
+          const bqMatch = BQ_PREFIX_RE.exec(line.text);
+          const hideLen = bqMatch?.[1]?.length ?? 0;
+          if (hideLen > 0) {
             ranges.push({
               from: line.from,
-              to: line.to < blockTo ? line.to + 1 : line.to,
-              decoration: Decoration.replace({ block: true }),
+              to: line.from + hideLen,
+              decoration: Decoration.replace({}),
             });
-          } else {
-            ranges.push({
-              from: line.from,
-              to: line.from,
-              decoration: Decoration.line({
-                class: `cm-callout cm-callout-${info.type} cm-callout-body-line`,
-              }),
-            });
-
-            // Hide `> ` prefix
-            const lineText = line.text;
-            const bqMatch = BQ_PREFIX_RE.exec(lineText);
-            if (bqMatch) {
-              const hideLen = bqMatch[1]?.length ?? 0;
-              ranges.push({
-                from: line.from,
-                to: line.from + hideLen,
-                decoration: Decoration.replace({}),
-              });
-            }
           }
-
-          if (line.to >= blockTo) break;
-          lineStart = line.to + 1;
         }
-      }
 
-    },
-  });
+        if (line.to >= info.blockTo) break;
+        lineStart = line.to + 1;
+      }
+    }
+  }
 
   // Sort: line decorations (from === to) before replace decorations, and by position
   ranges.sort((a, b) => {
