@@ -114,6 +114,7 @@ pub fn run() {
             commands::links::get_resolved_links,
             commands::links::get_resolved_attachments,
             commands::links::get_local_graph,
+            commands::links::get_link_graph,
             commands::tags::list_tags,
             commands::tags::get_tag_occurrences,
         ])

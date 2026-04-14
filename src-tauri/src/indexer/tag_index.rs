@@ -209,4 +209,24 @@ impl TagIndex {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Return the deduplicated, sorted list of tags for `rel_path`.
+    ///
+    /// `by_file` stores per-file tag occurrences with duplicates (needed for
+    /// the "three hits of #test" count). The graph view only cares whether a
+    /// tag is present — dedupe + sort for stable output.
+    pub fn tags_for_file(&self, rel_path: &str) -> Vec<String> {
+        let Some(tags) = self.by_file.get(rel_path) else {
+            return Vec::new();
+        };
+        let mut uniq: Vec<String> = {
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            tags.iter()
+                .filter(|t| seen.insert(t.as_str()))
+                .cloned()
+                .collect()
+        };
+        uniq.sort();
+        uniq
+    }
 }

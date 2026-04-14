@@ -23,7 +23,7 @@ export interface UnresolvedLink {
   lineNumber: number;
 }
 
-/** A single node in the local-graph payload returned by `get_local_graph`. */
+/** A single node in the link-graph payload (local or global). */
 export interface GraphNode {
   /** Vault-relative path for resolved files, `unresolved:<raw>` for dangling links. */
   id: string;
@@ -35,6 +35,9 @@ export interface GraphNode {
   backlinkCount: number;
   /** `true` when the node maps to an indexed file in the vault. */
   resolved: boolean;
+  /** Tags contained in the file (lowercased, deduped, sorted). Populated only
+   * by `get_link_graph`; the local-graph command leaves this empty. */
+  tags?: string[];
 }
 
 /** An undirected edge between two graph nodes. */

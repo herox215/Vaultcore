@@ -4,6 +4,18 @@
 
 import { writable } from "svelte/store";
 
+/**
+ * Tab `type` discriminant — "file" is the default (normal markdown tab);
+ * "graph" is the whole-vault graph view (issue #32). Graph tabs store a
+ * sentinel filePath so any existing code paths that look at filePath
+ * (e.g. absolute-path matching, sidebar sync) keep working without a
+ * widespread refactor.
+ */
+export type TabType = "file" | "graph";
+
+/** Sentinel filePath used by the singleton graph tab. */
+export const GRAPH_TAB_PATH = "vault://graph";
+
 export interface Tab {
   id: string;
   filePath: string;
@@ -12,6 +24,8 @@ export interface Tab {
   cursorPos: number;
   lastSaved: number;
   lastSavedContent: string;  // base snapshot for three-way merge (Plan 05)
+  /** Tab kind — "file" when omitted. */
+  type?: TabType;
 }
 
 export interface SplitState {
@@ -89,6 +103,53 @@ export const tabStore = {
         lastSavedContent: "",
       };
 
+      const activePane = state.splitState.activePane;
+      const newPaneIds = [...state.splitState[activePane], id];
+      return {
+        ...state,
+        tabs: [...state.tabs, tab],
+        activeTabId: id,
+        splitState: {
+          ...state.splitState,
+          [activePane]: newPaneIds,
+        },
+      };
+    });
+    return returnId;
+  },
+
+  /**
+   * Open (or focus) the singleton whole-vault graph tab.
+   * Returns the graph tab's ID. Uses a reserved filePath sentinel so the
+   * existing dedupe-by-filePath logic in openTab still applies when called
+   * repeatedly.
+   */
+  openGraphTab(): string {
+    let returnId = "";
+    _store.update((state) => {
+      const existing = state.tabs.find((t) => t.type === "graph");
+      if (existing) {
+        returnId = existing.id;
+        const pane = whichPane(state, existing.id) ?? "left";
+        return {
+          ...state,
+          activeTabId: existing.id,
+          splitState: { ...state.splitState, activePane: pane },
+        };
+      }
+
+      const id = crypto.randomUUID();
+      returnId = id;
+      const tab: Tab = {
+        id,
+        filePath: GRAPH_TAB_PATH,
+        isDirty: false,
+        scrollPos: 0,
+        cursorPos: 0,
+        lastSaved: Date.now(),
+        lastSavedContent: "",
+        type: "graph",
+      };
       const activePane = state.splitState.activePane;
       const newPaneIds = [...state.splitState[activePane], id];
       return {

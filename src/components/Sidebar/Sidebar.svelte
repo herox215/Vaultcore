@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { FilePlus, FolderPlus } from "lucide-svelte";
+  import { FilePlus, FolderPlus, Network } from "lucide-svelte";
   import { listDirectory, createFile, createFolder } from "../../ipc/commands";
   // BUG-05.1: SortMenu was descoped per UAT — keep treeState for FILE-07
   // (expand persistence) but default sortBy stays "name" without a UI toggle.
@@ -346,6 +346,14 @@
           title="New folder"
         >
           <FolderPlus size={16} strokeWidth={1.5} />
+        </button>
+        <button
+          class="vc-sidebar-action-btn"
+          onclick={() => tabStore.openGraphTab()}
+          aria-label="Graph öffnen"
+          title="Graph öffnen (Cmd/Ctrl+Shift+G)"
+        >
+          <Network size={16} strokeWidth={1.5} />
         </button>
       </div>
     {/if}

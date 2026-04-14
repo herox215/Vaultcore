@@ -43,6 +43,7 @@ function makeCtx(overrides: Partial<ShortcutContext> = {}): ShortcutContext {
     cycleTabPrev: vi.fn(),
     closeActiveTab: vi.fn(),
     createNewNote: vi.fn(),
+    openGraph: vi.fn(),
     ...overrides,
   };
 }
@@ -63,15 +64,17 @@ describe("SHORTCUTS array", () => {
     "new-note",
     "quick-switcher",
     "search",
+    "search-alt", // Cmd+F fallback
     "backlinks-toggle",
     "toggle-sidebar",
     "toggle-sidebar-alt", // BUG-05.1: Cmd+Shift+E alias for German keyboards
     "next-tab",
     "close-tab",
+    "open-graph", // #32: Cmd/Ctrl+Shift+G — global graph tab
   ];
 
-  it("contains exactly 8 entries with the correct ids in order", () => {
-    expect(SHORTCUTS).toHaveLength(8);
+  it("contains exactly 10 entries with the correct ids in order", () => {
+    expect(SHORTCUTS).toHaveLength(10);
     const ids = SHORTCUTS.map((s) => s.id);
     expect(ids).toEqual(EXPECTED_IDS);
   });
