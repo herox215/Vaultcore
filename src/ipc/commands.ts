@@ -11,7 +11,7 @@ import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
 import type { SearchResult, FileMatch } from "../types/search";
-import type { BacklinkEntry, UnresolvedLink, RenameResult } from "../types/links";
+import type { BacklinkEntry, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
 
 function normalizeError(err: unknown): VaultError {
@@ -306,6 +306,22 @@ export async function getResolvedLinks(): Promise<Map<string, string>> {
  * attachment in the vault. Drives the `![[image.png]]` wiki-embed resolver
  * with zero IPC per render.
  */
+/**
+ * Return the local link graph around `path` — BFS in both directions for
+ * `depth` hops. Unresolved wiki-link targets surface as synthetic nodes
+ * with `resolved: false` and an `unresolved:<raw>` id.
+ */
+export async function getLocalGraph(
+  path: string,
+  depth: number,
+): Promise<LocalGraph> {
+  try {
+    return await invoke<LocalGraph>("get_local_graph", { path, depth });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 export async function getResolvedAttachments(): Promise<Map<string, string>> {
   try {
     const record = await invoke<Record<string, string>>("get_resolved_attachments");
