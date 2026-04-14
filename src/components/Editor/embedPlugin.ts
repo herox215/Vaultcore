@@ -28,7 +28,9 @@ import { get } from "svelte/store";
 import { resolveAttachment } from "./embeds";
 import { resolveTarget } from "./wikiLink";
 import { vaultStore } from "../../store/vaultStore";
+import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";
+import { listenFileChange } from "../../ipc/events";
 
 // ── Regex ──────────────────────────────────────────────────────────────────────
 
@@ -49,9 +51,13 @@ const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
 // ── Cache for note-embed content ──────────────────────────────────────────────
 
 /**
- * Vault-relative path → file content. Cleared on every plugin rebuild so edits
- * to the target note propagate without manual invalidation (the doc-version
- * debounce gates this to ~200 ms, so the cache still absorbs the rebuild burst).
+ * Vault-relative path → file content. Entries are invalidated selectively by
+ * two module-level subscriptions installed at import time:
+ *   - `listenFileChange` for external modifications the watcher sees
+ *   - `tabStore.subscribe` for internal auto-saves (which suppress the watcher
+ *     via write_ignore, so we'd otherwise miss them)
+ * Previously the cache was cleared on every local `docChanged`, which caused
+ * the `…` placeholder to flash on every keystroke — see #27.
  */
 const noteContentCache: Map<string, string> = new Map();
 /**
@@ -59,6 +65,68 @@ const noteContentCache: Map<string, string> = new Map();
  * IPC requests from back-to-back plugin rebuilds.
  */
 const noteFetchInFlight: Set<string> = new Set();
+
+/**
+ * Convert an absolute path to a vault-relative forward-slash path, or return
+ * null when the path is outside the vault (or no vault is open).
+ */
+function toVaultRel(absPath: string): string | null {
+  const vault = get(vaultStore).currentPath;
+  if (!vault) return null;
+  const absFwd = absPath.replace(/\\/g, "/");
+  const vaultFwd = vault.replace(/\\/g, "/").replace(/\/$/, "");
+  if (absFwd === vaultFwd) return "";
+  if (!absFwd.startsWith(vaultFwd + "/")) return null;
+  return absFwd.slice(vaultFwd.length + 1);
+}
+
+// ── Cache invalidation: external file changes ─────────────────────────────────
+//
+// The watcher only fires for modifications NOT initiated by our own IPC writes
+// (write_ignore suppresses self-writes). That means this catches edits made by
+// tools outside the app — Finder rename, shell `cp`, other editors. Internal
+// auto-saves are handled by the tabStore subscription below.
+//
+// Guarded try/catch because the subscription is module-level and the test
+// environment has no Tauri IPC — a synchronous throw here would break imports.
+try {
+  void listenFileChange((payload) => {
+    const rel = toVaultRel(payload.path);
+    if (rel !== null) noteContentCache.delete(rel);
+    if (payload.new_path) {
+      const newRel = toVaultRel(payload.new_path);
+      if (newRel !== null) noteContentCache.delete(newRel);
+    }
+  }).catch(() => {
+    /* Tauri not initialized — tests run without the IPC backend. */
+  });
+} catch {
+  /* same reason — swallow so the module still loads under vitest. */
+}
+
+// ── Cache invalidation: internal auto-saves via other tabs ────────────────────
+//
+// tabStore.setLastSavedContent fires after writeFile returns successfully. We
+// snapshot each tab's lastSavedContent the first time we see it and diff on
+// subsequent store emissions — when the snapshot changes, the file was just
+// saved (by any tab, including ones in other panes), so invalidate its cache
+// entry. This lets the next embed rebuild re-fetch the fresh content.
+const lastSavedByTabId: Map<string, string> = new Map();
+tabStore.subscribe((state) => {
+  for (const tab of state.tabs) {
+    const prev = lastSavedByTabId.get(tab.id);
+    if (prev !== tab.lastSavedContent) {
+      lastSavedByTabId.set(tab.id, tab.lastSavedContent);
+      const rel = toVaultRel(tab.filePath);
+      if (rel !== null) noteContentCache.delete(rel);
+    }
+  }
+  // Clean up snapshots for tabs that have closed so the map doesn't grow.
+  const liveIds = new Set(state.tabs.map((t) => t.id));
+  for (const id of Array.from(lastSavedByTabId.keys())) {
+    if (!liveIds.has(id)) lastSavedByTabId.delete(id);
+  }
+});
 
 function scheduleNoteFetch(view: EditorView, relPath: string): void {
   if (noteContentCache.has(relPath) || noteFetchInFlight.has(relPath)) return;
@@ -338,12 +406,6 @@ export const embedPlugin = ViewPlugin.fromClass(
 
     update(u: ViewUpdate) {
       if (u.docChanged || u.viewportChanged || u.selectionSet) {
-        // Doc-change events invalidate cached note content — rebuilding is
-        // how we learn that the target note itself was edited via a different
-        // open tab. Clearing the cache here is the simplest correct move.
-        if (u.docChanged) {
-          noteContentCache.clear();
-        }
         this.decorations = buildDecorations(u.view);
       }
     }
