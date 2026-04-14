@@ -1,7 +1,7 @@
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
-import { StateField } from "@codemirror/state";
-import type { EditorState, Extension } from "@codemirror/state";
+import { EditorState, StateField, Transaction } from "@codemirror/state";
+import type { ChangeSpec, Extension } from "@codemirror/state";
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n)?/;
 
@@ -70,4 +70,40 @@ const frontmatterField = StateField.define<DecorationSet>({
   },
 });
 
-export const frontmatterPlugin: Extension = frontmatterField;
+// When the body is empty, the editor cursor sits at position 0 — before the
+// block-replace decoration — and typing inserts a character ahead of the
+// opening `---`, which breaks frontmatter detection and exposes the raw YAML.
+// Redirect user-input insertions that land at or inside the frontmatter region
+// to the first body position instead.
+const frontmatterBoundaryGuard = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged) return tr;
+  const userEvent = tr.annotation(Transaction.userEvent);
+  if (!userEvent || !userEvent.startsWith("input")) return tr;
+
+  const region = detectFrontmatter(tr.startState.doc.toString());
+  if (!region) return tr;
+
+  const rewrites: ChangeSpec[] = [];
+  let insertedAtBoundary = 0;
+  let redirected = false;
+
+  tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    if (fromA < region.to && inserted.length > 0) {
+      rewrites.push({ from: region.to, to: region.to, insert: inserted.toString() });
+      insertedAtBoundary += inserted.length;
+      redirected = true;
+    } else {
+      rewrites.push({ from: fromA, to: toA, insert: inserted.toString() });
+    }
+  });
+
+  if (!redirected) return tr;
+
+  return {
+    changes: rewrites,
+    selection: { anchor: region.to + insertedAtBoundary },
+    sequential: true,
+  };
+});
+
+export const frontmatterPlugin: Extension = [frontmatterField, frontmatterBoundaryGuard];
