@@ -16,6 +16,7 @@ use serde::Serialize;
 use crate::error::VaultError;
 use crate::indexer::link_graph::{self, BacklinkEntry, LinkGraph, ParsedLink, UnresolvedLink};
 use crate::indexer::memory::FileIndex;
+use crate::indexer::tag_index::TagIndex;
 use crate::commands::search::FileMatch;
 use crate::VaultState;
 
@@ -505,6 +506,11 @@ pub struct GraphNode {
     pub backlink_count: usize,
     /// `true` when the node corresponds to an actual file in the vault.
     pub resolved: bool,
+    /// Lowercased tags present in the file (deduplicated, sorted).
+    /// Empty for unresolved pseudo-nodes and for callers that don't populate
+    /// tag information (e.g. the local-graph command).
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// An undirected edge between two graph nodes. Dedupe is performed at build
@@ -567,6 +573,7 @@ pub fn compute_local_graph(
                 path: id.to_string(),
                 backlink_count: lg.backlink_count(id),
                 resolved: true,
+                tags: Vec::new(),
             }
         } else {
             // Unresolved pseudo-node. `label` is the raw link text if supplied,
@@ -580,6 +587,7 @@ pub fn compute_local_graph(
                 path: String::new(),
                 backlink_count: 0,
                 resolved: false,
+                tags: Vec::new(),
             }
         }
     };
@@ -597,6 +605,7 @@ pub fn compute_local_graph(
             path: center.to_string(),
             backlink_count: lg.backlink_count(center),
             resolved: true,
+            tags: Vec::new(),
         }
     };
     nodes.insert(center.to_string(), center_node);
@@ -710,4 +719,122 @@ pub async fn get_local_graph(
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
     Ok(compute_local_graph(&path, depth, &lg, &fi))
+}
+
+// ── get_link_graph ─────────────────────────────────────────────────────────────
+
+/// Pure helper that builds the whole-vault link graph. Split out from the
+/// Tauri command so unit tests can exercise it without standing up a
+/// VaultState.
+///
+/// Every indexed `.md` file becomes a resolved node. Every resolved outgoing
+/// link becomes an undirected edge (deduped via a sorted-pair set). Every
+/// unresolved link target becomes a pseudo-node with `resolved: false`,
+/// mirroring the local-graph convention so the frontend reducers can share
+/// code.
+pub fn compute_link_graph(
+    lg: &LinkGraph,
+    fi: &FileIndex,
+    ti: &TagIndex,
+) -> LocalGraph {
+    let all_paths: Vec<String> = fi.all_relative_paths();
+
+    let mut nodes: HashMap<String, GraphNode> = HashMap::with_capacity(all_paths.len());
+    let mut edges: HashSet<(String, String)> = HashSet::new();
+
+    // Resolved nodes — every indexed file.
+    for rel in &all_paths {
+        nodes.insert(
+            rel.clone(),
+            GraphNode {
+                id: rel.clone(),
+                label: file_stem_label(rel),
+                path: rel.clone(),
+                backlink_count: lg.backlink_count(rel),
+                resolved: true,
+                tags: ti.tags_for_file(rel),
+            },
+        );
+    }
+
+    let insert_edge = |edges: &mut HashSet<(String, String)>, a: &str, b: &str| {
+        if a == b {
+            return;
+        }
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        edges.insert((lo.to_string(), hi.to_string()));
+    };
+
+    // Walk every file's outgoing targets. Resolved targets → direct edge;
+    // unresolved targets → synthesize a pseudo-node + edge.
+    for rel in &all_paths {
+        let Some(targets) = lg.outgoing_targets_for(rel) else {
+            continue;
+        };
+        for (resolved_target, raw) in targets {
+            match resolved_target {
+                Some(target) => {
+                    insert_edge(&mut edges, rel, &target);
+                }
+                None => {
+                    let id = format!("unresolved:{}", raw);
+                    nodes.entry(id.clone()).or_insert_with(|| GraphNode {
+                        id: id.clone(),
+                        label: raw.clone(),
+                        path: String::new(),
+                        backlink_count: 0,
+                        resolved: false,
+                        tags: Vec::new(),
+                    });
+                    insert_edge(&mut edges, rel, &id);
+                }
+            }
+        }
+    }
+
+    // Stable output order — alphabetical ids. Keeps force layout seed
+    // reproducible and snapshot tests tidy.
+    let mut node_list: Vec<GraphNode> = nodes.into_values().collect();
+    node_list.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut edge_list: Vec<GraphEdge> = edges
+        .into_iter()
+        .map(|(from, to)| GraphEdge { from, to })
+        .collect();
+    edge_list.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
+
+    LocalGraph {
+        nodes: node_list,
+        edges: edge_list,
+    }
+}
+
+/// Tauri command — return the full vault link graph. One resolved node per
+/// indexed `.md` file, one pseudo-node per unique unresolved target, one
+/// undirected edge per resolved wiki-link (deduped).
+#[tauri::command]
+pub async fn get_link_graph(
+    state: tauri::State<'_, VaultState>,
+) -> Result<LocalGraph, VaultError> {
+    let (lg_arc, fi_arc, ti_arc) = {
+        let guard = state
+            .index_coordinator
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        match guard.as_ref() {
+            Some(c) => (c.link_graph(), c.file_index(), c.tag_index()),
+            None => {
+                return Ok(LocalGraph {
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                })
+            }
+        }
+    };
+
+    let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+    let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+    let ti = ti_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+
+    Ok(compute_link_graph(&lg, &fi, &ti))
 }

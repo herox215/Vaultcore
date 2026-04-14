@@ -14,8 +14,13 @@
     onclose: () => void;
   } = $props();
 
-  // Derive the display filename from the full path
-  const filename = $derived(tab.filePath.split("/").pop() ?? tab.filePath);
+  // Derive the display filename from the full path. Graph tabs use a
+  // friendly label instead of the sentinel filePath.
+  const filename = $derived(
+    tab.type === "graph"
+      ? "Graph"
+      : (tab.filePath.split("/").pop() ?? tab.filePath),
+  );
 
   function handleClick(e: MouseEvent) {
     onactivate();

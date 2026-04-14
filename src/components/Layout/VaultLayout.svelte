@@ -237,6 +237,7 @@
         if (activeId) tabStore.closeTab(activeId);
       },
       createNewNote: () => { void createNewNote(); },
+      openGraph: () => { tabStore.openGraphTab(); },
     };
     const guard: ShortcutGuard = {
       settingsOpen,
