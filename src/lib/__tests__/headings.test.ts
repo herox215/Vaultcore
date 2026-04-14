@@ -86,3 +86,34 @@ describe("extractHeadings", () => {
     expect(result[0]?.text).toBe("Real Heading");
   });
 });
+
+describe("extractHeadings — frontmatter filtering", () => {
+  it("excludes frontmatter property keys from heading results", () => {
+    const doc = "---\ntitle: Foo\ntags: [a, b]\n---\n\n# Real Heading\n";
+    const result = extractHeadings(doc);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("Real Heading");
+  });
+
+  it("returns empty array when document has only frontmatter and no body headings", () => {
+    const doc = "---\ntitle: Foo\ntags: [a, b]\n---\n";
+    const result = extractHeadings(doc);
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns all body headings when there is no frontmatter (regression)", () => {
+    const doc = "# First\n\n## Second\n";
+    const result = extractHeadings(doc);
+    expect(result).toHaveLength(2);
+    expect(result[0]?.text).toBe("First");
+    expect(result[1]?.text).toBe("Second");
+  });
+
+  it("detects a setext-H2 in the body after frontmatter", () => {
+    const doc = "---\ntitle: Foo\n---\n\nSection\n-------\n";
+    const result = extractHeadings(doc);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.level).toBe(2);
+    expect(result[0]?.text).toBe("Section");
+  });
+});
