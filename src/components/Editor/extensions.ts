@@ -28,6 +28,7 @@ import { wikiLinkPlugin } from "./wikiLink";
 import { livePreviewPlugin } from "./livePreview";
 import { frontmatterPlugin } from "./frontmatterPlugin";
 import { calloutPlugin } from "./callouts";
+import { taskListPlugin } from "./taskList";
 import { countsPlugin } from "./countsPlugin";
 import type { PaneId } from "../../store/countsStore";
 import { activeViewStore } from "../../store/activeViewStore";
@@ -81,6 +82,7 @@ export function buildExtensions(
     livePreviewPlugin,
     frontmatterPlugin,
     calloutPlugin,
+    taskListPlugin,
     docVersionBumpListener,
   ];
 
