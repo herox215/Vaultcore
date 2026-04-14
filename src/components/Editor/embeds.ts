@@ -14,6 +14,16 @@ export function setResolvedAttachments(map: Map<string, string>): void {
 }
 
 /**
+ * Add or replace a single entry in the attachment map. Used by the paste/drop
+ * handler after `save_attachment` returns, so the just-saved image resolves on
+ * the next embed-plugin rebuild without waiting for a full `get_resolved_attachments`
+ * refresh (the file-watcher event for self-writes is suppressed via write_ignore).
+ */
+export function addResolvedAttachment(filename: string, relPath: string): void {
+  resolvedAttachments.set(filename.trim().toLowerCase(), relPath);
+}
+
+/**
  * Synchronous lookup for the embed ViewPlugin. Accepts the raw filename as
  * written inside `![[...]]` and returns the vault-relative path, or `null`
  * if the attachment is missing.
