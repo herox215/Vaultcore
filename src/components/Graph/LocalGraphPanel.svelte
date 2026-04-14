@@ -13,6 +13,7 @@
     mountGraph,
     setCenter,
     updateGraph,
+    DEFAULT_FORCE_SETTINGS,
     type GraphHandle,
   } from "./graphRender";
 
@@ -138,6 +139,11 @@
       nodeColor: "var(--color-text-muted)",
       unresolvedColor: "var(--color-border)",
       edgeColor: "var(--color-border)",
+      // Continuous / organic sim — same Obsidian-like feel as the global graph.
+      // No Forces UI in the panel to keep it minimal; the defaults are tuned
+      // for a small neighborhood view.
+      forceSettings: DEFAULT_FORCE_SETTINGS,
+      enableNodeDrag: true,
       onNodeClick: (id, node) => {
         if (!node.resolved || !vaultPath) return;
         tabStore.openTab(`${vaultPath}/${node.path}`);
