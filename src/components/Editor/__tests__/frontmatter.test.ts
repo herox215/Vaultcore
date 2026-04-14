@@ -52,4 +52,19 @@ describe("detectFrontmatter", () => {
     expect(region).not.toBeNull();
     expect(region!.body).toBe("foo: 1");
   });
+
+  it("still detects frontmatter when a body character is being typed on the closing fence line", () => {
+    const doc = "---\nkey: value\n---a\n";
+    const region = detectFrontmatter(doc);
+    expect(region).not.toBeNull();
+    expect(region!.body).toBe("key: value");
+    expect(doc.slice(region!.from, region!.to)).toBe("---\nkey: value\n---");
+  });
+
+  it("still detects frontmatter when a body character is typed right after the closing fence with no trailing newline", () => {
+    const doc = "---\nkey: value\n---a";
+    const region = detectFrontmatter(doc);
+    expect(region).not.toBeNull();
+    expect(region!.body).toBe("key: value");
+  });
 });
