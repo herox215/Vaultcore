@@ -8,6 +8,7 @@ import { get } from "svelte/store";
 import { tabStore } from "../../store/tabStore";
 import { vaultStore } from "../../store/vaultStore";
 import { saveAttachment } from "../../ipc/commands";
+import { addResolvedAttachment } from "./embeds";
 
 function extFromMime(mime: string): string | null {
   switch (mime) {
@@ -67,11 +68,25 @@ export function formatEmbedReference(relPath: string): string {
   return `![[${basename}]]`;
 }
 
+/**
+ * Register the just-saved attachment with the embed resolver so the upcoming
+ * decoration rebuild (triggered by our own view.dispatch below) finds it.
+ * Without this, the file-watcher event for our own write is suppressed via
+ * write_ignore, so the resolver map would stay stale until vault reopen and
+ * the user would briefly see a "nicht gefunden" placeholder.
+ */
+function registerSavedAttachment(relPath: string): void {
+  const idx = relPath.lastIndexOf("/");
+  const basename = idx === -1 ? relPath : relPath.slice(idx + 1);
+  addResolvedAttachment(basename, relPath);
+}
+
 async function handleSave(view: EditorView, blob: Blob, filename: string, userEvent: string): Promise<void> {
   try {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const folder = getActiveNoteDir();
     const relPath = await saveAttachment(folder, filename, bytes);
+    registerSavedAttachment(relPath);
     const md = formatEmbedReference(relPath);
     const head = view.state.selection.main.head;
     // The userEvent annotation lets the frontmatter boundary guard
@@ -97,6 +112,7 @@ async function handleSaveMany(view: EditorView, files: File[]): Promise<void> {
       // Strip any path prefix (some browsers include full path in name)
       const basename = file.name.replace(/.*[/\\]/, "");
       const relPath = await saveAttachment(folder, basename, bytes);
+      registerSavedAttachment(relPath);
       parts.push(formatEmbedReference(relPath));
     } catch (err) {
       console.error("[imageAttachment] drop save failed:", err);
