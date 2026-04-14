@@ -4,6 +4,7 @@
   import { EditorState } from "@codemirror/state";
   import TabBar from "../Tabs/TabBar.svelte";
   import Breadcrumbs from "./Breadcrumbs.svelte";
+  import GraphView from "../Graph/GraphView.svelte";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
@@ -83,11 +84,14 @@
 
   // Active tab file path for this pane — drives the breadcrumb bar.
   // Null when no tab is open in the pane, which hides the bar (AC-06).
-  const paneActiveFilePath = $derived(
-    paneActiveTabId !== null
-      ? (paneTabs.find((t) => t.id === paneActiveTabId)?.filePath ?? null)
-      : null
-  );
+  // Graph tabs have no on-disk path and should hide the breadcrumb.
+  const paneActiveFilePath = $derived.by<string | null>(() => {
+    if (paneActiveTabId === null) return null;
+    const t = paneTabs.find((x) => x.id === paneActiveTabId);
+    if (!t) return null;
+    if (t.type === "graph") return null;
+    return t.filePath;
+  });
 
   // Subscribe to tabStore for our pane's tabs and active state
   const unsubTab = tabStore.subscribe((state) => {
@@ -256,11 +260,12 @@
     }
 
     // Create views for new tabs (async — the container div is already in the DOM
-    // via the Svelte template, so we just need to mount the EditorView into it)
+    // via the Svelte template, so we just need to mount the EditorView into it).
+    // Graph tabs are rendered via <GraphView /> and must NOT get a CM6 view.
     for (const tabId of paneTabIds) {
       if (!viewMap.has(tabId)) {
         const tab = allTabs.find((t) => t.id === tabId);
-        if (tab) {
+        if (tab && tab.type !== "graph") {
           mountEditorView(tab);
         }
       }
@@ -643,17 +648,29 @@
       </div>
     {/if}
     <!-- Svelte renders one container per tab. Visibility is driven by
-         style:display reacting to paneActiveTabId — no manual DOM needed. -->
+         style:display reacting to paneActiveTabId — no manual DOM needed.
+         Graph tabs render <GraphView /> instead of a CM6 container so the
+         file-load path is skipped entirely (#32). -->
     {#each paneTabs as tab (tab.id)}
-      <div
-        class="vc-editor-container"
-        data-tab-id={tab.id}
-        style:display={tab.id === paneActiveTabId ? "block" : "none"}
-      ></div>
+      {#if tab.type === "graph"}
+        <div
+          class="vc-editor-container"
+          data-tab-id={tab.id}
+          style:display={tab.id === paneActiveTabId ? "block" : "none"}
+        >
+          <GraphView />
+        </div>
+      {:else}
+        <div
+          class="vc-editor-container"
+          data-tab-id={tab.id}
+          style:display={tab.id === paneActiveTabId ? "block" : "none"}
+        ></div>
+      {/if}
     {/each}
   </div>
 
-  {#if paneTabs.length > 0}
+  {#if paneTabs.length > 0 && paneTabs.find((t) => t.id === paneActiveTabId)?.type !== "graph"}
     <CountStatusBar {paneId} />
   {/if}
 

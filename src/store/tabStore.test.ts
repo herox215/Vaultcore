@@ -246,6 +246,50 @@ describe("tabStore", () => {
     });
   });
 
+  describe("openGraphTab", () => {
+    it("creates a singleton graph tab and activates it", () => {
+      const id = tabStore.openGraphTab();
+      const state = get(tabStore);
+      expect(state.tabs).toHaveLength(1);
+      const tab = state.tabs.find((t) => t.id === id);
+      expect(tab?.type).toBe("graph");
+      expect(tab?.filePath).toBe("vault://graph");
+      expect(state.activeTabId).toBe(id);
+    });
+
+    it("focuses the existing graph tab when called twice (no duplicate)", () => {
+      const id1 = tabStore.openGraphTab();
+      tabStore.openTab("/vault/a.md");
+      const id2 = tabStore.openGraphTab();
+      const state = get(tabStore);
+      expect(id2).toBe(id1);
+      expect(state.tabs.filter((t) => t.type === "graph")).toHaveLength(1);
+      expect(state.activeTabId).toBe(id1);
+    });
+
+    it("graph tab can be closed like any other tab", () => {
+      tabStore.openTab("/vault/a.md");
+      const gid = tabStore.openGraphTab();
+      tabStore.closeTab(gid);
+      const state = get(tabStore);
+      expect(state.tabs.find((t) => t.type === "graph")).toBeUndefined();
+    });
+
+    it("cycleTab traverses graph + file tabs uniformly", () => {
+      const a = tabStore.openTab("/vault/a.md");
+      const gid = tabStore.openGraphTab();
+      tabStore.activateTab(a);
+      tabStore.cycleTab(1);
+      expect(get(tabStore).activeTabId).toBe(gid);
+    });
+
+    it("file tabs default to type undefined (backwards-compatible)", () => {
+      const id = tabStore.openTab("/vault/a.md");
+      const tab = get(tabStore).tabs.find((t) => t.id === id);
+      expect(tab?.type).toBeUndefined();
+    });
+  });
+
   describe("activateTab", () => {
     it("sets activeTabId and switches activePane", () => {
       const id1 = tabStore.openTab("/vault/a.md");

@@ -17,7 +17,10 @@ import Sigma from "sigma";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { GraphEdge, GraphNode, LocalGraph } from "../../types/links";
 
-/** Options accepted by `mountGraph` — future-proofed for the #32 global view. */
+/** Options accepted by `mountGraph` — future-proofed for the #32 global view.
+ *  The `| undefined` on every optional member is deliberate: svelte-check runs
+ *  with `exactOptionalPropertyTypes` and would otherwise reject callers that
+ *  forward `undefined` explicitly. */
 export interface GraphRenderOptions {
   /** Node id to highlight as the center/active node. Null = no accent. */
   centerId: string | null;
@@ -30,9 +33,23 @@ export interface GraphRenderOptions {
   /** Edge color (thin lines, low alpha). */
   edgeColor: string;
   /** Callback for single-click on a resolved node — receives the node id. */
-  onNodeClick?: (id: string, node: GraphNode) => void;
+  onNodeClick?: ((id: string, node: GraphNode) => void) | undefined;
   /** Callback for double-click on a resolved node. */
-  onNodeDoubleClick?: (id: string, node: GraphNode) => void;
+  onNodeDoubleClick?: ((id: string, node: GraphNode) => void) | undefined;
+  /** Callback for double-click on empty space (used by the global graph's
+   *  "fit to view" reset). */
+  onStageDoubleClick?: (() => void) | undefined;
+  /** Number of ForceAtlas2 iterations. Local graph uses the default 50
+   *  for snappy redraws; global graph passes ~300 for a 2 s warm-up. */
+  layoutIterations?: number | undefined;
+  /** Enable drag-to-reposition on individual nodes. Defaults to false. */
+  enableNodeDrag?: boolean | undefined;
+  /** Per-node dim alpha multiplier — 0..1. 0 effectively hides, 1 is fully
+   *  visible. Called every nodeReducer tick; return undefined to use the
+   *  default. */
+  dimForNode?: ((id: string, attrs: Record<string, unknown>) => number | undefined) | undefined;
+  /** Labels always shown for these node ids regardless of zoom threshold. */
+  alwaysShowLabel?: ((id: string) => boolean) | undefined;
 }
 
 /** Opaque handle returned by `mountGraph`. Callers pass it to update/destroy. */
@@ -113,14 +130,14 @@ function populateGraph(graph: Graph, data: LocalGraph): void {
   }
 }
 
-/** Run ForceAtlas2 for 50 iterations and assign final positions in place. */
-function runLayout(graph: Graph): void {
+/** Run ForceAtlas2 and assign final positions in place. */
+function runLayout(graph: Graph, iterations = 50): void {
   if (graph.order === 0) return;
   const settings = forceAtlas2.inferSettings(graph);
   // Speed up convergence on small graphs.
   settings.slowDown = 2;
   settings.gravity = 1;
-  forceAtlas2.assign(graph, { iterations: 50, settings });
+  forceAtlas2.assign(graph, { iterations, settings });
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -138,7 +155,7 @@ export function mountGraph(
 ): GraphHandle {
   const graph = new Graph({ type: "undirected", multi: false });
   populateGraph(graph, data);
-  runLayout(graph);
+  runLayout(graph, options.layoutIterations ?? 50);
 
   const accent = resolveColor(container, options.accentColor);
   const nodeColor = resolveColor(container, options.nodeColor);
@@ -147,9 +164,14 @@ export function mountGraph(
 
   const neighborMap = buildNeighborMap(data.edges);
 
+  // Label threshold: 0 = always show (local graph). Global graph raises this
+  // so only higher-zoom / larger nodes show labels; hovered+neighbors are
+  // force-labeled via the reducer.
+  const labelThreshold = options.layoutIterations && options.layoutIterations > 50 ? 6 : 0;
+
   const renderer = new Sigma(graph, container, {
     renderLabels: true,
-    labelRenderedSizeThreshold: 0,
+    labelRenderedSizeThreshold: labelThreshold,
     labelSize: 11,
     labelWeight: "500",
     minEdgeThickness: 1,
@@ -182,23 +204,54 @@ export function mountGraph(
       resolved,
     };
 
-    let dim = false;
+    // External dim filter (text/tag/folder filters in the global graph).
+    const externalAlpha = handle.options.dimForNode?.(node, attrs);
+
+    // Hover dim: non-hovered, non-neighbor nodes get dimmed.
+    let hoverDim = false;
     if (handle.hoveredNode && handle.hoveredNode !== node) {
       const neighbors = handle.neighborMap.get(handle.hoveredNode);
       if (!neighbors || !neighbors.has(node)) {
-        dim = true;
+        hoverDim = true;
       }
     }
 
-    return {
+    // Always-label contract: hovered node + direct neighbors always show
+    // labels regardless of the renderer threshold.
+    const neighborsOfHover = handle.hoveredNode
+      ? handle.neighborMap.get(handle.hoveredNode)
+      : null;
+    const isHoverNeighbor =
+      handle.hoveredNode === node ||
+      (neighborsOfHover ? neighborsOfHover.has(node) : false);
+    const forceLabel =
+      labelThreshold === 0 ||
+      isHoverNeighbor ||
+      (handle.options.alwaysShowLabel?.(node) ?? false);
+
+    let finalColor = color;
+    let finalLabelColor: string | undefined;
+    if (hoverDim) {
+      finalColor = applyAlpha(color, 0.2);
+      finalLabelColor = applyAlpha(color, 0.2);
+    }
+    if (typeof externalAlpha === "number" && externalAlpha < 1) {
+      finalColor = applyAlpha(finalColor, externalAlpha);
+      finalLabelColor = applyAlpha(finalColor, externalAlpha);
+    }
+
+    const result: Record<string, unknown> = {
       ...attrs,
       size: nodeSize(nodeData, isCenter),
-      color,
+      color: finalColor,
       label: nodeData.label,
       zIndex: isCenter ? 2 : 1,
-      forceLabel: true,
-      ...(dim ? { color: applyAlpha(color, 0.2), labelColor: applyAlpha(color, 0.2) } : {}),
+      forceLabel,
     };
+    if (finalLabelColor !== undefined) {
+      result.labelColor = finalLabelColor;
+    }
+    return result;
   });
 
   // Edge reducer — hover dim for non-adjacent edges.
@@ -255,6 +308,51 @@ export function mountGraph(
   renderer.on("enterNode", enter);
   renderer.on("leaveNode", leave);
 
+  // Stage double-click — used by the global graph to reset zoom.
+  if (options.onStageDoubleClick) {
+    renderer.on("doubleClickStage", ({ event }) => {
+      event.preventSigmaDefault();
+      handle.options.onStageDoubleClick?.();
+    });
+  }
+
+  // Drag-to-reposition — sigma 3 exposes raw mouse events; capture & convert
+  // viewport coords to graph coords and write back to the node attributes.
+  if (options.enableNodeDrag) {
+    let draggedNode: string | null = null;
+    let draggingActive = false;
+
+    renderer.on("downNode", ({ node, event }) => {
+      draggedNode = node;
+      draggingActive = true;
+      // Disable camera movement while dragging a node.
+      renderer.getCamera().disable();
+      event.preventSigmaDefault();
+    });
+
+    const mouseCaptor = renderer.getMouseCaptor();
+    const onMouseMove = (ev: { x: number; y: number; preventSigmaDefault: () => void }) => {
+      if (!draggingActive || !draggedNode) return;
+      const coords = renderer.viewportToGraph({ x: ev.x, y: ev.y });
+      graph.setNodeAttribute(draggedNode, "x", coords.x);
+      graph.setNodeAttribute(draggedNode, "y", coords.y);
+      ev.preventSigmaDefault();
+    };
+    const onMouseUp = () => {
+      if (draggingActive) {
+        draggingActive = false;
+        draggedNode = null;
+        renderer.getCamera().enable();
+      }
+    };
+    mouseCaptor.on("mousemovebody", onMouseMove);
+    mouseCaptor.on("mouseup", onMouseUp);
+    handle.disposers.push(() => {
+      mouseCaptor.removeListener("mousemovebody", onMouseMove);
+      mouseCaptor.removeListener("mouseup", onMouseUp);
+    });
+  }
+
   // Scroll-wheel inside the panel zooms the graph rather than scrolling the
   // sidebar. Sigma already binds wheel events on its container, but it doesn't
   // call preventDefault by default when the mouse is outside a node. We catch
@@ -273,10 +371,48 @@ export function mountGraph(
 /**
  * Replace the graph's nodes + edges with a fresh payload. Re-runs the layout
  * so newly added nodes snap into place.
+ *
+ * If `relayout` is false, existing node positions are preserved for any id
+ * still present in the new dataset — useful for incremental refreshes in the
+ * global graph so the view doesn't jump on every file-save.
  */
-export function updateGraph(handle: GraphHandle, data: LocalGraph): void {
-  populateGraph(handle.graph, data);
-  runLayout(handle.graph);
+export function updateGraph(
+  handle: GraphHandle,
+  data: LocalGraph,
+  opts: { relayout?: boolean; iterations?: number } = {},
+): void {
+  const relayout = opts.relayout ?? true;
+  const iterations = opts.iterations ?? handle.options.layoutIterations ?? 50;
+
+  if (!relayout) {
+    // Preserve positions for nodes that already exist.
+    const prevPos = new Map<string, { x: number; y: number }>();
+    handle.graph.forEachNode((id, attrs) => {
+      prevPos.set(id, {
+        x: Number(attrs.x ?? 0),
+        y: Number(attrs.y ?? 0),
+      });
+    });
+    populateGraph(handle.graph, data);
+    for (const [id, pos] of prevPos) {
+      if (handle.graph.hasNode(id)) {
+        handle.graph.setNodeAttribute(id, "x", pos.x);
+        handle.graph.setNodeAttribute(id, "y", pos.y);
+      }
+    }
+    // Only run a short refinement pass if there are new nodes.
+    let newCount = 0;
+    handle.graph.forEachNode((id) => {
+      if (!prevPos.has(id)) newCount += 1;
+    });
+    if (newCount > 0) {
+      runLayout(handle.graph, Math.min(iterations, 30));
+    }
+  } else {
+    populateGraph(handle.graph, data);
+    runLayout(handle.graph, iterations);
+  }
+
   handle.neighborMap = buildNeighborMap(data.edges);
   handle.hoveredNode = null;
   handle.renderer.refresh();

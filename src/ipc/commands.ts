@@ -322,6 +322,20 @@ export async function getLocalGraph(
   }
 }
 
+/**
+ * Return the whole-vault link graph — one resolved node per indexed `.md`
+ * file, one pseudo-node per unique unresolved wiki-link target, one
+ * undirected edge per resolved link. Nodes carry their tags so the graph
+ * filter panel can intersect without another IPC round-trip.
+ */
+export async function getLinkGraph(): Promise<LocalGraph> {
+  try {
+    return await invoke<LocalGraph>("get_link_graph");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 export async function getResolvedAttachments(): Promise<Map<string, string>> {
   try {
     const record = await invoke<Record<string, string>>("get_resolved_attachments");
