@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark light;
   --color-bg:        #F5F5F4;
   --color-surface:   #FFFFFF;
   --color-border:    #E5E5E4;
@@ -21,6 +22,7 @@
 /* Light theme (explicit) — same values as the bare :root defaults. Allows the HTML
    attribute to be set without clobbering the defaults. */
 :root[data-theme="light"] {
+  color-scheme: light;
   --color-bg: #F5F5F4;
   --color-surface: #FFFFFF;
   --color-border: #E5E5E4;
@@ -36,13 +38,14 @@
 
 /* Dark theme (locked palette per UI-SPEC D-06). */
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --color-bg: #1C1C1A;
   --color-surface: #2A2A28;
   --color-border: #3A3A38;
   --color-text: #F5F5F4;
   --color-text-muted: #A8A8A5;
-  --color-accent: #7C3AED;
-  --color-accent-bg: #2E1F4A;
+  --color-accent: #9575CD;
+  --color-accent-bg: #2A2545;
   --color-error: #F87171;
   --color-warning: #FCD34D;
   --color-success: #34D399;
@@ -52,13 +55,14 @@
 /* Auto — follow OS preference when data-theme="auto". */
 @media (prefers-color-scheme: dark) {
   :root[data-theme="auto"] {
+    color-scheme: dark;
     --color-bg: #1C1C1A;
     --color-surface: #2A2A28;
     --color-border: #3A3A38;
     --color-text: #F5F5F4;
     --color-text-muted: #A8A8A5;
-    --color-accent: #7C3AED;
-    --color-accent-bg: #2E1F4A;
+    --color-accent: #9575CD;
+    --color-accent-bg: #2A2545;
     --color-error: #F87171;
     --color-warning: #FCD34D;
     --color-success: #34D399;

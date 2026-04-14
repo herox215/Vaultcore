@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { tick } from "svelte";
   import { RefreshCw } from "lucide-svelte";
   import { searchStore } from "../../store/searchStore";
   import { scrollStore } from "../../store/scrollStore";
@@ -19,8 +19,10 @@
   let inputRef: SearchInput | undefined = $state();
 
   // Auto-focus input when panel mounts (Suche tab just became active)
-  onMount(() => {
-    void tick().then(() => inputRef?.focus());
+  $effect(() => {
+    if ($searchStore.activeTab === "search") {
+      void tick().then(() => inputRef?.focus());
+    }
   });
 
   async function handleSearch(query: string) {

@@ -58,6 +58,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     handler: (ctx) => { ctx.activateSearchTab(); },
   },
   {
+    id: "search-alt",
+    keys: { meta: true, key: "f" },
+    label: "Volltext-Suche (Alternative)",
+    handler: (ctx) => { ctx.activateSearchTab(); },
+  },
+  {
     id: "backlinks-toggle",
     keys: { meta: true, shift: true, key: "b" },
     label: "Backlinks-Panel",

@@ -214,7 +214,7 @@
       openQuickSwitcher: () => { quickSwitcherOpen = true; },
       toggleSidebar: () => { toggleSidebar(); },
       openBacklinks: () => { backlinksStore.toggle(); },
-      activateSearchTab: () => { searchStore.setActiveTab("search"); },
+      activateSearchTab: () => { sidebarCollapsed = false; searchStore.setActiveTab("search"); },
       cycleTabNext: () => { tabStore.cycleTab(1); },
       cycleTabPrev: () => { tabStore.cycleTab(-1); },
       closeActiveTab: () => {

@@ -33,3 +33,13 @@ src-tauri/gen/schemas
 
 # Reference material (not part of the codebase)
 VaultCore_MVP_Spezifikation_v3.md
+
+# Agent / GSD / planning meta — not project code
+.planning/
+.claude/
+.agents/
+.cursor/
+.opencode/
+CLAUDE.md
+AGENTS.md
+.claude*
