@@ -163,18 +163,41 @@ pub fn resolve_link(target_raw: &str, source_folder: &str, all_rel_paths: &[Stri
     candidates.first().map(|p| (*p).clone())
 }
 
+// ── StoredLink (internal) ──────────────────────────────────────────────────────
+
+/// Internal representation of a parsed link with its pre-resolved target.
+///
+/// Resolving is done once at `update_file` time and cached here so that
+/// `get_backlinks` and `get_unresolved` can answer queries in O(1) per link
+/// instead of re-running the 3-stage resolution algorithm (which was O(n)
+/// per link over all vault paths, making `get_backlinks` effectively O(n²)
+/// at 100k notes).
+#[derive(Debug)]
+struct StoredLink {
+    parsed: ParsedLink,
+    /// Pre-resolved vault-relative target path. `None` means the link is
+    /// unresolved (no file in the vault matches the target stem).
+    resolved_target: Option<String>,
+}
+
 // ── LinkGraph ──────────────────────────────────────────────────────────────────
 
 /// In-memory wiki-link adjacency list.
 ///
-/// `outgoing`: source rel_path → Vec of ParsedLinks found in that file.
+/// `outgoing`: source rel_path → Vec of StoredLinks found in that file.
 /// `incoming`: target rel_path → Vec of source rel_paths that resolve to it.
 ///
 /// Both maps are keyed by vault-relative paths with forward-slash separators.
+///
+/// Resolution is performed once when `update_file` is called and the result
+/// is cached in `StoredLink::resolved_target`. This makes `get_backlinks`
+/// and `get_unresolved` O(k) where k = number of backlinks, instead of
+/// O(n·k) where n = total vault files (the previous implementation called
+/// `resolve_link` for every link on every query).
 #[derive(Debug, Default)]
 pub struct LinkGraph {
-    /// Outgoing links per source file (source → links).
-    outgoing: HashMap<String, Vec<ParsedLink>>,
+    /// Outgoing links per source file (source → stored links with resolved targets).
+    outgoing: HashMap<String, Vec<StoredLink>>,
     /// Incoming resolved links per target file (target → sources).
     incoming: HashMap<String, Vec<String>>,
 }
@@ -188,6 +211,10 @@ impl LinkGraph {
     ///
     /// Idempotent: calling twice for the same source replaces the previous
     /// entries without creating duplicates.
+    ///
+    /// Resolves each link's target once and caches the result in
+    /// `StoredLink::resolved_target` so subsequent queries don't need to
+    /// re-run `resolve_link`.
     pub fn update_file(
         &mut self,
         source_rel: &str,
@@ -197,18 +224,25 @@ impl LinkGraph {
         // Clear previous state for this source so updates are idempotent.
         self.remove_file(source_rel);
 
-        // Resolve each link and populate incoming map.
         let source_folder = path_folder(source_rel).to_string();
-        for link in &links {
-            if let Some(target) = resolve_link(&link.target_raw, &source_folder, all_rel_paths) {
-                self.incoming
-                    .entry(target)
-                    .or_default()
-                    .push(source_rel.to_string());
-            }
-        }
+        let stored: Vec<StoredLink> = links
+            .into_iter()
+            .map(|link| {
+                let resolved = resolve_link(&link.target_raw, &source_folder, all_rel_paths);
+                if let Some(target) = &resolved {
+                    self.incoming
+                        .entry(target.clone())
+                        .or_default()
+                        .push(source_rel.to_string());
+                }
+                StoredLink {
+                    parsed: link,
+                    resolved_target: resolved,
+                }
+            })
+            .collect();
 
-        self.outgoing.insert(source_rel.to_string(), links);
+        self.outgoing.insert(source_rel.to_string(), stored);
     }
 
     /// Remove all link information for `source_rel`.
@@ -225,9 +259,11 @@ impl LinkGraph {
         self.incoming.retain(|_, v| !v.is_empty());
     }
 
-    /// Return the outgoing links for `source_rel` (immutable borrow).
-    pub fn outgoing_for(&self, source_rel: &str) -> Option<&Vec<ParsedLink>> {
-        self.outgoing.get(source_rel)
+    /// Return the outgoing parsed links for `source_rel`.
+    pub fn outgoing_for(&self, source_rel: &str) -> Option<Vec<ParsedLink>> {
+        self.outgoing
+            .get(source_rel)
+            .map(|v| v.iter().map(|s| s.parsed.clone()).collect())
     }
 
     /// Return the incoming sources for `target_rel` (immutable borrow).
@@ -237,8 +273,9 @@ impl LinkGraph {
 
     /// Return all backlink entries for `target_rel`.
     ///
-    /// For each source file that links to `target_rel`, finds the ParsedLinks
-    /// in `outgoing` and returns a BacklinkEntry with title from `file_index`.
+    /// Uses pre-resolved targets cached in `StoredLink::resolved_target`
+    /// so no call to `resolve_link` is needed — O(k) where k is the number
+    /// of backlinks, not O(n·k).
     pub fn get_backlinks(&self, target_rel: &str, file_index: &FileIndex) -> Vec<BacklinkEntry> {
         let sources = match self.incoming.get(target_rel) {
             Some(s) => s,
@@ -248,81 +285,52 @@ impl LinkGraph {
         let mut entries = Vec::new();
         for source_path in sources {
             let source_title = {
-                // Look up title in file_index using the abs path reconstruction.
-                // FileIndex is keyed by abs path, so we iterate entries to find
-                // the one matching the relative path.
                 file_index
                     .all_entries()
                     .find(|(_, m)| m.relative_path == *source_path)
                     .map(|(_, m)| m.title.clone())
-                    .unwrap_or_else(|| {
-                        // Fallback: use stem of relative path
-                        path_stem(source_path).to_string()
-                    })
+                    .unwrap_or_else(|| path_stem(source_path).to_string())
             };
 
-            // Find all ParsedLinks in the source file that resolve to target_rel
-            let _target_folder = path_folder(target_rel);
-            if let Some(links) = self.outgoing.get(source_path) {
-                // Collect all links paths to resolve against
-                let all_paths: Vec<String> = self
-                    .outgoing
-                    .keys()
-                    .cloned()
-                    .chain(self.incoming.keys().cloned())
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect();
-
-                for link in links {
-                    let source_folder = path_folder(source_path);
-                    // We need to resolve with a reasonable path list.
-                    // Since we store resolved state in incoming, just check if this
-                    // link's target_raw would resolve to target_rel.
-                    // Build a minimal list that includes both source and target.
-                    let mut check_paths = all_paths.clone();
-                    if !check_paths.contains(&target_rel.to_string()) {
-                        check_paths.push(target_rel.to_string());
-                    }
-
-                    if let Some(resolved) = resolve_link(&link.target_raw, source_folder, &check_paths) {
-                        if resolved == target_rel {
-                            entries.push(BacklinkEntry {
-                                source_path: source_path.clone(),
-                                source_title: source_title.clone(),
-                                context: link.context.clone(),
-                                line_number: link.line_number,
-                            });
-                        }
+            if let Some(stored_links) = self.outgoing.get(source_path) {
+                for stored in stored_links {
+                    if stored.resolved_target.as_deref() == Some(target_rel) {
+                        entries.push(BacklinkEntry {
+                            source_path: source_path.clone(),
+                            source_title: source_title.clone(),
+                            context: stored.parsed.context.clone(),
+                            line_number: stored.parsed.line_number,
+                        });
                     }
                 }
             } else {
-                // Source not in outgoing (shouldn't happen, but defensive)
                 entries.push(BacklinkEntry {
                     source_path: source_path.clone(),
-                    source_title: source_title.clone(),
+                    source_title,
                     context: String::new(),
                     line_number: 0,
                 });
             }
         }
 
-        // Deduplicate by source_path (a file should appear at most once per unique link)
         entries
     }
 
     /// Return all links across the vault that resolve to `None`.
-    pub fn get_unresolved(&self, all_rel_paths: &[String]) -> Vec<UnresolvedLink> {
+    ///
+    /// Uses pre-resolved targets cached in `StoredLink::resolved_target`
+    /// so no call to `resolve_link` is needed — O(total links) instead of
+    /// O(total links · total vault files).
+    pub fn get_unresolved(&self) -> Vec<UnresolvedLink> {
         let mut result = Vec::new();
 
-        for (source_path, links) in &self.outgoing {
-            let source_folder = path_folder(source_path);
-            for link in links {
-                if resolve_link(&link.target_raw, source_folder, all_rel_paths).is_none() {
+        for (source_path, stored_links) in &self.outgoing {
+            for stored in stored_links {
+                if stored.resolved_target.is_none() {
                     result.push(UnresolvedLink {
                         source_path: source_path.clone(),
-                        target_raw: link.target_raw.clone(),
-                        line_number: link.line_number,
+                        target_raw: stored.parsed.target_raw.clone(),
+                        line_number: stored.parsed.line_number,
                     });
                 }
             }

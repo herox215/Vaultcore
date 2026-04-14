@@ -85,7 +85,7 @@ pub async fn get_outgoing_links(
     };
 
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-    Ok(lg.outgoing_for(&path).cloned().unwrap_or_default())
+    Ok(lg.outgoing_for(&path).unwrap_or_default())
 }
 
 // ── get_unresolved_links ───────────────────────────────────────────────────────
@@ -95,21 +95,19 @@ pub async fn get_outgoing_links(
 pub async fn get_unresolved_links(
     state: tauri::State<'_, VaultState>,
 ) -> Result<Vec<UnresolvedLink>, VaultError> {
-    let (lg_arc, fi_arc) = {
+    let lg_arc = {
         let guard = state
             .index_coordinator
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
         match guard.as_ref() {
-            Some(c) => (c.link_graph(), c.file_index()),
+            Some(c) => c.link_graph(),
             None => return Ok(Vec::new()),
         }
     };
 
-    let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-
-    Ok(lg.get_unresolved(&fi.all_relative_paths()))
+    Ok(lg.get_unresolved())
 }
 
 // ── suggest_links ──────────────────────────────────────────────────────────────

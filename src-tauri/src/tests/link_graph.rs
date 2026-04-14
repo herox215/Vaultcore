@@ -196,7 +196,7 @@ fn test_get_unresolved() {
     let links = extract_links("See [[NonExistent]] here");
     graph.update_file("a/Source.md", links, &all);
 
-    let unresolved = graph.get_unresolved(&all);
+    let unresolved = graph.get_unresolved();
     assert_eq!(unresolved.len(), 1);
     assert_eq!(unresolved[0].source_path, "a/Source.md");
     assert_eq!(unresolved[0].target_raw, "NonExistent");
@@ -210,7 +210,7 @@ fn test_get_unresolved_empty_when_all_resolved() {
     let links = extract_links("See [[Target]] here");
     graph.update_file("a/Source.md", links, &all);
 
-    let unresolved = graph.get_unresolved(&all);
+    let unresolved = graph.get_unresolved();
     assert!(unresolved.is_empty());
 }
 
