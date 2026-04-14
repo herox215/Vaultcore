@@ -7,6 +7,7 @@
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
+  import { activeViewStore } from "../../store/activeViewStore";
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, createFile, getFileHash } from "../../ipc/commands";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
@@ -280,10 +281,29 @@
             activeView.state.doc.toString(),
             activeTab.lastSaved ? String(activeTab.lastSaved) : null
           );
+          if (activePane === paneId) {
+            activeViewStore.setActive(activeView);
+          }
         }
+      } else if (activePane === paneId) {
+        activeViewStore.setActive(null);
       }
       prevActiveTabId = newActiveId;
     }
+  });
+
+  // Also publish the active view whenever the active pane itself switches.
+  // The block above only fires on tab-id changes within this pane — moving
+  // focus between panes wouldn't otherwise update the sidebar's source view.
+  $effect(() => {
+    if (activePane !== paneId) return;
+    const id = paneActiveTabId;
+    if (!id) {
+      activeViewStore.setActive(null);
+      return;
+    }
+    const view = viewMap.get(id);
+    if (view) activeViewStore.setActive(view);
   });
 
   /**
@@ -421,6 +441,9 @@
     // Sync editorStore if this is the active tab
     if (tab.id === paneActiveTabId) {
       editorStore.syncFromTab(tab.filePath, content, null);
+      if (activePane === paneId) {
+        activeViewStore.setActive(view);
+      }
     }
   }
 
