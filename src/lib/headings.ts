@@ -6,6 +6,7 @@
 
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import { detectFrontmatter } from "../components/Editor/frontmatterPlugin";
 
 /** A single heading entry. */
 export interface Heading {
@@ -30,9 +31,13 @@ const SETEXT_NODE_RE = /^SetextHeading([1-2])$/;
  */
 export function extractHeadingsFromState(state: EditorState): Heading[] {
   const results: Heading[] = [];
+  const frontmatter = detectFrontmatter(state.doc.toString());
 
   syntaxTree(state).iterate({
     enter(node) {
+      if (frontmatter && node.from >= frontmatter.from && node.from < frontmatter.to) {
+        return;
+      }
       let level: number | null = null;
 
       const atxMatch = ATX_NODE_RE.exec(node.name);
@@ -85,11 +90,17 @@ const ATX_RE = /^(#{1,6})\s+(.*?)(?:\s+#+\s*)?$/m;
  */
 export function extractHeadings(text: string): Heading[] {
   const results: Heading[] = [];
+  const frontmatter = detectFrontmatter(text);
   const lines = text.split("\n");
   let offset = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i] ?? "";
+
+    if (frontmatter && offset >= frontmatter.from && offset < frontmatter.to) {
+      offset += lineText.length + 1;
+      continue;
+    }
 
     // ATX heading
     const atxMatch = /^(#{1,6})\s+(.*)$/.exec(lineText);
