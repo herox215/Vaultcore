@@ -9,19 +9,26 @@
     type BodyFont,
     type MonoFont,
   } from "../../store/settingsStore";
+  import { vaultStore } from "../../store/vaultStore";
   import { SHORTCUTS, formatShortcut } from "../../lib/shortcuts";
 
-  let { open, onClose }: { open: boolean; onClose: () => void } = $props();
+  let { open, onClose, onSwitchVault }: {
+    open: boolean;
+    onClose: () => void;
+    onSwitchVault: () => void;
+  } = $props();
 
   let currentTheme = $state<Theme>("auto");
   let currentBody = $state<BodyFont>("system");
   let currentMono = $state<MonoFont>("system");
   let currentSize = $state<number>(14);
+  let currentVaultPath = $state<string | null>(null);
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
   const unsubSettings = settingsStore.subscribe((s) => {
     currentBody = s.fontBody; currentMono = s.fontMono; currentSize = s.fontSize;
   });
+  const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && open) {
@@ -45,7 +52,7 @@
     settingsStore.setFontSize(Number((e.target as HTMLInputElement).value));
   }
 
-  onDestroy(() => { unsubTheme(); unsubSettings(); });
+  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -65,6 +72,25 @@
     </header>
 
     <div class="vc-settings-content">
+      <!-- Section — Vault -->
+      <section data-testid="settings-vault">
+        <h3 class="vc-settings-section-title">VAULT</h3>
+        <div class="vc-settings-row vc-vault-row">
+          <div class="vc-vault-path-wrap">
+            <div class="vc-vault-path-label">Aktueller Vault</div>
+            <div class="vc-vault-path" title={currentVaultPath ?? ""}>
+              {currentVaultPath ?? "—"}
+            </div>
+          </div>
+          <button
+            type="button"
+            class="vc-vault-switch-btn"
+            onclick={onSwitchVault}
+            data-testid="settings-switch-vault"
+          >Vault wechseln…</button>
+        </div>
+      </section>
+
       <!-- Section A — Erscheinungsbild -->
       <section>
         <h3 class="vc-settings-section-title">ERSCHEINUNGSBILD</h3>
@@ -220,6 +246,34 @@
   }
   .vc-settings-size-value { font-size: 14px; color: var(--color-text-muted); }
   .vc-settings-slider { width: 100%; }
+
+  .vc-vault-row { align-items: flex-start; margin-bottom: 0; }
+  .vc-vault-path-wrap { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .vc-vault-path-label { font-size: 14px; color: var(--color-text); }
+  .vc-vault-path {
+    font-family: var(--vc-font-mono);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .vc-vault-switch-btn {
+    flex-shrink: 0;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .vc-vault-switch-btn:hover {
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
 
   /* Section C — Tastaturkürzel */
   .vc-shortcuts-table { width: 100%; border-collapse: collapse; }
