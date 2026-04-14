@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { Settings as SettingsIcon } from "lucide-svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import GraphFilters, { type GraphFilterState } from "./GraphFilters.svelte";
+  import GraphForces from "./GraphForces.svelte";
+  import { DEFAULT_FORCE_SETTINGS, type ForceSettings } from "./graphRender";
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore, type Tab, GRAPH_TAB_PATH } from "../../store/tabStore";
   import { getLinkGraph } from "../../ipc/commands";
@@ -12,6 +15,8 @@
   // ── Persistence ─────────────────────────────────────────────────────────────
   const CAMERA_KEY_PREFIX = "vaultcore-graph-camera-";
   const FILTER_KEY_PREFIX = "vaultcore-graph-filters-";
+  const FORCES_KEY_PREFIX = "vaultcore-graph-forces-";
+  const FROZEN_KEY_PREFIX = "vaultcore-graph-frozen-";
 
   /**
    * Small synchronous string hash — used to key per-vault localStorage slots.
@@ -89,6 +94,41 @@
     }
   }
 
+  function loadForces(vaultPath: string): ForceSettings {
+    try {
+      const raw = localStorage.getItem(FORCES_KEY_PREFIX + hashVaultPath(vaultPath));
+      if (!raw) return { ...DEFAULT_FORCE_SETTINGS };
+      const parsed = JSON.parse(raw) as Partial<ForceSettings>;
+      return { ...DEFAULT_FORCE_SETTINGS, ...parsed };
+    } catch {
+      return { ...DEFAULT_FORCE_SETTINGS };
+    }
+  }
+
+  function saveForces(vaultPath: string, s: ForceSettings): void {
+    try {
+      localStorage.setItem(FORCES_KEY_PREFIX + hashVaultPath(vaultPath), JSON.stringify(s));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function loadFrozen(vaultPath: string): boolean {
+    try {
+      return localStorage.getItem(FROZEN_KEY_PREFIX + hashVaultPath(vaultPath)) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  function saveFrozen(vaultPath: string, frozen: boolean): void {
+    try {
+      localStorage.setItem(FROZEN_KEY_PREFIX + hashVaultPath(vaultPath), String(frozen));
+    } catch {
+      /* ignore */
+    }
+  }
+
   // ── State ───────────────────────────────────────────────────────────────────
   let vaultPath = $state<string | null>(null);
   let tabs = $state<Tab[]>([]);
@@ -101,6 +141,9 @@
 
   let filters = $state<GraphFilterState>({ ...DEFAULT_FILTERS });
   let filtersCollapsed = $state<boolean>(false);
+  let forces = $state<ForceSettings>({ ...DEFAULT_FORCE_SETTINGS });
+  let frozen = $state<boolean>(false);
+  let forcesPanelOpen = $state<boolean>(false);
 
   let unlistenFileChange: UnlistenFn | null = null;
   let refetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,6 +154,8 @@
       vaultPath = s.currentPath;
       if (vaultPath) {
         filters = loadFilters(vaultPath);
+        forces = loadForces(vaultPath);
+        frozen = loadFrozen(vaultPath);
       }
       // Vault identity changed → refetch with full relayout.
       datasetVersion += 1;
@@ -277,6 +322,16 @@
     if (vaultPath) saveFilters(vaultPath, next);
   }
 
+  function onForcesChange(next: ForceSettings): void {
+    forces = next;
+    if (vaultPath) saveForces(vaultPath, next);
+  }
+
+  function onFrozenChange(next: boolean): void {
+    frozen = next;
+    if (vaultPath) saveFrozen(vaultPath, next);
+  }
+
   function onNodeClick(_id: string, node: GraphNode): void {
     if (!node.resolved || !vaultPath || !node.path) return;
     tabStore.openTab(`${vaultPath}/${node.path}`);
@@ -357,6 +412,8 @@
       onNodeClick={onNodeClick}
       {onCameraChange}
       datasetVersion={datasetVersion}
+      forceSettings={forces}
+      {frozen}
     />
     <GraphFilters
       state={filters}
@@ -366,6 +423,26 @@
       onChange={onFiltersChange}
       onCollapsedChange={(c) => (filtersCollapsed = c)}
     />
+    <button
+      type="button"
+      class="vc-graph-forces-btn"
+      class:vc-graph-forces-btn--active={forcesPanelOpen}
+      onclick={() => (forcesPanelOpen = !forcesPanelOpen)}
+      aria-label="Forces"
+      aria-pressed={forcesPanelOpen}
+      title="Forces"
+    >
+      <SettingsIcon size={16} strokeWidth={1.75} />
+    </button>
+    {#if forcesPanelOpen}
+      <GraphForces
+        settings={forces}
+        {frozen}
+        onSettingsChange={onForcesChange}
+        onFrozenChange={onFrozenChange}
+        onClose={() => (forcesPanelOpen = false)}
+      />
+    {/if}
     {#if loading}
       <div class="vc-graph-loading">Aktualisiere...</div>
     {/if}
@@ -392,7 +469,8 @@
   .vc-graph-loading {
     position: absolute;
     top: 12px;
-    right: 12px;
+    left: 50%;
+    transform: translateX(-50%);
     padding: 4px 10px;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
@@ -400,5 +478,30 @@
     font-size: 11px;
     color: var(--color-text-muted);
     pointer-events: none;
+  }
+  .vc-graph-forces-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 11;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .vc-graph-forces-btn:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .vc-graph-forces-btn--active {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg);
   }
 </style>

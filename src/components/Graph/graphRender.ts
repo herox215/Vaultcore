@@ -15,7 +15,41 @@
 import Graph from "graphology";
 import Sigma from "sigma";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import FA2LayoutSupervisor from "graphology-layout-forceatlas2/worker";
 import type { GraphEdge, GraphNode, LocalGraph } from "../../types/links";
+
+/**
+ * User-tunable force parameters. Mapped onto the subset of ForceAtlas2
+ * settings that actually shape the "organic" feel — gravity, repulsion,
+ * edge-weight influence, and the motion damping (`slowDown`). Defaults are
+ * tuned for an Obsidian-like drift rather than FA2's aggressive convergence.
+ */
+export interface ForceSettings {
+  /** Center pull. 0 = graph drifts apart, 5 = strong clump. */
+  gravity: number;
+  /** Node repulsion strength. Higher = nodes push apart more. */
+  scalingRatio: number;
+  /** How much edge weight / existence attracts endpoints. */
+  edgeWeightInfluence: number;
+  /** Motion damping. Higher = slower, calmer movement. */
+  slowDown: number;
+}
+
+export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
+  gravity: 1,
+  scalingRatio: 10,
+  edgeWeightInfluence: 1,
+  slowDown: 5,
+};
+
+/** Interface shape of the running FA2 supervisor we care about. */
+interface FA2Supervisor {
+  start(): unknown;
+  stop(): unknown;
+  kill(): unknown;
+  isRunning(): boolean;
+  settings: Record<string, unknown>;
+}
 
 /** Options accepted by `mountGraph` — future-proofed for the #32 global view.
  *  The `| undefined` on every optional member is deliberate: svelte-check runs
@@ -50,6 +84,13 @@ export interface GraphRenderOptions {
   dimForNode?: ((id: string, attrs: Record<string, unknown>) => number | undefined) | undefined;
   /** Labels always shown for these node ids regardless of zoom threshold. */
   alwaysShowLabel?: ((id: string) => boolean) | undefined;
+  /** Force-simulation parameters. Passing this enables continuous (live)
+   *  layout via the ForceAtlas2 worker — the default batch `layoutIterations`
+   *  path is used when this field is absent. */
+  forceSettings?: ForceSettings | undefined;
+  /** Start the continuous simulation paused. Toggle later via
+   *  `setLayoutFrozen`. No effect when `forceSettings` is absent. */
+  startFrozen?: boolean | undefined;
 }
 
 /** Opaque handle returned by `mountGraph`. Callers pass it to update/destroy. */
@@ -64,6 +105,10 @@ export interface GraphHandle {
   neighborMap: Map<string, Set<string>>;
   /** Disposers for DOM listeners attached outside sigma. */
   disposers: Array<() => void>;
+  /** Live ForceAtlas2 supervisor when continuous sim is active. */
+  layoutSupervisor: FA2Supervisor | null;
+  /** Frozen state mirror — drives pause/resume without reading the supervisor. */
+  frozen: boolean;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -155,7 +200,10 @@ export function mountGraph(
 ): GraphHandle {
   const graph = new Graph({ type: "undirected", multi: false });
   populateGraph(graph, data);
-  runLayout(graph, options.layoutIterations ?? 50);
+  // Short seed pass so nodes spread out before the live supervisor (or the
+  // final rendered frame) takes over. Without this FA2 starts from near-zero
+  // positions and the first few frames look like a single cluster.
+  runLayout(graph, options.forceSettings ? 30 : (options.layoutIterations ?? 50));
 
   const accent = resolveColor(container, options.accentColor);
   const nodeColor = resolveColor(container, options.nodeColor);
@@ -187,7 +235,35 @@ export function mountGraph(
     hoveredNode: null,
     neighborMap,
     disposers: [],
+    layoutSupervisor: null,
+    frozen: options.startFrozen === true,
   };
+
+  // Live ForceAtlas2 supervisor — organic, Obsidian-style drift. Sigma
+  // listens to node-attr changes emitted by the worker and redraws each
+  // time, so we don't need an explicit requestAnimationFrame loop here.
+  if (options.forceSettings) {
+    try {
+      const supervisor = new (FA2LayoutSupervisor as unknown as {
+        new (g: Graph, p: { settings: Record<string, unknown> }): FA2Supervisor;
+      })(graph, {
+        settings: {
+          ...forceAtlas2.inferSettings(graph),
+          ...options.forceSettings,
+          barnesHutOptimize: graph.order > 200,
+          adjustSizes: true,
+        },
+      });
+      handle.layoutSupervisor = supervisor;
+      if (!handle.frozen) supervisor.start();
+    } catch (err) {
+      // Worker spawn can fail in CSP-restricted or jsdom environments.
+      // Fall back to the existing static layout and log so we notice.
+      // eslint-disable-next-line no-console
+      console.warn("[graphRender] live layout unavailable, static fallback:", err);
+      handle.layoutSupervisor = null;
+    }
+  }
 
   // Node reducer — color + size per frame. Reflects center, unresolved,
   // and hover-dim state without mutating node attributes.
@@ -322,9 +398,19 @@ export function mountGraph(
     let draggedNode: string | null = null;
     let draggingActive = false;
 
+    let resumeOnRelease = false;
+
     renderer.on("downNode", ({ node, event }) => {
       draggedNode = node;
       draggingActive = true;
+      // Pause the live supervisor while dragging so it doesn't fight the
+      // user's finger. Remember whether it was running so we can resume.
+      if (handle.layoutSupervisor && handle.layoutSupervisor.isRunning()) {
+        handle.layoutSupervisor.stop();
+        resumeOnRelease = true;
+      } else {
+        resumeOnRelease = false;
+      }
       // Disable camera movement while dragging a node.
       renderer.getCamera().disable();
       event.preventSigmaDefault();
@@ -343,6 +429,12 @@ export function mountGraph(
         draggingActive = false;
         draggedNode = null;
         renderer.getCamera().enable();
+        // Resume only if the user hasn't frozen the sim via the Forces panel
+        // while the drag was in flight.
+        if (resumeOnRelease && handle.layoutSupervisor && !handle.frozen) {
+          handle.layoutSupervisor.start();
+        }
+        resumeOnRelease = false;
       }
     };
     mouseCaptor.on("mousemovebody", onMouseMove);
@@ -384,6 +476,14 @@ export function updateGraph(
   const relayout = opts.relayout ?? true;
   const iterations = opts.iterations ?? handle.options.layoutIterations ?? 50;
 
+  // Pause the live supervisor so it doesn't race with `graph.clear()` /
+  // re-seed. We'll restart it at the end if it was running and the view is
+  // not frozen.
+  const wasRunning =
+    handle.layoutSupervisor !== null &&
+    handle.layoutSupervisor.isRunning();
+  if (wasRunning && handle.layoutSupervisor) handle.layoutSupervisor.stop();
+
   if (!relayout) {
     // Preserve positions for nodes that already exist.
     const prevPos = new Map<string, { x: number; y: number }>();
@@ -416,6 +516,10 @@ export function updateGraph(
   handle.neighborMap = buildNeighborMap(data.edges);
   handle.hoveredNode = null;
   handle.renderer.refresh();
+
+  if (wasRunning && handle.layoutSupervisor && !handle.frozen) {
+    handle.layoutSupervisor.start();
+  }
 }
 
 /** Tear down the sigma renderer and remove all listeners. */
@@ -428,12 +532,48 @@ export function destroyGraph(handle: GraphHandle): void {
     }
   }
   handle.disposers.length = 0;
+  if (handle.layoutSupervisor) {
+    try {
+      handle.layoutSupervisor.kill();
+    } catch {
+      /* ignore */
+    }
+    handle.layoutSupervisor = null;
+  }
   try {
     handle.renderer.kill();
   } catch {
     /* ignore */
   }
   handle.graph.clear();
+}
+
+/**
+ * Update the live force parameters. Mutates the supervisor's settings in place
+ * — the next iteration message to the worker picks them up. No-op when the
+ * handle has no supervisor (static-layout mode).
+ */
+export function setForceSettings(
+  handle: GraphHandle,
+  settings: ForceSettings,
+): void {
+  handle.options = { ...handle.options, forceSettings: settings };
+  if (!handle.layoutSupervisor) return;
+  Object.assign(handle.layoutSupervisor.settings, settings);
+}
+
+/**
+ * Pause or resume the live simulation. When a node drag is in progress the
+ * drag handler still pauses on mousedown and only resumes on mouseup — this
+ * function mirrors the frozen state so the drag handler knows whether to
+ * resume.
+ */
+export function setLayoutFrozen(handle: GraphHandle, frozen: boolean): void {
+  handle.frozen = frozen;
+  if (!handle.layoutSupervisor) return;
+  const running = handle.layoutSupervisor.isRunning();
+  if (frozen && running) handle.layoutSupervisor.stop();
+  if (!frozen && !running) handle.layoutSupervisor.start();
 }
 
 /**

@@ -3,7 +3,10 @@
   import {
     destroyGraph,
     mountGraph,
+    setForceSettings,
+    setLayoutFrozen,
     updateGraph,
+    type ForceSettings,
     type GraphHandle,
   } from "./graphRender";
   import type { LocalGraph, GraphNode } from "../../types/links";
@@ -29,6 +32,10 @@
      *  we re-run the force layout from scratch. Identity unchanged =
      *  keep positions, only refresh topology. */
     datasetVersion: number;
+    /** Live force settings — enables the continuous (organic) simulation. */
+    forceSettings?: ForceSettings;
+    /** Freeze/thaw the continuous simulation. */
+    frozen?: boolean;
   }
 
   let {
@@ -40,6 +47,8 @@
     onNodeClick,
     onCameraChange,
     datasetVersion,
+    forceSettings,
+    frozen,
   }: Props = $props();
 
   let canvasEl = $state<HTMLDivElement | undefined>();
@@ -75,6 +84,8 @@
       edgeColor: "var(--color-border)",
       layoutIterations: 300,
       enableNodeDrag: true,
+      forceSettings,
+      startFrozen: frozen === true,
       dimForNode,
       alwaysShowLabel,
       onNodeClick,
@@ -135,6 +146,16 @@
     if (!handle) return;
     handle.options = { ...handle.options, centerId: activeId };
     handle.renderer.refresh({ skipIndexation: true });
+  });
+
+  // Live propagation of force settings + freeze into the running supervisor.
+  $effect(() => {
+    if (!handle || !forceSettings) return;
+    setForceSettings(handle, forceSettings);
+  });
+  $effect(() => {
+    if (!handle) return;
+    setLayoutFrozen(handle, frozen === true);
   });
 
   onMount(() => {
