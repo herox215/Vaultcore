@@ -32,6 +32,7 @@ import { taskListPlugin } from "./taskList";
 import { countsPlugin } from "./countsPlugin";
 import type { PaneId } from "../../store/countsStore";
 import { activeViewStore } from "../../store/activeViewStore";
+import { imageAttachmentExtension } from "./imageAttachment";
 
 // Debounce sidebar panel re-renders during typing: rapid docChanged updates
 // otherwise flood PropertiesPanel and OutgoingLinksPanel with re-parses on
@@ -84,6 +85,7 @@ export function buildExtensions(
     calloutPlugin,
     taskListPlugin,
     docVersionBumpListener,
+    imageAttachmentExtension(),
   ];
 
   if (paneId !== undefined) {
