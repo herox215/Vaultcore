@@ -27,14 +27,19 @@ import { flashField } from "./flashHighlight";
 import { wikiLinkPlugin } from "./wikiLink";
 import { livePreviewPlugin } from "./livePreview";
 import { frontmatterPlugin } from "./frontmatterPlugin";
+import { countsPlugin } from "./countsPlugin";
+import type { PaneId } from "../../store/countsStore";
 import { activeViewStore } from "../../store/activeViewStore";
 
 const docVersionBumpListener = EditorView.updateListener.of((update) => {
   if (update.docChanged) activeViewStore.bumpDocVersion();
 });
 
-export function buildExtensions(onSave: (text: string) => void): Extension[] {
-  return [
+export function buildExtensions(
+  onSave: (text: string) => void,
+  paneId?: PaneId,
+): Extension[] {
+  const extensions: Extension[] = [
     history(),
     drawSelection(),
     dropCursor(),
@@ -65,4 +70,10 @@ export function buildExtensions(onSave: (text: string) => void): Extension[] {
     frontmatterPlugin,
     docVersionBumpListener,
   ];
+
+  if (paneId !== undefined) {
+    extensions.push(countsPlugin(paneId));
+  }
+
+  return extensions;
 }

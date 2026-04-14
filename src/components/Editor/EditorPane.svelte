@@ -12,6 +12,9 @@
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
   import { buildExtensions } from "./extensions";
+  import CountStatusBar from "./CountStatusBar.svelte";
+  import { countsStore } from "../../store/countsStore";
+  import { computeCounts } from "../../lib/wordCount";
   import { scrollToMatch } from "./flashHighlight";
   import { scrollStore } from "../../store/scrollStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
@@ -292,6 +295,27 @@
     }
   });
 
+  // Republish counts for THIS pane whenever the active tab changes. Each
+  // view has its own countsPlugin instance, but because they all write to
+  // the same paneId slot, a tab switch alone doesn't re-trigger publication
+  // on the newly-active view. Publish directly from the shared `computeCounts`
+  // helper so the status bar updates immediately on switch.
+  $effect(() => {
+    const activeId = paneActiveTabId;
+    if (!activeId) {
+      countsStore.clear(paneId);
+      return;
+    }
+    const view = viewMap.get(activeId);
+    if (!view) return;
+    const sel = view.state.selection.main;
+    const text = sel.empty
+      ? view.state.doc.toString()
+      : view.state.sliceDoc(sel.from, sel.to);
+    const { words, characters } = computeCounts(text);
+    countsStore.set(paneId, { words, characters, selection: !sel.empty });
+  });
+
   // Also publish the active view whenever the active pane itself switches.
   // The block above only fires on tab-id changes within this pane — moving
   // focus between panes wouldn't otherwise update the sidebar's source view.
@@ -413,7 +437,7 @@
       tabStore.setDirty(tab.id, true);
     };
 
-    const extensions = buildExtensions(onSave);
+    const extensions = buildExtensions(onSave, paneId);
     const { EditorView: EV } = await import("@codemirror/view");
     const dirtyListener = EV.updateListener.of((update) => {
       if (update.docChanged) {
@@ -607,6 +631,10 @@
       ></div>
     {/each}
   </div>
+
+  {#if paneTabs.length > 0}
+    <CountStatusBar {paneId} />
+  {/if}
 
   {#if !vaultReachable}
     <div class="vc-editor-readonly-overlay"></div>
