@@ -85,8 +85,8 @@ export const markdownTheme = EditorView.theme({
   ".cm-cursor, .cm-dropCursor": {
     borderLeftColor: "var(--color-accent)",
   },
-  "&.cm-focused .cm-selectionBackground, ::selection": {
-    backgroundColor: "var(--color-accent-bg)",
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "color-mix(in srgb, var(--color-accent) 35%, transparent) !important",
   },
   ".cm-activeLine": {
     backgroundColor: "transparent",
