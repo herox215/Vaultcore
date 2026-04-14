@@ -31,22 +31,20 @@ export const FONT_SIZE_DEFAULT = 14;
 const K_BODY = "vaultcore-font-body";
 const K_MONO = "vaultcore-font-mono";
 const K_SIZE = "vaultcore-font-size";
-const K_ATTACHMENT_FOLDER = "vaultcore-attachment-folder";
-
-export const ATTACHMENT_FOLDER_DEFAULT = "attachments";
+// Legacy key from the brief attachment-folder era (before embeds). Removed
+// during cleanup so stale entries don't linger in localStorage.
+const K_ATTACHMENT_FOLDER_LEGACY = "vaultcore-attachment-folder";
 
 export interface SettingsState {
   fontBody: BodyFont;
   fontMono: MonoFont;
   fontSize: number;
-  attachmentFolder: string;
 }
 
 const initial: SettingsState = {
   fontBody: "system",
   fontMono: "system",
   fontSize: FONT_SIZE_DEFAULT,
-  attachmentFolder: ATTACHMENT_FOLDER_DEFAULT,
 };
 
 function isBodyFont(v: unknown): v is BodyFont {
@@ -60,24 +58,15 @@ function clampSize(n: number): number {
   return Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, Math.round(n)));
 }
 
-function sanitizeAttachmentFolder(raw: string | null): string {
-  if (!raw) return ATTACHMENT_FOLDER_DEFAULT;
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed.startsWith("/")) return ATTACHMENT_FOLDER_DEFAULT;
-  return trimmed;
-}
-
 function readInitial(): SettingsState {
   try {
     const b = localStorage.getItem(K_BODY);
     const m = localStorage.getItem(K_MONO);
     const s = Number(localStorage.getItem(K_SIZE));
-    const af = localStorage.getItem(K_ATTACHMENT_FOLDER);
     return {
       fontBody: isBodyFont(b) ? b : initial.fontBody,
       fontMono: isMonoFont(m) ? m : initial.fontMono,
       fontSize: Number.isFinite(s) && s > 0 ? clampSize(s) : FONT_SIZE_DEFAULT,
-      attachmentFolder: sanitizeAttachmentFolder(af),
     };
   } catch { return { ...initial }; }
 }
@@ -99,6 +88,10 @@ function createSettingsStore() {
       applyBody(s.fontBody);
       applyMono(s.fontMono);
       applySize(s.fontSize);
+      // One-shot cleanup of the legacy attachment-folder key. Safe to drop
+      // after a few release cycles — kept here for now so upgraded users
+      // don't carry stale state forever.
+      try { localStorage.removeItem(K_ATTACHMENT_FOLDER_LEGACY); } catch { /* */ }
     },
     setFontBody(key: BodyFont): void {
       if (!isBodyFont(key)) return;
@@ -117,11 +110,6 @@ function createSettingsStore() {
       _store.update((s) => ({ ...s, fontSize: clamped }));
       applySize(clamped);
       try { localStorage.setItem(K_SIZE, String(clamped)); } catch { /* */ }
-    },
-    setAttachmentFolder(folder: string): void {
-      const sanitized = sanitizeAttachmentFolder(folder);
-      _store.update((s) => ({ ...s, attachmentFolder: sanitized }));
-      try { localStorage.setItem(K_ATTACHMENT_FOLDER, sanitized); } catch { /* */ }
     },
   };
 }
