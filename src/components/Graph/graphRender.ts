@@ -37,7 +37,7 @@ export interface ForceSettings {
 
 export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
   gravity: 1,
-  scalingRatio: 10,
+  scalingRatio: 20,
   edgeWeightInfluence: 1,
   slowDown: 5,
 };
