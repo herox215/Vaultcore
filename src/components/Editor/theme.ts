@@ -201,4 +201,17 @@ export const markdownTheme = EditorView.theme({
   ".cm-callout-chevron-collapsed": {
     transform: "rotate(-90deg)",
   },
+
+  // ── Task list checkboxes ──────────────────────────────────────────────────
+  ".cm-task-checkbox": {
+    verticalAlign: "middle",
+    marginRight: "0.35em",
+    marginTop: "-2px",
+    cursor: "pointer",
+    accentColor: "var(--color-accent)",
+  },
+  ".cm-task-done": {
+    textDecoration: "line-through",
+    color: "var(--color-text-muted)",
+  },
 });
