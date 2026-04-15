@@ -174,16 +174,24 @@ function resolveColor(container: HTMLElement, color: string): string {
  */
 function populateGraph(graph: Graph, data: LocalGraph): void {
   graph.clear();
+  // Seed positions on a disc whose radius scales with node count. d3-force
+  // works in raw units; starting every node inside a 1x1 square forces the
+  // simulation to explode out of a degenerate cluster before anything useful
+  // can form. A radius proportional to sqrt(N) matches the expected rest
+  // distance of a connected graph with link.distance ~80 and keeps the
+  // visual kick-off loose enough that clusters have room to resolve.
+  const n = data.nodes.length;
+  const spread = 40 * Math.max(4, Math.sqrt(n));
   for (const node of data.nodes) {
-    // Random seed position — d3-force needs non-zero coordinates to escape
-    // the trivial equilibrium at the origin. The simulation overwrites these.
+    const angle = Math.random() * Math.PI * 2;
+    const r = spread * Math.sqrt(Math.random());
     graph.addNode(node.id, {
       label: node.label,
       path: node.path,
       backlinkCount: node.backlinkCount,
       resolved: node.resolved,
-      x: Math.random() - 0.5,
-      y: Math.random() - 0.5,
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r,
       size: nodeSize(node, false),
     });
   }
@@ -243,15 +251,12 @@ function applyForceSettings(
     | ReturnType<typeof forceManyBody<SimNode>>
     | undefined;
   if (charge) {
-    // Stronger repulsion — default scalingRatio=40 now lands at -600 so the
-    // global graph spreads out instead of clumping at the center. Obsidian's
-    // default repulsion feels roughly in this range.
+    // Default scalingRatio=40 → strength -600. Enough to separate
+    // unconnected nodes while links pull the connected ones into clusters.
+    // Note: no distanceMax — an earlier attempt to cap repulsion range
+    // killed cluster formation because the whole graph started too densely
+    // packed and couldn't escape the tight initial seed.
     charge.strength(-(settings.scalingRatio * 15));
-    // Cap repulsion range so it only acts locally. Without this cap, every
-    // node repels every other node globally, which flattens cluster
-    // structure into a uniform ring. 300 lets clusters stay tight while
-    // unrelated groups drift apart via the longer-range link pulls.
-    charge.distanceMax(300);
   }
 
   const link = simulation.force("link") as
