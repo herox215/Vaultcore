@@ -12,15 +12,22 @@
    *
    * Hidden when no tab is open in the pane.
    */
+  import { BookOpen, Pencil } from "lucide-svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
+  import { tabStore } from "../../store/tabStore";
+  import type { TabViewMode } from "../../store/tabStore";
 
   interface Props {
     /** Absolute file path of the tab whose breadcrumbs to show, or null. */
     filePath: string | null;
+    /** Tab id powering the Reading Mode toggle (#63). */
+    tabId?: string | null;
+    /** Current view mode — undefined when the tab has no Reading Mode toggle. */
+    viewMode?: TabViewMode | undefined;
   }
 
-  let { filePath }: Props = $props();
+  let { filePath, tabId = null, viewMode }: Props = $props();
 
   interface Segment {
     label: string;
@@ -68,47 +75,81 @@
   function handleFolderClick(relPath: string) {
     treeRevealStore.requestReveal(relPath);
   }
+
+  function handleToggleReadingMode() {
+    if (!tabId) return;
+    tabStore.toggleViewMode(tabId);
+  }
 </script>
 
 {#if segments.length > 0}
   <nav class="vc-breadcrumbs" aria-label="File path">
-    <div class="vc-breadcrumbs-inner">
-      {#each segments as seg, i (i)}
-        {#if i > 0}
-          <span class="vc-breadcrumbs-sep" aria-hidden="true">&#8250;</span>
-        {/if}
-        {#if seg.isFile}
-          <!-- Filename segment: distinct styling, no-op click (AC-05). -->
-          <span class="vc-breadcrumbs-segment vc-breadcrumbs-segment--file">
-            {seg.label}
-          </span>
-        {:else}
-          <button
-            type="button"
-            class="vc-breadcrumbs-segment vc-breadcrumbs-segment--folder"
-            onclick={() => handleFolderClick(seg.relPath as string)}
-            title="Reveal {seg.label} in the file tree"
-          >
-            {seg.label}
-          </button>
-        {/if}
-      {/each}
+    <div class="vc-breadcrumbs-path">
+      <div class="vc-breadcrumbs-inner">
+        {#each segments as seg, i (i)}
+          {#if i > 0}
+            <span class="vc-breadcrumbs-sep" aria-hidden="true">&#8250;</span>
+          {/if}
+          {#if seg.isFile}
+            <!-- Filename segment: distinct styling, no-op click (AC-05). -->
+            <span class="vc-breadcrumbs-segment vc-breadcrumbs-segment--file">
+              {seg.label}
+            </span>
+          {:else}
+            <button
+              type="button"
+              class="vc-breadcrumbs-segment vc-breadcrumbs-segment--folder"
+              onclick={() => handleFolderClick(seg.relPath as string)}
+              title="Reveal {seg.label} in the file tree"
+            >
+              {seg.label}
+            </button>
+          {/if}
+        {/each}
+      </div>
     </div>
+    {#if tabId && viewMode !== undefined}
+      <button
+        type="button"
+        class="vc-breadcrumbs-mode-toggle"
+        class:vc-breadcrumbs-mode-toggle--read={viewMode === "read"}
+        onclick={handleToggleReadingMode}
+        aria-pressed={viewMode === "read"}
+        aria-label={viewMode === "read" ? "Bearbeitungsmodus" : "Lesemodus"}
+        title={viewMode === "read" ? "Bearbeitungsmodus (Cmd/Ctrl+E)" : "Lesemodus (Cmd/Ctrl+E)"}
+      >
+        {#if viewMode === "read"}
+          <Pencil size={14} />
+        {:else}
+          <BookOpen size={14} />
+        {/if}
+      </button>
+    {/if}
   </nav>
 {/if}
 
 <style>
-  /* Outer bar — fills the pane width, applies the rtl trick so that when the
-     inner line overflows the ellipsis shows up on the LEFT while the filename
-     stays glued to the right edge (AC-04). */
+  /* Outer bar — fills the pane width; the inner-path block uses the rtl
+     trick so that when the path overflows the ellipsis shows up on the LEFT
+     while the filename stays glued to the right edge (AC-04). The mode
+     toggle sits outside that rtl block so it always pins to the far right. */
   .vc-breadcrumbs {
     display: flex;
     align-items: center;
+    gap: 6px;
     height: 28px;
     padding: 0 12px;
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  /* Path wrapper — the rtl trick lives on THIS element so the toggle
+     button outside stays anchored to the right of the bar. */
+  .vc-breadcrumbs-path {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     direction: rtl;
   }
@@ -123,6 +164,36 @@
     font-size: 12px;
     color: var(--color-text-muted);
     line-height: 1;
+  }
+
+  .vc-breadcrumbs-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--color-text-muted);
+  }
+
+  .vc-breadcrumbs-mode-toggle:hover {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+  }
+
+  .vc-breadcrumbs-mode-toggle--read {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+  }
+
+  .vc-breadcrumbs-mode-toggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
   }
 
   .vc-breadcrumbs-sep {
