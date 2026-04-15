@@ -17,6 +17,8 @@
   import { createFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { openFileAsTab } from "../../lib/openFileAsTab";
+  import { isVaultError, vaultErrorCopy } from "../../types/errors";
 
   let { onSwitchVault }: { onSwitchVault: () => void } = $props();
 
@@ -235,9 +237,13 @@
   }
 
   function handleOpenFile(path: string) {
-    // Wire sidebar open-file to tabStore (Plan 03)
+    // Wire sidebar open-file to tabStore (Plan 03 / #49). Markdown opens
+    // synchronously; non-markdown is dispatched to a viewer via openFileAsTab.
     selectedPath = path;
-    tabStore.openTab(path);
+    void openFileAsTab(path).catch((err) => {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    });
   }
 
   // Global keyboard shortcuts — delegated to the command registry (#13).

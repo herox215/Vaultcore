@@ -189,13 +189,11 @@
     onSelect(entry.path);
     if (entry.is_dir) {
       void toggleExpand();
-    } else if (entry.is_md) {
-      onOpenFile(entry.path);
     } else {
-      toastStore.push({
-        variant: "error",
-        message: "Cannot open this file. It contains non-UTF-8 characters.",
-      });
+      // #49: open any non-folder entry. The tab classifier inside EditorPane
+      // / onOpenFile decides whether to render it as markdown, image,
+      // read-only text, or an unsupported-file placeholder.
+      onOpenFile(entry.path);
     }
   }
 
