@@ -195,11 +195,12 @@
           {#if !query.trim()}
             <p class="vc-qs-section-label">Zuletzt geöffnet</p>
           {/if}
-          {#each activeResults as result, i (result.path)}
+          {#each activeResults as result, i (result.matchedAlias ? `${result.path}|${result.matchedAlias}` : result.path)}
             <QuickSwitcherRow
               filename={getFilename(result.path)}
               relativePath={result.path}
               matchIndices={result.matchIndices}
+              matchedAlias={result.matchedAlias}
               selected={i === selectedIndex}
               onclick={() => openResult(result)}
               onhover={() => { selectedIndex = i; }}

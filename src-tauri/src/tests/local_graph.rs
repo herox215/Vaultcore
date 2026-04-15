@@ -17,6 +17,7 @@ fn make_file_index(entries: &[(&str, &str)]) -> FileIndex {
                 relative_path: rel.to_string(),
                 hash: "abc".to_string(),
                 title: title.to_string(),
+                aliases: Vec::new(),
             },
         );
     }

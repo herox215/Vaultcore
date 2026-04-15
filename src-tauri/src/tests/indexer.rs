@@ -34,6 +34,7 @@ mod memory_tests {
             relative_path: rel.to_string(),
             hash: "deadbeef".to_string(),
             title: rel.to_string(),
+            aliases: Vec::new(),
         }
     }
 
