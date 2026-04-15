@@ -14,6 +14,7 @@
 import { writable } from "svelte/store";
 import type { SearchResult } from "../types/search";
 import { searchFulltext } from "../ipc/commands";
+import { vaultStore } from "./vaultStore";
 
 export interface SearchStoreState {
   query: string;
@@ -119,3 +120,23 @@ function createSearchStore() {
 }
 
 export const searchStore = createSearchStore();
+
+// Issue #46: when the active vault changes, drop the cached query and
+// results. Without this, a search run in Vault A continues to render its
+// old hits after switching to Vault B — the results list still points to
+// files that don't exist under the new vault root.
+let _prevVaultPath: string | null = null;
+let _vaultSubInitialised = false;
+vaultStore.subscribe((s) => {
+  // Skip the initial synchronous emission on import — the store is
+  // already at its `initial` state, so there's nothing to clear.
+  if (!_vaultSubInitialised) {
+    _vaultSubInitialised = true;
+    _prevVaultPath = s.currentPath;
+    return;
+  }
+  if (s.currentPath !== _prevVaultPath) {
+    _prevVaultPath = s.currentPath;
+    searchStore.reset();
+  }
+});
