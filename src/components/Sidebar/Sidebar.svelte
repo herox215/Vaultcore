@@ -388,6 +388,7 @@
             onPathChanged={handlePathChanged}
             {onExpandToggle}
             initiallyExpanded={treeState.expanded.includes(vaultRel(entry.path))}
+            expandedPaths={treeState.expanded}
             sortBy={treeState.sortBy}
           />
         {/each}
