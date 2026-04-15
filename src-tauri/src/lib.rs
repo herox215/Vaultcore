@@ -122,6 +122,8 @@ pub fn run() {
             commands::bookmarks::save_bookmarks,
             commands::snippets::list_snippets,
             commands::snippets::read_snippet,
+            commands::export::export_note_html,
+            commands::export::render_note_html,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

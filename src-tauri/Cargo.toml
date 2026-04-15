@@ -37,6 +37,7 @@ tantivy = "0.26"
 nucleo-matcher = "0.3"
 pulldown-cmark = "0.13"
 serde_yml = "0.0.12"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
