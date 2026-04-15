@@ -54,6 +54,12 @@
   let canvasEl = $state<HTMLDivElement | undefined>();
   let handle: GraphHandle | null = null;
   let lastDatasetVersion = -1;
+  let resizeObserver: ResizeObserver | null = null;
+
+  // sigma needs a non-zero container — treat anything below this as "layout
+  // not resolved yet" and wait for a ResizeObserver tick. Matches the
+  // threshold used in LocalGraphPanel.
+  const MIN_MOUNT_DIMENSION = 8;
 
   function restoreCamera(): void {
     if (!handle || !savedCamera) return;
@@ -72,8 +78,27 @@
   function tryMount(): void {
     if (handle) return;
     if (!canvasEl || !data) return;
-    if (canvasEl.clientWidth === 0 || canvasEl.clientHeight === 0) {
-      requestAnimationFrame(tryMount);
+    // sigma measures the container on construct — wait for the first
+    // ResizeObserver entry with a usable size rather than polling rAF,
+    // which fires before layout and just spins with clientWidth=0 (#43).
+    if (
+      canvasEl.clientWidth < MIN_MOUNT_DIMENSION ||
+      canvasEl.clientHeight < MIN_MOUNT_DIMENSION
+    ) {
+      if (resizeObserver) return;
+      const target = canvasEl;
+      resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width >= MIN_MOUNT_DIMENSION && height >= MIN_MOUNT_DIMENSION) {
+            resizeObserver?.disconnect();
+            resizeObserver = null;
+            tryMount();
+            return;
+          }
+        }
+      });
+      resizeObserver.observe(target);
       return;
     }
     handle = mountGraph(canvasEl, data, {
@@ -163,6 +188,10 @@
   });
 
   onDestroy(() => {
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
     if (handle) {
       destroyGraph(handle);
       handle = null;
