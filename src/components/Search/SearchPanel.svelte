@@ -1,11 +1,12 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { RefreshCw } from "lucide-svelte";
+  import { RefreshCw, AlertTriangle } from "lucide-svelte";
   import { searchStore } from "../../store/searchStore";
   import { scrollStore } from "../../store/scrollStore";
   import { searchFulltext, rebuildIndex } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import type { SearchResult } from "../../types/search";
+  import { isVaultError } from "../../types/errors";
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import SearchInput from "./SearchInput.svelte";
   import SearchResults from "./SearchResults.svelte";
@@ -38,6 +39,9 @@
       searchStore.setResults(results, uniqueFileCount);
     } catch (e) {
       searchStore.setSearching(false);
+      if (isVaultError(e) && e.kind === "IndexCorrupt") {
+        searchStore.setIndexStale(true);
+      }
       toastStore.push({ variant: "error", message: "Suche fehlgeschlagen — bitte erneut versuchen" });
     }
   }
@@ -48,6 +52,7 @@
     toastStore.push({ variant: "clean-merge", message: "Index wird neu aufgebaut..." });
     try {
       await rebuildIndex();
+      searchStore.setIndexStale(false);
       toastStore.push({ variant: "clean-merge", message: "Index aktualisiert" });
     } catch (e) {
       toastStore.push({ variant: "error", message: "Index-Neuaufbau fehlgeschlagen" });
@@ -73,17 +78,22 @@
     <span class="vc-search-panel-title">Suche</span>
     <button
       class="vc-search-rebuild-btn"
+      class:index-stale={$searchStore.indexStale}
       onclick={handleRebuild}
       aria-label="Index neu aufbauen"
       aria-disabled={$searchStore.isRebuilding}
-      title="Index neu aufbauen"
+      title={ $searchStore.indexStale ? "Index ist veraltet — neu aufbauen" : "Index neu aufbauen" }
       disabled={$searchStore.isRebuilding}
     >
-      <RefreshCw
-        size={16}
-        strokeWidth={1.5}
-        class={$searchStore.isRebuilding ? "vc-spin" : ""}
-      />
+      {#if $searchStore.indexStale}
+        <AlertTriangle size={16} strokeWidth={1.5} class="vc-index-stale-icon" />
+      {:else}
+        <RefreshCw
+          size={16}
+          strokeWidth={1.5}
+          class={$searchStore.isRebuilding ? "vc-spin" : ""}
+        />
+      {/if}
       <span class="vc-search-rebuild-label">Index neu aufbauen</span>
     </button>
   </header>
@@ -158,6 +168,14 @@
   .vc-search-rebuild-btn:disabled {
     cursor: not-allowed;
     opacity: 0.6;
+  }
+
+  .vc-search-rebuild-btn.index-stale {
+    color: var(--color-error, #e53e3e);
+  }
+
+  .vc-index-stale-icon {
+    color: var(--color-error, #e53e3e);
   }
 
   .vc-search-rebuild-label {
