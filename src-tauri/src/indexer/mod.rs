@@ -190,6 +190,12 @@ impl IndexCoordinator {
             .await;
         });
 
+        // Evict orphans left over from prior sessions (issue #46). Runs on the
+        // NEW writer's channel so it cannot race a previous coordinator's
+        // still-draining writer task. `index_vault`'s AddFile commands land
+        // after this in the queue, repopulating the index immediately.
+        let _ = tx.try_send(IndexCmd::DeleteAll);
+
         Ok(Self {
             tx,
             file_index,
