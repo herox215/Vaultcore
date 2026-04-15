@@ -263,14 +263,24 @@
         <div class="vc-graph-empty">Keine Datei geöffnet.</div>
       {:else if errorMessage}
         <div class="vc-graph-empty">{errorMessage}</div>
-      {:else if graphData && !hasLinks}
-        <div class="vc-graph-empty">Keine Verbindungen</div>
       {:else}
+        <!-- Always render the canvas when a note is open, even when the
+             local graph has no edges. If we swap it out for a
+             "Keine Verbindungen" message the bind:this=canvasEl element
+             leaves the DOM and the live sigma handle is left pointing at a
+             detached node; when the user switches back to a linked note the
+             next mountGraph is called into a freshly inserted, zero-width
+             div and Sigma logs 'Container has no width' (#43). Keeping the
+             div in place lets updateGraph render the center-only graph,
+             and we overlay a message when hasLinks is false. -->
         <div
           class="vc-graph-canvas"
           bind:this={canvasEl}
           title={centerRel ?? ""}
         ></div>
+        {#if graphData && !hasLinks}
+          <div class="vc-graph-no-links">Keine Verbindungen</div>
+        {/if}
       {/if}
       {#if loading}
         <div class="vc-graph-loading">…</div>
@@ -329,6 +339,18 @@
     text-align: center;
     color: var(--color-text-muted);
     font-size: 14px;
+  }
+  .vc-graph-no-links {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+    border-radius: 4px;
+    pointer-events: none;
   }
   .vc-graph-loading {
     position: absolute;
