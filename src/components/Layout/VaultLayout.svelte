@@ -17,7 +17,9 @@
   import { createFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { treeRevealStore } from "../../store/treeRevealStore";
   import { openFileAsTab } from "../../lib/openFileAsTab";
+  import { resolveRevealRelPath } from "../../lib/activeTabReveal";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
 
   let { onSwitchVault }: { onSwitchVault: () => void } = $props();
@@ -184,9 +186,36 @@
     });
   });
 
+  // Issue #50: reveal + select the active editor tab in the sidebar tree.
+  // Any tab activation (tree click, Quick Switcher, wiki-link, backlinks,
+  // bookmarks, Cmd+N, cycle, close) flows through tabStore.activeTabId,
+  // so a single subscription here covers every entry point. We guard by
+  // the computed rel path so per-keystroke mutations (setDirty, scroll)
+  // don't re-issue the same reveal on every tabStore emission.
+  let unsubActiveTabReveal: (() => void) | null = null;
+  let lastRevealedRelPath: string | null | undefined = undefined;
+  onMount(() => {
+    unsubActiveTabReveal = tabStore.subscribe((state) => {
+      const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
+      let vault: string | null = null;
+      const u = vaultStore.subscribe((s) => { vault = s.currentPath; });
+      u();
+      const relPath = resolveRevealRelPath(activeTab, vault);
+      if (relPath === lastRevealedRelPath) return;
+      lastRevealedRelPath = relPath;
+      selectedPath = relPath !== null && vault !== null
+        ? `${vault}/${relPath}`
+        : null;
+      if (relPath !== null) {
+        treeRevealStore.requestReveal(relPath);
+      }
+    });
+  });
+
   onDestroy(() => {
     unsubTab();
     unsubBacklinksTab?.();
+    unsubActiveTabReveal?.();
     document.removeEventListener("mousemove", handleMousemove);
     document.removeEventListener("mouseup", handleMouseup);
   });
