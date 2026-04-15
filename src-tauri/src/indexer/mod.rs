@@ -135,21 +135,15 @@ impl IndexCoordinator {
         let vaultcore_dir = vault_path.join(".vaultcore");
         let index_dir = vaultcore_dir.join("index").join("tantivy");
 
-        // Always wipe the on-disk Tantivy index before opening (#46).
-        //
-        // index_vault only upserts files it finds on disk — it never removes
-        // orphans. Without a wipe, entries for files that were deleted between
-        // sessions (or that belonged to a prior copy of the vault) survive
-        // forever and surface as ghost search hits. The in-memory FileIndex is
-        // already recreated per coordinator, so re-indexing every file on open
-        // is the baseline cost regardless; wiping the directory just prevents
-        // stale entries from co-existing with the fresh ones.
-        //
-        // Wiping must happen BEFORE the index is opened and the writer task is
-        // spawned — removing a live directory races with writer.commit() and
-        // fails with LockFailure / NotFound.
-        if index_dir.exists() {
-            std::fs::remove_dir_all(&index_dir).map_err(VaultError::Io)?;
+        // Schema-version check must happen BEFORE the index is opened and
+        // before the background writer task is spawned.  If we wipe the
+        // directory after the task is live, index.writer() races with
+        // remove_dir_all() and fails with LockFailure / NotFound.
+        if !tantivy_index::check_version(&vaultcore_dir) {
+            if index_dir.exists() {
+                std::fs::remove_dir_all(&index_dir).map_err(VaultError::Io)?;
+                log::info!("Schema mismatch — index directory wiped for rebuild");
+            }
         }
 
         let index = tantivy_index::open_or_create_index(&index_dir, &schema)?;
