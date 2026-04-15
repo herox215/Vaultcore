@@ -2,6 +2,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
   import { toastStore } from "../../store/toastStore";
+  import { searchStore } from "../../store/searchStore";
   import { readFile, writeFile } from "../../ipc/commands";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import FileListRow from "./FileListRow.svelte";
@@ -34,6 +35,7 @@
     try {
       const hash = await writeFile(activePath, text);
       editorStore.setLastSavedHash(hash);
+      searchStore.setIndexStale(true);
     } catch (err) {
       const ve = isVaultError(err)
         ? err
