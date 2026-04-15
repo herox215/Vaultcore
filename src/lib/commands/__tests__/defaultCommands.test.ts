@@ -34,6 +34,8 @@ function makeCtx(overrides: Partial<DefaultCommandContext> = {}): DefaultCommand
     openCommandPalette: noop,
     toggleBookmark: noop,
     openTodayNote: noop,
+    exportActiveNoteHtml: noop,
+    exportActiveNotePdf: noop,
     ...overrides,
   };
 }
@@ -67,5 +69,37 @@ describe("defaultCommands — vault:open-today (#59)", () => {
     // Plain Cmd+D still resolves to the bookmark command — no collision.
     const plainEv = new KeyboardEvent("keydown", { key: "d", metaKey: true });
     expect(commandRegistry.findByHotkey(plainEv)?.id).toBe(CMD_IDS.TOGGLE_BOOKMARK);
+  });
+});
+
+describe("defaultCommands — vault:export-html / vault:export-pdf (#61)", () => {
+  beforeEach(() => {
+    setupLocalStorage();
+    commandRegistry._reset();
+  });
+
+  it("registers export-html without a default hotkey", () => {
+    const spec = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.EXPORT_HTML);
+    expect(spec).toBeTruthy();
+    expect(spec!.hotkey).toBeUndefined();
+    expect(spec!.name.length).toBeGreaterThan(0);
+  });
+
+  it("registers export-pdf without a default hotkey", () => {
+    const spec = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.EXPORT_PDF);
+    expect(spec).toBeTruthy();
+    expect(spec!.hotkey).toBeUndefined();
+  });
+
+  it("execute wires the exportActiveNoteHtml / exportActiveNotePdf callbacks", () => {
+    const exportHtml = vi.fn();
+    const exportPdf = vi.fn();
+    registerDefaultCommands(
+      makeCtx({ exportActiveNoteHtml: exportHtml, exportActiveNotePdf: exportPdf }),
+    );
+    commandRegistry.execute(CMD_IDS.EXPORT_HTML);
+    commandRegistry.execute(CMD_IDS.EXPORT_PDF);
+    expect(exportHtml).toHaveBeenCalledOnce();
+    expect(exportPdf).toHaveBeenCalledOnce();
   });
 });

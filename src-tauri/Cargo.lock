@@ -4899,6 +4899,7 @@ dependencies = [
 name = "vaultcore"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "env_logger",
  "log",
  "notify-debouncer-full",
