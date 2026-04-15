@@ -10,7 +10,8 @@
     type MonoFont,
   } from "../../store/settingsStore";
   import { vaultStore } from "../../store/vaultStore";
-  import { SHORTCUTS, formatShortcut } from "../../lib/shortcuts";
+  import { formatShortcut } from "../../lib/shortcuts";
+  import { commandRegistry, type Command } from "../../lib/commands/registry";
 
   let { open, onClose, onSwitchVault }: {
     open: boolean;
@@ -23,12 +24,16 @@
   let currentMono = $state<MonoFont>("system");
   let currentSize = $state<number>(14);
   let currentVaultPath = $state<string | null>(null);
+  let shortcuts = $state<Command[]>([]);
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
   const unsubSettings = settingsStore.subscribe((s) => {
     currentBody = s.fontBody; currentMono = s.fontMono; currentSize = s.fontSize;
   });
   const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
+  const unsubCommands = commandRegistry.subscribe((list) => {
+    shortcuts = list.filter((c) => c.hotkey);
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && open) {
@@ -52,7 +57,7 @@
     settingsStore.setFontSize(Number((e.target as HTMLInputElement).value));
   }
 
-  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); });
+  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -154,10 +159,10 @@
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
         <table class="vc-shortcuts-table" role="table">
           <tbody>
-            {#each SHORTCUTS as s (s.id)}
+            {#each shortcuts as s (s.id)}
               <tr role="row">
-                <td role="cell" class="vc-shortcut-action">{s.label}</td>
-                <td role="cell" class="vc-shortcut-keys"><kbd>{formatShortcut(s.keys)}</kbd></td>
+                <td role="cell" class="vc-shortcut-action">{s.name}</td>
+                <td role="cell" class="vc-shortcut-keys"><kbd>{s.hotkey ? formatShortcut(s.hotkey) : ""}</kbd></td>
               </tr>
             {/each}
           </tbody>
