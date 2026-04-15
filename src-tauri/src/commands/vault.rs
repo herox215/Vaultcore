@@ -233,6 +233,30 @@ pub async fn get_recent_vaults(app: AppHandle) -> Result<Vec<RecentVault>, Vault
     read_recent_vaults_at(&file)
 }
 
+/// Delete the on-disk Tantivy index and version stamp for `vault_path` so
+/// that the next `open_vault` call rebuilds them from scratch.
+///
+/// Called by the frontend after an `IndexCorrupt` error — the UI shows a
+/// confirmation dialog, then calls this command, then retries `open_vault`.
+/// The coordinator for this vault is never kept across the error (the failed
+/// `IndexCoordinator::new` never stored anything in `state.index_coordinator`),
+/// so this is safe to call without touching the coordinator mutex.
+#[tauri::command]
+pub async fn repair_vault_index(vault_path: String) -> Result<(), VaultError> {
+    let root = PathBuf::from(&vault_path);
+    let root = root.canonicalize().map_err(VaultError::Io)?;
+    let vaultcore = root.join(".vaultcore");
+    let index_dir = vaultcore.join("index").join("tantivy");
+    let version_file = vaultcore.join("index_version.json");
+    if index_dir.exists() {
+        std::fs::remove_dir_all(&index_dir).map_err(VaultError::Io)?;
+    }
+    if version_file.exists() {
+        let _ = std::fs::remove_file(&version_file);
+    }
+    Ok(())
+}
+
 // --- recent-vaults.json persistence -----------------------------------------
 
 fn recent_vaults_path(app: &AppHandle) -> Result<PathBuf, VaultError> {

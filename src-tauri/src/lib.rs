@@ -91,6 +91,7 @@ pub fn run() {
             commands::vault::open_vault,
             commands::vault::get_recent_vaults,
             commands::vault::get_vault_stats,
+            commands::vault::repair_vault_index,
             commands::files::read_file,
             commands::files::write_file,
             commands::files::create_file,
