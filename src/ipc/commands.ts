@@ -55,6 +55,14 @@ export async function getRecentVaults(): Promise<RecentVault[]> {
   }
 }
 
+export async function repairVaultIndex(vaultPath: string): Promise<void> {
+  try {
+    await invoke<void>("repair_vault_index", { vaultPath });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 export async function getVaultStats(path: string): Promise<VaultStats> {
   try {
     return await invoke<VaultStats>("get_vault_stats", { path });
