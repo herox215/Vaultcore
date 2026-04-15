@@ -18,6 +18,7 @@ pub mod memory;
 pub mod parser;
 pub mod link_graph;
 pub mod tag_index;
+pub mod frontmatter;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use link_graph::{LinkGraph, extract_links};
 use tag_index::TagIndex;
+use frontmatter::parse_frontmatter;
 
 use tantivy::schema::Schema;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
@@ -278,6 +280,9 @@ impl IndexCoordinator {
             if !already_current {
                 let body = parser::strip_markdown(&content);
                 let title = tantivy_index::extract_title(&content, &stem);
+                // Issue #60: parse frontmatter once per add so aliases land
+                // in FileMeta at the same time the file enters the index.
+                let aliases = parse_frontmatter(&content).aliases;
 
                 // Update in-memory index before sending to queue.
                 {
@@ -290,6 +295,7 @@ impl IndexCoordinator {
                             relative_path: relative_path.clone(),
                             hash: hash.clone(),
                             title: title.clone(),
+                            aliases,
                         },
                     );
                 }
@@ -465,12 +471,25 @@ async fn run_queue_consumer(
                 if let Ok(mut lg) = link_graph.lock() {
                     lg.update_file(&rel_path, links, &all_paths);
                 }
+                // Issue #60: keep FileMeta.aliases in sync on every file edit.
+                // UpdateLinks fires after every save/rename/external modify, so
+                // piggy-backing alias refresh here avoids introducing another
+                // command channel for a single metadata slot.
+                let aliases = parse_frontmatter(&content).aliases;
+                if let Ok(mut fi) = file_index.lock() {
+                    fi.set_aliases_for_rel(&rel_path, aliases);
+                }
             }
             IndexCmd::RemoveLinks { rel_path } => {
                 // Remove link-graph entries for a deleted file (LINK-08).
                 if let Ok(mut lg) = link_graph.lock() {
                     lg.remove_file(&rel_path);
                 }
+                // Issue #60: aliases hang off FileMeta; when DeleteFile drops the
+                // FileIndex entry the aliases die with it, so nothing extra to
+                // clear here. RemoveLinks fires on rename-old too — the rename's
+                // new-side UpdateLinks command repopulates aliases under the new
+                // rel_path.
             }
             IndexCmd::UpdateTags { rel_path, content } => {
                 // Incrementally update tag-index entries for a file (TAG-01/02).
