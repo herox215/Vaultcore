@@ -285,6 +285,11 @@ function stopCooling(handle: GraphHandle): void {
  *  and data updates so the user sees movement in response. */
 function reheat(handle: GraphHandle): void {
   if (!handle.layoutSupervisor || handle.frozen) return;
+  // FA2 supervisor with <2 nodes has no edges to apply forces over and can
+  // leave itself in a non-running-but-not-cleanly-stopped state that throws
+  // on the next .start() call. Skip the continuous sim for tiny graphs —
+  // they don't need layout anyway.
+  if (handle.graph.order < 2) return;
   if (!handle.layoutSupervisor.isRunning()) {
     try {
       handle.layoutSupervisor.start();
@@ -297,12 +302,23 @@ function reheat(handle: GraphHandle): void {
 
 /** Run ForceAtlas2 and assign final positions in place. */
 function runLayout(graph: Graph, iterations = 50): void {
-  if (graph.order === 0) return;
+  // Skip layout for degenerate graphs — FA2 with a single node (empty note
+  // with no links) can produce NaN settings and leave the supervisor in an
+  // inconsistent state that breaks every subsequent updateGraph (#43).
+  if (graph.order < 2) return;
   const settings = forceAtlas2.inferSettings(graph);
   // Speed up convergence on small graphs.
   settings.slowDown = 2;
   settings.gravity = 1;
-  forceAtlas2.assign(graph, { iterations, settings });
+  try {
+    forceAtlas2.assign(graph, { iterations, settings });
+  } catch (err) {
+    // Any layout error — NaN settings, worker issue, etc. Leave the
+    // random-seed positions from populateGraph in place rather than
+    // propagating a crash that tears down the panel.
+    // eslint-disable-next-line no-console
+    console.warn("[graphRender] layout assign failed:", err);
+  }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -599,11 +615,25 @@ export function updateGraph(
 
   // Pause the live supervisor so it doesn't race with `graph.clear()` /
   // re-seed. We'll restart it at the end if it was running and the view is
-  // not frozen.
-  const wasRunning =
-    handle.layoutSupervisor !== null &&
-    handle.layoutSupervisor.isRunning();
-  if (wasRunning && handle.layoutSupervisor) handle.layoutSupervisor.stop();
+  // not frozen. Guard both the status check and stop() — a supervisor that
+  // hit a bad state on a previous single-node update can throw on either
+  // call, which otherwise blows away the rest of updateGraph and leaves the
+  // panel stuck.
+  let wasRunning = false;
+  try {
+    wasRunning =
+      handle.layoutSupervisor !== null &&
+      handle.layoutSupervisor.isRunning();
+  } catch {
+    wasRunning = false;
+  }
+  if (wasRunning && handle.layoutSupervisor) {
+    try {
+      handle.layoutSupervisor.stop();
+    } catch {
+      /* ignore — reheat will be skipped below */
+    }
+  }
 
   if (!relayout) {
     // Preserve positions for nodes that already exist.
