@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronRight, Folder, FolderOpen, FileText, File, MoreHorizontal } from "lucide-svelte";
+  import { ChevronRight, Folder, FolderOpen, FileText, File, MoreHorizontal, Star } from "lucide-svelte";
   import { listDirectory, createFile, createFolder, deleteFile, moveFile, updateLinksAfterRename, getBacklinks } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import type { RenameResult } from "../../types/links";
@@ -9,6 +9,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
+  import { bookmarksStore } from "../../store/bookmarksStore";
   import { sortEntries, type SortBy } from "../../lib/treeState";
   import { onMount, onDestroy } from "svelte";
 
@@ -83,6 +84,27 @@
   } | null>(null);
 
   const isActive = $derived(selectedPath === entry.path);
+
+  // Bookmark state for this entry (#12). Files only — folders aren't
+  // bookmarkable in the MVP.
+  const entryRelPath = $derived(relPathOf(entry.path));
+  const isBookmarked = $derived(
+    !entry.is_dir && entryRelPath !== null && $bookmarksStore.paths.includes(entryRelPath)
+  );
+
+  function relPathOf(absPath: string): string | null {
+    const vault = getVaultRoot();
+    if (!vault) return null;
+    return toRelPath(absPath, vault);
+  }
+
+  async function toggleBookmark() {
+    closeContextMenu();
+    const vault = getVaultRoot();
+    if (!vault || entry.is_dir) return;
+    const rel = toRelPath(entry.path, vault);
+    await bookmarksStore.toggle(rel, vault);
+  }
 
   // DOM ref for scroll-into-view on reveal requests.
   let rowEl = $state<HTMLDivElement | undefined>();
@@ -212,10 +234,14 @@
 
   async function handleRenameConfirm(newPath: string, linkCount: number) {
     renaming = false;
+    const vault = getVaultRoot();
+    const oldRelPath = vault ? toRelPath(entry.path, vault) : entry.path;
+    const newRelPath = vault ? toRelPath(newPath, vault) : newPath;
+    // Rename tracking for bookmarks (#12): update any matching bookmark entry.
+    if (vault) {
+      void bookmarksStore.renamePath(oldRelPath, newRelPath, vault);
+    }
     if (linkCount > 0) {
-      const vault = getVaultRoot();
-      const oldRelPath = vault ? toRelPath(entry.path, vault) : entry.path;
-      const newRelPath = vault ? toRelPath(newPath, vault) : newPath;
       // Get unique source file count for the dialog copy
       let fileCount = 1;
       try {
@@ -378,6 +404,10 @@
     // No backlinks — proceed directly
     try {
       await moveFile(sourcePath, entry.path);
+      // Update bookmark in-place if the moved file was bookmarked (#12).
+      if (vault) {
+        void bookmarksStore.renamePath(sourceRelPath, newRelPath, vault);
+      }
       await loadChildren();
       onRefreshParent();
     } catch (err) {
@@ -392,6 +422,11 @@
     pendingMove = null;
     try {
       await moveFile(sourcePath, targetDirPath);
+      // Update bookmark in-place if the moved file was bookmarked (#12).
+      const vaultForBookmarks = getVaultRoot();
+      if (vaultForBookmarks) {
+        void bookmarksStore.renamePath(sourceRelPath, newRelPath, vaultForBookmarks);
+      }
       await loadChildren();
       onRefreshParent();
       const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
@@ -498,6 +533,11 @@
           <em class="vc-tree-symlink">(link)</em>
         {/if}
       </span>
+      {#if isBookmarked}
+        <span class="vc-tree-bookmark" aria-label="Bookmarked" title="Bookmark">
+          <Star size={12} strokeWidth={1.5} />
+        </span>
+      {/if}
     {/if}
 
     <!-- More options button (hover-visible) -->
@@ -523,6 +563,11 @@
     ></div>
     <div class="vc-context-menu" bind:this={contextMenuRef}>
       <button class="vc-context-item" onclick={startRename}>Rename</button>
+      {#if !entry.is_dir}
+        <button class="vc-context-item" onclick={() => void toggleBookmark()}>
+          {isBookmarked ? "Remove bookmark" : "Bookmark"}
+        </button>
+      {/if}
       <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
       {#if entry.is_dir}
         <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
@@ -714,6 +759,14 @@
     font-size: 12px;
     color: var(--color-text-muted);
     margin-left: 4px;
+  }
+
+  .vc-tree-bookmark {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    color: var(--color-accent);
+    flex-shrink: 0;
   }
 
   .vc-tree-more {

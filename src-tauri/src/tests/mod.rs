@@ -11,3 +11,4 @@ mod local_graph;
 mod global_graph;
 pub mod tag_index;
 mod hash_verify;
+mod bookmarks;

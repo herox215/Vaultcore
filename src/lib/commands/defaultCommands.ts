@@ -14,6 +14,7 @@ export interface DefaultCommandContext {
   createNewNote: () => void;
   openGraph: () => void;
   openCommandPalette: () => void;
+  toggleBookmark: () => void;
 }
 
 /** Id constants — consumed by tests and anyone dispatching by id. */
@@ -29,6 +30,7 @@ export const CMD_IDS = {
   CLOSE_TAB: "tabs:close",
   OPEN_GRAPH: "vault:open-graph",
   COMMAND_PALETTE: "app:command-palette",
+  TOGGLE_BOOKMARK: "vault:toggle-bookmark",
 } as const;
 
 export interface DefaultCommandSpec {
@@ -50,6 +52,7 @@ export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
   { id: CMD_IDS.CLOSE_TAB, name: "Tab schließen", hotkey: { meta: true, key: "w" } },
   { id: CMD_IDS.OPEN_GRAPH, name: "Graph-Ansicht öffnen", hotkey: { meta: true, shift: true, key: "g" } },
   { id: CMD_IDS.COMMAND_PALETTE, name: "Befehlspalette", hotkey: { meta: true, key: "p" } },
+  { id: CMD_IDS.TOGGLE_BOOKMARK, name: "Lesezeichen umschalten", hotkey: { meta: true, key: "d" } },
 ] as const;
 
 /**
@@ -70,6 +73,7 @@ export function registerDefaultCommands(ctx: DefaultCommandContext): void {
     [CMD_IDS.CLOSE_TAB]: ctx.closeActiveTab,
     [CMD_IDS.OPEN_GRAPH]: ctx.openGraph,
     [CMD_IDS.COMMAND_PALETTE]: ctx.openCommandPalette,
+    [CMD_IDS.TOGGLE_BOOKMARK]: ctx.toggleBookmark,
   };
 
   for (const spec of DEFAULT_COMMAND_SPECS) {

@@ -34,6 +34,8 @@
   import ProgressBar from "../Progress/ProgressBar.svelte";
   import SearchPanel from "../Search/SearchPanel.svelte";
   import TagsPanel from "../Tags/TagsPanel.svelte";
+  import BookmarksPanel from "../Bookmarks/BookmarksPanel.svelte";
+  import { bookmarksStore } from "../../store/bookmarksStore";
 
   interface Props {
     selectedPath: string | null;
@@ -177,6 +179,9 @@
         treeState = await loadTreeState(state.currentPath);
         void loadRoot();
         void tagsStore.reload();
+        void bookmarksStore.load(state.currentPath);
+      } else {
+        bookmarksStore.reset();
       }
     }
   });
@@ -358,6 +363,9 @@
       </div>
     {/if}
   </header>
+
+  <!-- Bookmarks panel (#12) — collapsible, sits above the tree -->
+  <BookmarksPanel />
 
   <!-- Tree area -->
   <div class="vc-sidebar-tree" role="tree" aria-label="Vault file tree">
