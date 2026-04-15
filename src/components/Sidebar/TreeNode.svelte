@@ -48,8 +48,11 @@
   let renaming = $state(false);
   let isNewEntry = $state(false);
 
-  // Context menu state
+  // Context menu state. When opened via right-click we position at the mouse
+  // coordinates; when opened via the three-dots button we leave `menuPos` null
+  // and fall back to the row-anchored CSS default.
   let showContextMenu = $state(false);
+  let menuPos = $state<{ x: number; y: number } | null>(null);
   let contextMenuRef: HTMLDivElement | null = null;
 
   // Delete confirmation state
@@ -206,11 +209,22 @@
   // Context menu
   function openContextMenu(e: MouseEvent) {
     e.stopPropagation();
+    menuPos = null;
+    showContextMenu = true;
+  }
+
+  // Issue #47: right-click handler on the row. Suppresses the webview default
+  // menu and anchors our menu at the cursor position.
+  function handleRowContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    menuPos = { x: e.clientX, y: e.clientY };
     showContextMenu = true;
   }
 
   function closeContextMenu() {
     showContextMenu = false;
+    menuPos = null;
   }
 
   function startRename() {
@@ -483,6 +497,7 @@
     style="padding-left: calc({depth} * 16px + 8px)"
     bind:this={rowEl}
     onclick={handleClick}
+    oncontextmenu={handleRowContextMenu}
     role="button"
     tabindex="-1"
     title={entry.path}
@@ -561,7 +576,12 @@
       onclick={closeContextMenu}
       role="presentation"
     ></div>
-    <div class="vc-context-menu" bind:this={contextMenuRef}>
+    <div
+      class="vc-context-menu"
+      class:vc-context-menu--pointer={menuPos !== null}
+      style={menuPos ? `top: ${menuPos.y}px; left: ${menuPos.x}px` : undefined}
+      bind:this={contextMenuRef}
+    >
       <button class="vc-context-item" onclick={startRename}>Rename</button>
       {#if !entry.is_dir}
         <button class="vc-context-item" onclick={() => void toggleBookmark()}>
@@ -824,6 +844,11 @@
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
     padding: 4px 0;
+  }
+
+  /* Right-click positioning uses viewport-relative clientX/clientY. */
+  .vc-context-menu--pointer {
+    position: fixed;
   }
 
   .vc-context-item {
