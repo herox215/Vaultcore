@@ -23,4 +23,9 @@ export interface FileMatch {
   score: number;
   /** Character positions in `path` that matched the query (sorted, deduplicated). */
   matchIndices: number[];
+  /** Frontmatter alias that scored this match (issue #60). Present only when
+   *  the nucleo hit came from the alias haystack — the popup should render
+   *  `matchedAlias → filename` to explain why the row surfaced. Absent (or
+   *  `undefined`) for regular filename hits. */
+  matchedAlias?: string;
 }
