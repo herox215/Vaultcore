@@ -111,6 +111,22 @@ pub struct IndexCoordinator {
     tag_index: Arc<Mutex<TagIndex>>,
 }
 
+impl Drop for IndexCoordinator {
+    /// Shut the background writer task down cleanly when the coordinator is
+    /// dropped (e.g. on vault switch). Without this, the stale task would
+    /// keep its Tantivy `IndexWriter` — and therefore the directory write
+    /// lock on the previous vault's `.vaultcore/index/tantivy` — alive until
+    /// the channel closed naturally, racing the new coordinator that is
+    /// about to open a writer on the new vault.
+    ///
+    /// Best-effort: `try_send` on a closed or full channel is ignored. The
+    /// task also terminates on channel close when the sender drops, so even
+    /// if the Shutdown command is lost the writer still releases promptly.
+    fn drop(&mut self) {
+        let _ = self.tx.try_send(IndexCmd::Shutdown);
+    }
+}
+
 impl IndexCoordinator {
     /// Create a new coordinator and spawn the background write-queue consumer.
     pub fn new(vault_path: &Path) -> Result<Self, VaultError> {
