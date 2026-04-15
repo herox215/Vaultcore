@@ -6,9 +6,13 @@
     selected: boolean;
     onclick: () => void;
     onhover: () => void;
+    /** Issue #60: matched frontmatter alias (when the row surfaced because of
+     *  an `aliases:` hit rather than a filename hit). Rendered as
+     *  `alias → filename` in front of the filename. */
+    matchedAlias?: string;
   }
 
-  let { filename, relativePath, matchIndices, selected, onclick, onhover }: Props = $props();
+  let { filename, relativePath, matchIndices, selected, onclick, onhover, matchedAlias }: Props = $props();
 
   // Build character array for the filename with matched-char highlighting
   // matchIndices are indices into `relativePath` (the full path returned by nucleo),
@@ -35,6 +39,13 @@
 >
   <!-- Filename line with per-char match highlighting -->
   <span class="vc-qs-row-filename">
+    {#if matchedAlias}
+      <!-- Issue #60: alias hit — render `alias → filename` so users see why
+           a note with a non-matching filename surfaced. The alias is shown
+           with accent weight because it's the string the query actually hit. -->
+      <span class="vc-qs-row-alias">{matchedAlias}</span>
+      <span class="vc-qs-row-alias-arrow">&nbsp;&rarr;&nbsp;</span>
+    {/if}
     {#each filenameChars as { char, highlighted }, i (i)}
       {#if highlighted}
         <span style="font-weight: 700; color: var(--color-accent)">{char}</span>
@@ -76,5 +87,14 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .vc-qs-row-alias {
+    font-weight: 700;
+    color: var(--color-accent);
+  }
+
+  .vc-qs-row-alias-arrow {
+    color: var(--color-text-muted);
   }
 </style>
