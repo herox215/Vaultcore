@@ -117,6 +117,8 @@ pub fn run() {
             commands::links::get_link_graph,
             commands::tags::list_tags,
             commands::tags::get_tag_occurrences,
+            commands::bookmarks::load_bookmarks,
+            commands::bookmarks::save_bookmarks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
