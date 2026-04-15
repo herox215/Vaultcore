@@ -24,6 +24,10 @@
     onPathChanged: (oldPath: string, newPath: string) => void;
     onExpandToggle?: (relPath: string, isExpanded: boolean) => void;
     initiallyExpanded?: boolean;
+    /** Vault-relative folder paths persisted as expanded — propagated through
+     *  the recursive tree so deeply nested descendants can restore their
+     *  open/closed state on mount instead of always starting collapsed. */
+    expandedPaths?: readonly string[];
     sortBy?: SortBy;
   }
 
@@ -37,6 +41,7 @@
     onPathChanged,
     onExpandToggle,
     initiallyExpanded = false,
+    expandedPaths = [],
     sortBy = "name",
   }: Props = $props();
 
@@ -678,7 +683,13 @@
           onRefreshParent={refreshChildren}
           {onPathChanged}
           {onExpandToggle}
-          initiallyExpanded={false}
+          initiallyExpanded={(() => {
+            const vault = getVaultRoot();
+            if (!vault) return false;
+            const rel = toRelPath(child.path, vault);
+            return child.is_dir && rel !== null && expandedPaths.includes(rel);
+          })()}
+          {expandedPaths}
           {sortBy}
         />
       {/each}
