@@ -181,14 +181,18 @@
     color: var(--color-text-muted);
   }
 
-  .vc-breadcrumbs-mode-toggle:hover {
+  .vc-breadcrumbs-mode-toggle:hover:not(.vc-breadcrumbs-mode-toggle--read) {
     background: var(--color-accent-bg);
     color: var(--color-accent);
   }
 
   .vc-breadcrumbs-mode-toggle--read {
-    background: var(--color-accent-bg);
-    color: var(--color-accent);
+    background: var(--color-accent);
+    color: var(--color-surface);
+  }
+
+  .vc-breadcrumbs-mode-toggle--read:hover {
+    filter: brightness(1.1);
   }
 
   .vc-breadcrumbs-mode-toggle:focus-visible {
