@@ -5,6 +5,8 @@
   import TabBar from "../Tabs/TabBar.svelte";
   import Breadcrumbs from "./Breadcrumbs.svelte";
   import GraphView from "../Graph/GraphView.svelte";
+  import ImagePreview from "./ImagePreview.svelte";
+  import UnsupportedPreview from "./UnsupportedPreview.svelte";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
@@ -13,7 +15,7 @@
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
-  import { buildExtensions } from "./extensions";
+  import { buildExtensions, buildReadOnlyExtensions } from "./extensions";
   import CountStatusBar from "./CountStatusBar.svelte";
   import { countsStore } from "../../store/countsStore";
   import { computeCounts } from "../../lib/wordCount";
@@ -92,6 +94,15 @@
     if (t.type === "graph") return null;
     return t.filePath;
   });
+
+  // #49: tabs whose viewer is not "markdown"/"text" don't host a CM6 view.
+  // Used to skip the editor-mount loop and to gate the count status bar.
+  function tabHasEditor(t: Tab | undefined): boolean {
+    if (!t) return false;
+    if (t.type === "graph") return false;
+    if (t.viewer === "image" || t.viewer === "unsupported") return false;
+    return true;
+  }
 
   // Subscribe to tabStore for our pane's tabs and active state
   const unsubTab = tabStore.subscribe((state) => {
@@ -262,10 +273,11 @@
     // Create views for new tabs (async — the container div is already in the DOM
     // via the Svelte template, so we just need to mount the EditorView into it).
     // Graph tabs are rendered via <GraphView /> and must NOT get a CM6 view.
+    // Image / unsupported preview tabs render their own components and skip CM6.
     for (const tabId of paneTabIds) {
       if (!viewMap.has(tabId)) {
         const tab = allTabs.find((t) => t.id === tabId);
-        if (tab && tab.type !== "graph") {
+        if (tab && tabHasEditor(tab)) {
           mountEditorView(tab);
         }
       }
@@ -310,6 +322,11 @@
           if (activePane === paneId) {
             activeViewStore.setActive(activeView);
           }
+        } else if (activePane === paneId) {
+          // #49: image / unsupported / graph tabs have no CM6 view — clear
+          // the active view so sidebar panels that depend on the CM6 source
+          // don't keep pointing at the previously-active editor.
+          activeViewStore.setActive(null);
         }
       } else if (activePane === paneId) {
         activeViewStore.setActive(null);
@@ -326,6 +343,13 @@
   $effect(() => {
     const activeId = paneActiveTabId;
     if (!activeId) {
+      countsStore.clear(paneId);
+      return;
+    }
+    const activeTab = allTabs.find((t) => t.id === activeId);
+    // #49: image / unsupported preview tabs have no CM6 view and no
+    // meaningful character count — clear the status bar slot.
+    if (!tabHasEditor(activeTab)) {
       countsStore.clear(paneId);
       return;
     }
@@ -350,7 +374,11 @@
       return;
     }
     const view = viewMap.get(id);
-    if (view) activeViewStore.setActive(view);
+    // #49: viewMap has no entry for image / unsupported preview tabs, so
+    // null out the active view — sidebar panels driven by it (backlinks,
+    // outgoing links, properties) will empty their contents rather than
+    // keep reflecting the previously-active markdown tab.
+    activeViewStore.setActive(view ?? null);
   });
 
   /**
@@ -457,7 +485,13 @@
       tabStore.setDirty(tab.id, true);
     };
 
-    const extensions = buildExtensions(onSave, paneId);
+    // #49: non-markdown text previews use the read-only extension list so
+    // editing is disabled, autosave is stripped (no overwrite of .json/.csv),
+    // and wiki-link / embed plugins are skipped.
+    const isReadOnly = tab.viewer === "text";
+    const extensions = isReadOnly
+      ? buildReadOnlyExtensions()
+      : buildExtensions(onSave, paneId);
     const { EditorView: EV } = await import("@codemirror/view");
     const dirtyListener = EV.updateListener.of((update) => {
       if (update.docChanged) {
@@ -472,7 +506,7 @@
     const view = new EditorView({
       state: EditorState.create({
         doc: content,
-        extensions: [...extensions, dirtyListener],
+        extensions: isReadOnly ? extensions : [...extensions, dirtyListener],
       }),
       parent: container,
     });
@@ -484,8 +518,12 @@
     // mount is still in-flight (issue #41).
     tabStore.setLastSavedContent(tab.id, content);
 
-    // Attach wiki-link-click listener to the CM6 DOM
-    view.dom.addEventListener("wiki-link-click", handleWikiLinkClick);
+    // Attach wiki-link-click listener only on editable markdown tabs —
+    // read-only previews don't have the wiki-link plugin loaded so no
+    // wiki-link-click events would ever fire from them anyway.
+    if (!isReadOnly) {
+      view.dom.addEventListener("wiki-link-click", handleWikiLinkClick);
+    }
 
     // Sync editorStore if this is the active tab
     if (tab.id === paneActiveTabId) {
@@ -662,6 +700,22 @@
         >
           <GraphView />
         </div>
+      {:else if tab.viewer === "image"}
+        <div
+          class="vc-editor-container"
+          data-tab-id={tab.id}
+          style:display={tab.id === paneActiveTabId ? "block" : "none"}
+        >
+          <ImagePreview abs={tab.filePath} />
+        </div>
+      {:else if tab.viewer === "unsupported"}
+        <div
+          class="vc-editor-container"
+          data-tab-id={tab.id}
+          style:display={tab.id === paneActiveTabId ? "block" : "none"}
+        >
+          <UnsupportedPreview abs={tab.filePath} />
+        </div>
       {:else}
         <div
           class="vc-editor-container"
@@ -672,7 +726,7 @@
     {/each}
   </div>
 
-  {#if paneTabs.length > 0 && paneTabs.find((t) => t.id === paneActiveTabId)?.type !== "graph"}
+  {#if paneTabs.length > 0 && tabHasEditor(paneTabs.find((t) => t.id === paneActiveTabId))}
     <CountStatusBar {paneId} />
   {/if}
 
