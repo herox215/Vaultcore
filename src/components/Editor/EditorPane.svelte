@@ -379,9 +379,6 @@
     // Guard against double-mount (async race)
     if (viewMap.has(tab.id)) return;
 
-    // Initialize lastSavedContent snapshot for three-way merge base
-    tabStore.setLastSavedContent(tab.id, content);
-
     const onSave = async (text: string): Promise<void> => {
       // ERR-03: skip auto-save when vault is unreachable
       if (!vaultReachable) return;
@@ -481,6 +478,11 @@
     });
 
     viewMap.set(tab.id, view);
+
+    // Initialize lastSavedContent snapshot AFTER viewMap.set so the store
+    // mutation can't re-trigger the mount-lifecycle $effect while this
+    // mount is still in-flight (issue #41).
+    tabStore.setLastSavedContent(tab.id, content);
 
     // Attach wiki-link-click listener to the CM6 DOM
     view.dom.addEventListener("wiki-link-click", handleWikiLinkClick);
