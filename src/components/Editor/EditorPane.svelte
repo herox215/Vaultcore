@@ -375,7 +375,7 @@
           editorStore.syncFromTab(
             activeTab.filePath,
             activeView.state.doc.toString(),
-            activeTab.lastSaved ? String(activeTab.lastSaved) : null
+            activeTab.lastSavedHash ?? null,
           );
           if (activePane === paneId) {
             activeViewStore.setActive(activeView);
@@ -484,8 +484,9 @@
           }
         }
 
-        // Snapshot the expected hash (what VaultCore last wrote / first read).
-        const expected = lastSavedHashSnapshot;
+        // Per-tab expected hash (#80). Reading the global editorStore snapshot
+        // here leaked another tab's hash in when the user switched tabs mid-edit.
+        const expected = allTabs.find((t) => t.id === tab.id)?.lastSavedHash ?? null;
 
         if (diskHash !== null && expected !== null && diskHash !== expected) {
           // MISMATCH: external edit detected — route through three-way merge engine.
@@ -503,6 +504,7 @@
           // Write the merged content to disk so hash converges.
           const newHash = await writeFile(tab.filePath, result.merged_content);
           editorStore.setLastSavedHash(newHash);
+          tabStore.setLastSavedHash(tab.id, newHash);
           tabStore.setLastSavedContent(tab.id, result.merged_content);
           tabStore.setDirty(tab.id, false);
           searchStore.setIndexStale(true);
@@ -522,6 +524,7 @@
         const hash = await writeFile(tab.filePath, text);
         tabStore.setDirty(tab.id, false);
         tabStore.setLastSavedContent(tab.id, text);
+        tabStore.setLastSavedHash(tab.id, hash);
         editorStore.setLastSavedHash(hash);
         searchStore.setIndexStale(true);
         void tagsStore.reload();
