@@ -14,6 +14,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { commandRegistry } from "../../lib/commands/registry";
   import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
+  import { initHotkeyOverrides } from "../../lib/commands/hotkeyOverrides";
   import { createFile, createFolder, listDirectory, readFile, writeFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
@@ -407,6 +408,7 @@
       openTodayNote: () => { void openTodayNote(); },
       toggleReadingMode: () => { toggleActiveReadingMode(); },
     });
+    initHotkeyOverrides();
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
     return () => {
