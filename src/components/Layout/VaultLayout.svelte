@@ -14,6 +14,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { commandRegistry } from "../../lib/commands/registry";
   import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
+  import { initHotkeyOverrides } from "../../lib/commands/hotkeyOverrides";
   import { createFile, createFolder, listDirectory, readFile, writeFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
@@ -340,6 +341,17 @@
     }
   }
 
+  /** Issue #63: toggle Reading vs Edit mode on the active markdown tab. */
+  function toggleActiveReadingMode() {
+    const active = tabStore.getActiveTab();
+    if (!active) return;
+    // Only markdown file tabs support reading mode — graph tabs and non-
+    // markdown viewers (image / unsupported / text-preview) stay as-is.
+    if (active.type === "graph") return;
+    if (active.viewer === "image" || active.viewer === "unsupported") return;
+    tabStore.toggleViewMode(active.id);
+  }
+
   /** Issue #12: toggle bookmark on the active tab's file path. */
   async function toggleActiveBookmark() {
     let captured: string | null = null;
@@ -394,7 +406,9 @@
       openCommandPalette: () => { commandPaletteOpen = true; },
       toggleBookmark: () => { void toggleActiveBookmark(); },
       openTodayNote: () => { void openTodayNote(); },
+      toggleReadingMode: () => { toggleActiveReadingMode(); },
     });
+    initHotkeyOverrides();
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
     return () => {

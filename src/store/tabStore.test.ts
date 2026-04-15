@@ -304,4 +304,41 @@ describe("tabStore", () => {
       expect(state.splitState.activePane).toBe("left");
     });
   });
+
+  describe("Issue #63: Reading Mode per-tab view mode", () => {
+    it("new tabs default viewMode to undefined (implicitly 'edit')", () => {
+      const id = tabStore.openTab("/vault/a.md");
+      const tab = get(tabStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBeUndefined();
+    });
+
+    it("setViewMode('read') flips the tab to Reading Mode", () => {
+      const id = tabStore.openTab("/vault/a.md");
+      tabStore.setViewMode(id, "read");
+      const tab = get(tabStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBe("read");
+    });
+
+    it("toggleViewMode flips between edit and read, treating undefined as edit", () => {
+      const id = tabStore.openTab("/vault/a.md");
+      tabStore.toggleViewMode(id);
+      expect(get(tabStore).tabs.find((t) => t.id === id)?.viewMode).toBe("read");
+      tabStore.toggleViewMode(id);
+      expect(get(tabStore).tabs.find((t) => t.id === id)?.viewMode).toBe("edit");
+    });
+
+    it("toggleViewMode is scoped to the given tab id", () => {
+      const a = tabStore.openTab("/vault/a.md");
+      const b = tabStore.openTab("/vault/b.md");
+      tabStore.toggleViewMode(a);
+      expect(get(tabStore).tabs.find((t) => t.id === a)?.viewMode).toBe("read");
+      expect(get(tabStore).tabs.find((t) => t.id === b)?.viewMode).toBeUndefined();
+    });
+
+    it("updateReadingScrollPos persists the reader's scroll position", () => {
+      const id = tabStore.openTab("/vault/a.md");
+      tabStore.updateReadingScrollPos(id, 420);
+      expect(get(tabStore).tabs.find((t) => t.id === id)?.readingScrollPos).toBe(420);
+    });
+  });
 });
