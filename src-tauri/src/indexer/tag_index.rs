@@ -96,31 +96,11 @@ pub fn extract_inline_tag_occurrences(content: &str) -> Vec<String> {
 /// - Frontmatter has no `tags` key
 /// - The YAML is malformed (T-05-01-01 mitigation: `from_str` returns Err → `[]`)
 ///
-/// Uses serde_yml 0.0.12 per RESEARCH Pitfall 1.
+/// Delegates to the shared frontmatter reader (`super::frontmatter`). Public
+/// contract is semantically identical to the pre-refactor implementation —
+/// existing tag tests still exercise this code path.
 pub fn extract_yaml_tags(content: &str) -> Vec<String> {
-    let stripped = content.trim_start();
-    if !stripped.starts_with("---") {
-        return Vec::new();
-    }
-    let after_first = &stripped[3..];
-    let Some(end_rel) = after_first.find("\n---") else {
-        return Vec::new();
-    };
-    let yaml_block = &after_first[..end_rel];
-    let Ok(value): Result<serde_yml::Value, _> = serde_yml::from_str(yaml_block) else {
-        return Vec::new();
-    };
-    let Some(tags_val) = value.get("tags") else {
-        return Vec::new();
-    };
-    match tags_val {
-        serde_yml::Value::Sequence(seq) => seq
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-            .collect(),
-        serde_yml::Value::String(s) => vec![s.to_lowercase()],
-        _ => Vec::new(),
-    }
+    super::frontmatter::extract_yaml_tags(content)
 }
 
 // ── TagIndex ───────────────────────────────────────────────────────────────────

@@ -17,6 +17,9 @@ pub struct FileMeta {
     pub hash: String,
     /// First `# ` heading text, or the filename stem as fallback.
     pub title: String,
+    /// YAML frontmatter `aliases:` values (lowercased, order preserved).
+    /// Issue #60 — empty when the file has no frontmatter or no aliases key.
+    pub aliases: Vec<String>,
 }
 
 /// In-memory index of vault files keyed by canonical absolute path.
@@ -62,6 +65,28 @@ impl FileIndex {
     pub fn all_entries(&self) -> impl Iterator<Item = (&PathBuf, &FileMeta)> {
         self.entries.iter()
     }
+
+    /// Update the aliases slot for the entry matching `rel_path`. No-op when
+    /// the rel_path is not in the index (aliases are populated as part of
+    /// `AddFile`; this is only used for in-place refreshes from `UpdateLinks`).
+    pub fn set_aliases_for_rel(&mut self, rel_path: &str, aliases: Vec<String>) {
+        for meta in self.entries.values_mut() {
+            if meta.relative_path == rel_path {
+                meta.aliases = aliases;
+                return;
+            }
+        }
+    }
+
+    /// Return the aliases stored for `rel_path`, or an empty vector.
+    pub fn aliases_for_rel(&self, rel_path: &str) -> Vec<String> {
+        for meta in self.entries.values() {
+            if meta.relative_path == rel_path {
+                return meta.aliases.clone();
+            }
+        }
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -73,6 +98,7 @@ mod tests {
             relative_path: rel.to_string(),
             hash: "abc123".to_string(),
             title: "Test".to_string(),
+            aliases: Vec::new(),
         }
     }
 
