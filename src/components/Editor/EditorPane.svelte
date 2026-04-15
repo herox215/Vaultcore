@@ -15,6 +15,7 @@
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
+  import { searchStore } from "../../store/searchStore";
   import { buildExtensions, buildReadOnlyExtensions } from "./extensions";
   import CountStatusBar from "./CountStatusBar.svelte";
   import { countsStore } from "../../store/countsStore";
@@ -448,6 +449,7 @@
           editorStore.setLastSavedHash(newHash);
           tabStore.setLastSavedContent(tab.id, result.merged_content);
           tabStore.setDirty(tab.id, false);
+          searchStore.setIndexStale(true);
           void tagsStore.reload();
 
           // Toasts — reuse the exact Phase 2 German strings.
@@ -465,6 +467,7 @@
         tabStore.setDirty(tab.id, false);
         tabStore.setLastSavedContent(tab.id, text);
         editorStore.setLastSavedHash(hash);
+        searchStore.setIndexStale(true);
         void tagsStore.reload();
       } catch (err: unknown) {
         // ERR-04: disk-full error — preserve buffer, debounce toast
