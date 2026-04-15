@@ -3,7 +3,7 @@
   import { ChevronDown, ChevronRight } from "lucide-svelte";
   import { activeViewStore } from "../../store/activeViewStore";
   import { vaultStore } from "../../store/vaultStore";
-  import { tabStore, type Tab } from "../../store/tabStore";
+  import { tabStore } from "../../store/tabStore";
   import { getLocalGraph } from "../../ipc/commands";
   import { listenFileChange } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -49,30 +49,24 @@
   // not resolved yet" and wait for a ResizeObserver tick.
   const MIN_MOUNT_DIMENSION = 8;
 
-  // Reactive active-tab / doc-version plumbing mirrors OutgoingLinksPanel.
-  let tabs = $state<Tab[]>([]);
-  let activeTabId = $state<string | null>(null);
-  let vaultPath = $state<string | null>(null);
-
-  const unsubTabs = tabStore.subscribe((s) => {
-    tabs = s.tabs;
-    activeTabId = s.activeTabId;
-  });
-  const unsubVault = vaultStore.subscribe((s) => {
-    vaultPath = s.currentPath;
-  });
-
-  // Compute the vault-relative path of the active tab. Returns null when
-  // no tab is active or the filePath doesn't sit under the vault root.
+  // Reactive active-tab / doc-version plumbing — driven by Svelte-store
+  // auto-subscription so the derived chain actually re-runs on tab switch.
+  // A classic `tabStore.subscribe(cb)` that writes into $state was silently
+  // dropping updates after the initial mount, leaving the graph stuck on
+  // the first note. OutgoingLinksPanel uses the same direct-$derived
+  // pattern and behaves correctly.
   const activeRelPath = $derived.by<string | null>(() => {
-    if (!activeTabId || !vaultPath) return null;
-    const tab = tabs.find((t) => t.id === activeTabId);
+    const s = $tabStore;
+    const v = $vaultStore;
+    if (!s.activeTabId || !v.currentPath) return null;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
     if (!tab) return null;
-    if (tab.filePath.startsWith(vaultPath + "/")) {
-      return tab.filePath.slice(vaultPath.length + 1);
+    if (tab.filePath.startsWith(v.currentPath + "/")) {
+      return tab.filePath.slice(v.currentPath.length + 1);
     }
     return null;
   });
+  const vaultPath = $derived($vaultStore.currentPath);
 
   // When the active tab changes, reset the center to the active file.
   $effect(() => {
@@ -225,8 +219,6 @@
 
   onDestroy(() => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    unsubTabs();
-    unsubVault();
     unlistenFileChange?.();
     if (resizeObserver) {
       resizeObserver.disconnect();
