@@ -51,9 +51,9 @@ export interface ForceSettings {
 export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
   gravity: 1,
   scalingRatio: 40,
-  // Default 0.4: linked nodes pull toward each other but don't collapse.
-  // 1.0 is a very strong rubber-band that clumps the whole graph.
-  edgeWeightInfluence: 0.4,
+  // 0.7 pulls linked nodes visibly together so clusters form, but
+  // short of 1.0 where the whole graph collapses onto itself.
+  edgeWeightInfluence: 0.7,
   slowDown: 10,
 };
 
@@ -247,6 +247,11 @@ function applyForceSettings(
     // global graph spreads out instead of clumping at the center. Obsidian's
     // default repulsion feels roughly in this range.
     charge.strength(-(settings.scalingRatio * 15));
+    // Cap repulsion range so it only acts locally. Without this cap, every
+    // node repels every other node globally, which flattens cluster
+    // structure into a uniform ring. 300 lets clusters stay tight while
+    // unrelated groups drift apart via the longer-range link pulls.
+    charge.distanceMax(300);
   }
 
   const link = simulation.force("link") as
@@ -255,8 +260,10 @@ function applyForceSettings(
   if (link) {
     const strength = Math.min(1, Math.max(0, settings.edgeWeightInfluence));
     link.strength(strength);
-    // Longer rest length so linked nodes don't pile up on top of each other.
-    link.distance(120);
+    // Shorter rest length pulls linked nodes closer — combined with the
+    // capped repulsion range above this produces visible clusters instead
+    // of an evenly-spread globe.
+    link.distance(80);
   }
 
   const center = simulation.force("center") as
