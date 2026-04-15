@@ -155,23 +155,34 @@ pub async fn open_vault(
     push_recent_vault(&app, &canonical_str)?;
 
     // --- Tantivy indexing via IndexCoordinator ---
-    // Get or create an IndexCoordinator for this vault (lazy init).
+    // Always recreate the coordinator so switching vaults doesn't reuse the
+    // previous vault's Tantivy index directory, in-memory FileIndex,
+    // LinkGraph or TagIndex (#38).
+    //
+    // Order matters: drop the old watcher BEFORE the old coordinator. The
+    // watcher holds a clone of the coordinator's write-queue sender; if the
+    // coordinator is dropped first, the watcher's clone keeps the channel
+    // alive and the writer task only exits when it processes the Shutdown
+    // command queued by IndexCoordinator::drop. Dropping the watcher first
+    // means the Shutdown is the last surviving message on a soon-to-close
+    // channel, so the old Tantivy writer releases its directory lock
+    // promptly — important for re-opening the same vault.
+    {
+        let mut handle = state.watcher_handle.lock().map_err(|_| VaultError::Io(
+            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        ))?;
+        *handle = None; // drops old debouncer, stops previous watch
+    }
+
     let coordinator = {
         let mut guard = state.index_coordinator.lock().map_err(|_| VaultError::Io(
             std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
         ))?;
-        if guard.is_none() {
-            *guard = Some(
-                crate::indexer::IndexCoordinator::new(&canonical).map_err(|e| {
-                    log::error!("Failed to create IndexCoordinator: {e:?}");
-                    e
-                })?
-            );
-        }
-        // Clone the Arc fields needed (coordinator itself is not Clone, but
-        // we hold the lock for the duration of index_vault below via the guard).
-        // We take the coordinator out temporarily, run index_vault, then put it back.
-        guard.take().unwrap()
+        *guard = None;
+        crate::indexer::IndexCoordinator::new(&canonical).map_err(|e| {
+            log::error!("Failed to create IndexCoordinator: {e:?}");
+            e
+        })?
     };
 
     let vault_info = coordinator.index_vault(&canonical, &app).await.map_err(|e| {
@@ -188,13 +199,6 @@ pub async fn open_vault(
     }
 
     // --- Spawn file watcher (Plan 04) ---
-    // Drop any previous watcher before starting a new one (vault re-open).
-    {
-        let mut handle = state.watcher_handle.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
-        ))?;
-        *handle = None; // drops old debouncer, stops previous watch
-    }
 
     // Clone the index_tx sender for the watcher so it can dispatch
     // IndexCmd::UpdateLinks / RemoveLinks on file events (LINK-08).
