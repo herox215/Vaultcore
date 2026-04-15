@@ -124,4 +124,94 @@ describe("commandRegistry", () => {
     const ev = new KeyboardEvent("keydown", { key: "n" });
     expect(commandRegistry.findByHotkey(ev)).toBeNull();
   });
+
+  describe("hotkey overrides (#65)", () => {
+    it("setHotkeyOverride replaces the effective binding in findByHotkey", () => {
+      const cb = vi.fn();
+      commandRegistry.register({
+        id: "n",
+        name: "New",
+        callback: cb,
+        hotkey: { meta: true, key: "n" },
+      });
+      commandRegistry.setHotkeyOverride("n", { meta: true, key: "j" });
+      // Old binding no longer matches.
+      const oldEv = new KeyboardEvent("keydown", { key: "n", metaKey: true });
+      expect(commandRegistry.findByHotkey(oldEv)).toBeNull();
+      // New binding matches.
+      const newEv = new KeyboardEvent("keydown", { key: "j", metaKey: true });
+      expect(commandRegistry.findByHotkey(newEv)?.id).toBe("n");
+    });
+
+    it("override=null disables the default but keeps the command runnable", () => {
+      const cb = vi.fn();
+      commandRegistry.register({
+        id: "n",
+        name: "New",
+        callback: cb,
+        hotkey: { meta: true, key: "n" },
+      });
+      commandRegistry.setHotkeyOverride("n", null);
+      const ev = new KeyboardEvent("keydown", { key: "n", metaKey: true });
+      expect(commandRegistry.findByHotkey(ev)).toBeNull();
+      // execute still works.
+      commandRegistry.execute("n");
+      expect(cb).toHaveBeenCalledOnce();
+    });
+
+    it("clearHotkeyOverride restores the spec default", () => {
+      commandRegistry.register({
+        id: "n",
+        name: "New",
+        callback: () => {},
+        hotkey: { meta: true, key: "n" },
+      });
+      commandRegistry.setHotkeyOverride("n", { meta: true, key: "j" });
+      commandRegistry.clearHotkeyOverride("n");
+      const ev = new KeyboardEvent("keydown", { key: "n", metaKey: true });
+      expect(commandRegistry.findByHotkey(ev)?.id).toBe("n");
+    });
+
+    it("getEffective reflects overrides (replaces and strips disabled)", () => {
+      commandRegistry.register({
+        id: "a",
+        name: "A",
+        callback: () => {},
+        hotkey: { meta: true, key: "a" },
+      });
+      commandRegistry.register({
+        id: "b",
+        name: "B",
+        callback: () => {},
+        hotkey: { meta: true, key: "b" },
+      });
+      commandRegistry.setHotkeyOverride("a", { meta: true, shift: true, key: "x" });
+      commandRegistry.setHotkeyOverride("b", null);
+      const eff = commandRegistry.getEffective();
+      const a = eff.find((c) => c.id === "a");
+      const b = eff.find((c) => c.id === "b");
+      expect(a?.hotkey).toEqual({ meta: true, shift: true, key: "x" });
+      expect(b?.hotkey).toBeUndefined();
+    });
+
+    it("subscribe re-emits after override changes", () => {
+      commandRegistry.register({
+        id: "n",
+        name: "N",
+        callback: () => {},
+        hotkey: { meta: true, key: "n" },
+      });
+      const snapshots: Array<string | undefined> = [];
+      const unsub = commandRegistry.subscribe((list) => {
+        const c = list.find((x) => x.id === "n");
+        snapshots.push(c?.hotkey?.key);
+      });
+      commandRegistry.setHotkeyOverride("n", { meta: true, key: "j" });
+      commandRegistry.setHotkeyOverride("n", null);
+      commandRegistry.clearHotkeyOverride("n");
+      unsub();
+      // Initial emit, plus one per override change.
+      expect(snapshots).toEqual(["n", "j", undefined, "n"]);
+    });
+  });
 });
