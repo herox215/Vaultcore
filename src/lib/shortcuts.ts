@@ -30,6 +30,7 @@ export interface ShortcutContext {
   closeActiveTab: () => void;
   createNewNote: () => void;
   openGraph: () => void;
+  toggleBookmark: () => void;
 }
 
 export interface Shortcut {
@@ -106,6 +107,14 @@ export const SHORTCUTS: readonly Shortcut[] = [
     keys: { meta: true, shift: true, key: "g" },
     label: "Graph-Ansicht öffnen",
     handler: (ctx) => { ctx.openGraph(); },
+  },
+  {
+    // Issue #12: Cmd/Ctrl+D toggles the bookmark on the active note.
+    // Cmd+Shift+B is already bound to the Backlinks panel (backlinks-toggle).
+    id: "toggle-bookmark",
+    keys: { meta: true, key: "d" },
+    label: "Lesezeichen umschalten",
+    handler: (ctx) => { ctx.toggleBookmark(); },
   },
 ] as const;
 
