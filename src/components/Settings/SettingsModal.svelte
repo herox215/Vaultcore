@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { X, RefreshCw } from "lucide-svelte";
+  import { X, RefreshCw, Keyboard, RotateCcw } from "lucide-svelte";
   import { themeStore, type Theme } from "../../store/themeStore";
   import {
     settingsStore,
@@ -13,7 +13,14 @@
   import { vaultStore } from "../../store/vaultStore";
   import { snippetsStore } from "../../store/snippetsStore";
   import { formatShortcut } from "../../lib/shortcuts";
-  import { commandRegistry, type Command } from "../../lib/commands/registry";
+  import { commandRegistry, hotkeysEqual, type Command, type HotKey } from "../../lib/commands/registry";
+  import { DEFAULT_COMMAND_SPECS } from "../../lib/commands/defaultCommands";
+  import {
+    setHotkeyOverride,
+    resetHotkeyOverride,
+    hotkeyFromEvent,
+    validateHotKey,
+  } from "../../lib/commands/hotkeyOverrides";
 
   let { open, onClose, onSwitchVault }: {
     open: boolean;
@@ -27,6 +34,28 @@
   let currentSize = $state<number>(14);
   let currentVaultPath = $state<string | null>(null);
   let shortcuts = $state<Command[]>([]);
+  /** Command id currently listening for a new keydown, or null when idle. */
+  let recordingFor = $state<string | null>(null);
+  let recordError = $state<string | null>(null);
+  interface PendingConflict {
+    targetId: string;
+    newKey: HotKey;
+    conflictId: string;
+    conflictName: string;
+  }
+  let pendingConflict = $state<PendingConflict | null>(null);
+
+  const DEFAULTS_BY_ID: Record<string, HotKey | undefined> = Object.fromEntries(
+    DEFAULT_COMMAND_SPECS.map((s) => [s.id, s.hotkey])
+  );
+
+  function defaultHotkey(id: string): HotKey | undefined {
+    return DEFAULTS_BY_ID[id];
+  }
+
+  function hasDefault(id: string): boolean {
+    return Boolean(DEFAULTS_BY_ID[id]);
+  }
   let dailyFolder = $state<string>("");
   let dailyFormat = $state<string>(DEFAULT_DAILY_DATE_FORMAT);
   let dailyTemplate = $state<string>("");
@@ -46,7 +75,10 @@
   });
   const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
   const unsubCommands = commandRegistry.subscribe((list) => {
-    shortcuts = list.filter((c) => c.hotkey);
+    // Show every command that has either an effective hotkey or a spec
+    // default — disabled (override=null) commands remain listed so the
+    // user can rebind or reset them.
+    shortcuts = list.filter((c) => c.hotkey || hasDefault(c.id));
   });
   const unsubSnippets = snippetsStore.subscribe((s) => {
     snippetsAvailable = s.available;
@@ -55,11 +87,106 @@
   });
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && open) {
+    if (!open) return;
+    // While a conflict modal is up, intercept Escape for cancel only.
+    if (pendingConflict) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        pendingConflict = null;
+      }
+      return;
+    }
+    // While recording a new shortcut, capture the next keydown for it.
+    if (recordingFor) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelRecording();
+        return;
+      }
+      handleRecordKeydown(e);
+      return;
+    }
+    if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
       onClose();
     }
+  }
+
+  function startRecording(id: string): void {
+    recordError = null;
+    recordingFor = id;
+  }
+
+  function cancelRecording(): void {
+    recordingFor = null;
+    recordError = null;
+  }
+
+  function handleRecordKeydown(e: KeyboardEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = recordingFor;
+    if (!id) return;
+    const candidate = hotkeyFromEvent(e);
+    // null => pure modifier press; keep listening.
+    if (!candidate) return;
+    const v = validateHotKey(candidate);
+    if (!v.ok) {
+      recordError = v.reason;
+      return;
+    }
+    commitBinding(id, candidate);
+  }
+
+  function commitBinding(id: string, newKey: HotKey): void {
+    // Conflict detection against every other command's effective hotkey.
+    const other = commandRegistry.getEffective().find((c) => {
+      if (c.id === id) return false;
+      if (!c.hotkey) return false;
+      return hotkeysEqual(c.hotkey, newKey);
+    });
+    if (other) {
+      pendingConflict = {
+        targetId: id,
+        newKey,
+        conflictId: other.id,
+        conflictName: other.name,
+      };
+      recordingFor = null;
+      recordError = null;
+      return;
+    }
+    setHotkeyOverride(id, newKey);
+    recordingFor = null;
+    recordError = null;
+  }
+
+  function resolveConflictUnbind(): void {
+    if (!pendingConflict) return;
+    const { targetId, newKey, conflictId } = pendingConflict;
+    // Disable the other binding first, then apply the new one.
+    setHotkeyOverride(conflictId, null);
+    setHotkeyOverride(targetId, newKey);
+    pendingConflict = null;
+  }
+
+  function resolveConflictCancel(): void {
+    pendingConflict = null;
+  }
+
+  function onResetShortcut(id: string): void {
+    resetHotkeyOverride(id);
+  }
+
+  function onBackdropClick(): void {
+    if (recordingFor) {
+      cancelRecording();
+      return;
+    }
+    onClose();
   }
 
   function onThemeChange(e: Event) {
@@ -107,7 +234,7 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="vc-settings-backdrop" onclick={onClose} role="presentation"></div>
+  <div class="vc-settings-backdrop" onclick={onBackdropClick} role="presentation"></div>
   <div class="vc-settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-testid="settings-modal">
     <header class="vc-settings-header">
       <h2 id="settings-title" class="vc-settings-title">Einstellungen</h2>
@@ -285,22 +412,99 @@
         </p>
       </section>
 
-      <!-- Section C — Tastaturkürzel (UI-05 / D-11) -->
+      <!-- Section C — Tastaturkürzel (UI-05 / D-11 / #65) -->
       <section class="vc-settings-section" data-testid="settings-shortcuts">
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
         <table class="vc-shortcuts-table" role="table">
           <tbody>
             {#each shortcuts as s (s.id)}
+              {@const isRecording = recordingFor === s.id}
+              {@const def = defaultHotkey(s.id)}
+              {@const isCustom = def ? !s.hotkey || !hotkeysEqual(def, s.hotkey) : Boolean(s.hotkey)}
               <tr role="row">
                 <td role="cell" class="vc-shortcut-action">{s.name}</td>
-                <td role="cell" class="vc-shortcut-keys"><kbd>{s.hotkey ? formatShortcut(s.hotkey) : ""}</kbd></td>
+                <td role="cell" class="vc-shortcut-keys">
+                  {#if isRecording}
+                    <span class="vc-shortcut-recording" data-testid="shortcut-recording">
+                      Drücke eine Tastenkombination…
+                    </span>
+                  {:else if s.hotkey}
+                    <kbd>{formatShortcut(s.hotkey)}</kbd>
+                  {:else}
+                    <span class="vc-shortcut-disabled" title="Deaktiviert">—</span>
+                  {/if}
+                </td>
+                <td role="cell" class="vc-shortcut-controls">
+                  <button
+                    type="button"
+                    class="vc-shortcut-btn"
+                    class:vc-shortcut-btn--active={isRecording}
+                    onclick={() => (isRecording ? cancelRecording() : startRecording(s.id))}
+                    aria-label={isRecording ? "Aufnahme abbrechen" : "Kürzel neu aufnehmen"}
+                    title={isRecording ? "Aufnahme abbrechen" : "Kürzel neu aufnehmen"}
+                    data-testid="shortcut-record-btn"
+                    data-command-id={s.id}
+                  ><Keyboard size={14} /></button>
+                  <button
+                    type="button"
+                    class="vc-shortcut-btn"
+                    onclick={() => onResetShortcut(s.id)}
+                    disabled={!isCustom}
+                    aria-label="Auf Standard zurücksetzen"
+                    title="Auf Standard zurücksetzen"
+                    data-testid="shortcut-reset-btn"
+                    data-command-id={s.id}
+                  ><RotateCcw size={14} /></button>
+                </td>
               </tr>
             {/each}
           </tbody>
         </table>
+        {#if recordError}
+          <p class="vc-shortcut-error" role="alert" data-testid="shortcut-error">{recordError}</p>
+        {/if}
       </section>
     </div>
   </div>
+
+  {#if pendingConflict}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="vc-conflict-backdrop"
+      role="presentation"
+      onclick={resolveConflictCancel}
+      data-testid="shortcut-conflict-backdrop"
+    ></div>
+    <div
+      class="vc-conflict-modal"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="shortcut-conflict-title"
+      data-testid="shortcut-conflict"
+    >
+      <h3 id="shortcut-conflict-title" class="vc-conflict-title">Tastenkürzel-Konflikt</h3>
+      <p class="vc-conflict-body">
+        <kbd>{formatShortcut(pendingConflict.newKey)}</kbd>
+        ist bereits
+        <strong>{pendingConflict.conflictName}</strong>
+        zugewiesen. Soll die andere Zuweisung aufgehoben werden?
+      </p>
+      <div class="vc-conflict-actions">
+        <button
+          type="button"
+          class="vc-conflict-btn"
+          onclick={resolveConflictCancel}
+          data-testid="shortcut-conflict-cancel"
+        >Abbrechen</button>
+        <button
+          type="button"
+          class="vc-conflict-btn vc-conflict-btn--primary"
+          onclick={resolveConflictUnbind}
+          data-testid="shortcut-conflict-unbind"
+        >Zuweisung aufheben</button>
+      </div>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -541,5 +745,119 @@
     border-radius: 4px;
     color: var(--color-text);
     font-family: var(--vc-font-mono);
+  }
+  .vc-shortcut-recording {
+    font-size: 12px;
+    color: var(--color-accent);
+    font-style: italic;
+  }
+  .vc-shortcut-disabled {
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
+  .vc-shortcut-controls {
+    width: 72px;
+    text-align: right;
+    white-space: nowrap;
+    padding-right: 16px;
+  }
+  .vc-shortcut-btn {
+    width: 26px; height: 26px;
+    margin-left: 4px;
+    background: none;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+  }
+  .vc-shortcut-btn:hover:not(:disabled) {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .vc-shortcut-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .vc-shortcut-btn--active {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .vc-shortcut-error {
+    margin: 8px 16px 0;
+    font-size: 12px;
+    color: var(--color-danger, #c62828);
+  }
+
+  /* Conflict modal (#65) */
+  .vc-conflict-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 310;
+  }
+  .vc-conflict-modal {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 420px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    padding: 20px;
+    z-index: 311;
+  }
+  .vc-conflict-title {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .vc-conflict-body {
+    margin: 0 0 16px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--color-text);
+  }
+  .vc-conflict-body kbd {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text);
+    font-family: var(--vc-font-mono);
+  }
+  .vc-conflict-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .vc-conflict-btn {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .vc-conflict-btn:hover {
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+  .vc-conflict-btn--primary {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: var(--color-surface);
+  }
+  .vc-conflict-btn--primary:hover {
+    background: var(--color-accent);
+    color: var(--color-surface);
+    opacity: 0.9;
   }
 </style>

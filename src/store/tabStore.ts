@@ -20,6 +20,13 @@ export type TabType = "file" | "graph";
  */
 export type TabViewer = "markdown" | "image" | "text" | "unsupported";
 
+/**
+ * Reading Mode vs Edit Mode (#63). Persisted per-tab; only meaningful for
+ * markdown tabs (image / unsupported previews ignore this flag). Defaults
+ * to "edit" when omitted so existing tabs remain editable.
+ */
+export type TabViewMode = "edit" | "read";
+
 /** Sentinel filePath used by the singleton graph tab. */
 export const GRAPH_TAB_PATH = "vault://graph";
 
@@ -31,6 +38,14 @@ export interface Tab {
   cursorPos: number;
   lastSaved: number;
   lastSavedContent: string;  // base snapshot for three-way merge (Plan 05)
+  /**
+   * SHA-256 of the last content VaultCore wrote to disk for this tab.
+   * Per-tab so switching between tabs doesn't leak another tab's hash into
+   * the auto-save merge check (#80). `null` when the tab has never been
+   * saved in this session — the first auto-save skips the hash-verify
+   * merge branch and takes the direct-write path.
+   */
+  lastSavedHash?: string | null;
   /** Tab kind — "file" when omitted. */
   type?: TabType;
   /**
@@ -39,6 +54,17 @@ export interface Tab {
    * "unsupported" are set by openFileTab() when opening non-markdown files.
    */
   viewer?: TabViewer;
+  /**
+   * Reading Mode toggle (#63). "edit" = CM6 editor with live preview,
+   * "read" = rendered HTML. Omitted tabs behave as "edit".
+   */
+  viewMode?: TabViewMode;
+  /**
+   * Scroll position used by Reading Mode (#63). Tracked separately from
+   * `scrollPos` so switching modes can restore each view's last position
+   * without clobbering the other.
+   */
+  readingScrollPos?: number;
 }
 
 export interface SplitState {
@@ -381,6 +407,34 @@ export const tabStore = {
     }));
   },
 
+  /** Persist Reading Mode scroll position (#63). */
+  updateReadingScrollPos(tabId: string, readingScrollPos: number): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, readingScrollPos } : t)),
+    }));
+  },
+
+  /** Set the view mode on a tab (#63). */
+  setViewMode(tabId: string, viewMode: TabViewMode): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, viewMode } : t)),
+    }));
+  },
+
+  /** Toggle between edit / read on a tab; no-op when the tab is missing (#63). */
+  toggleViewMode(tabId: string): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => {
+        if (t.id !== tabId) return t;
+        const next: TabViewMode = (t.viewMode ?? "edit") === "edit" ? "read" : "edit";
+        return { ...t, viewMode: next };
+      }),
+    }));
+  },
+
   /**
    * When a file is renamed/moved, update the matching tab's filePath.
    */
@@ -435,6 +489,19 @@ export const tabStore = {
     _store.update((state) => ({
       ...state,
       tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedContent: content } : t)),
+    }));
+  },
+
+  /**
+   * Record the SHA-256 hash VaultCore wrote for this tab's last save.
+   * Called by EditorPane after every successful writeFile so the auto-save
+   * merge-check can compare disk hash against the per-tab expected hash
+   * (#80 — global editorStore.lastSavedHash leaked across tabs).
+   */
+  setLastSavedHash(tabId: string, hash: string | null): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedHash: hash } : t)),
     }));
   },
 

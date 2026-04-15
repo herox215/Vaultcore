@@ -18,6 +18,7 @@ export interface DefaultCommandContext {
   openTodayNote: () => void;
   exportActiveNoteHtml: () => void;
   exportActiveNotePdf: () => void;
+  toggleReadingMode: () => void;
 }
 
 /** Id constants — consumed by tests and anyone dispatching by id. */
@@ -37,6 +38,7 @@ export const CMD_IDS = {
   OPEN_TODAY: "vault:open-today",
   EXPORT_HTML: "vault:export-html",
   EXPORT_PDF: "vault:export-pdf",
+  TOGGLE_READING_MODE: "editor:toggle-reading-mode",
 } as const;
 
 export interface DefaultCommandSpec {
@@ -62,6 +64,7 @@ export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
   { id: CMD_IDS.OPEN_TODAY, name: "Tagesnotiz öffnen", hotkey: { meta: true, shift: true, key: "d" } },
   { id: CMD_IDS.EXPORT_HTML, name: "Notiz als HTML exportieren" },
   { id: CMD_IDS.EXPORT_PDF, name: "Notiz als PDF exportieren" },
+  { id: CMD_IDS.TOGGLE_READING_MODE, name: "Lesemodus umschalten", hotkey: { meta: true, key: "e" } },
 ] as const;
 
 /**
@@ -86,6 +89,7 @@ export function registerDefaultCommands(ctx: DefaultCommandContext): void {
     [CMD_IDS.OPEN_TODAY]: ctx.openTodayNote,
     [CMD_IDS.EXPORT_HTML]: ctx.exportActiveNoteHtml,
     [CMD_IDS.EXPORT_PDF]: ctx.exportActiveNotePdf,
+    [CMD_IDS.TOGGLE_READING_MODE]: ctx.toggleReadingMode,
   };
 
   for (const spec of DEFAULT_COMMAND_SPECS) {
