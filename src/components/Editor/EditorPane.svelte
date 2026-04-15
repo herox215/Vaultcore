@@ -22,6 +22,7 @@
   import { scrollToMatch } from "./flashHighlight";
   import { scrollStore } from "../../store/scrollStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { tagsStore } from "../../store/tagsStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
   import { setResolvedAttachments } from "./embeds";
@@ -447,6 +448,7 @@
           editorStore.setLastSavedHash(newHash);
           tabStore.setLastSavedContent(tab.id, result.merged_content);
           tabStore.setDirty(tab.id, false);
+          void tagsStore.reload();
 
           // Toasts — reuse the exact Phase 2 German strings.
           const filename = tab.filePath.split("/").pop() ?? tab.filePath;
@@ -463,6 +465,7 @@
         tabStore.setDirty(tab.id, false);
         tabStore.setLastSavedContent(tab.id, text);
         editorStore.setLastSavedHash(hash);
+        void tagsStore.reload();
       } catch (err: unknown) {
         // ERR-04: disk-full error — preserve buffer, debounce toast
         const isVaultErr = err && typeof err === "object" && "kind" in err;
