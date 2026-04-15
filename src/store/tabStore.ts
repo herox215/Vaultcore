@@ -20,6 +20,13 @@ export type TabType = "file" | "graph";
  */
 export type TabViewer = "markdown" | "image" | "text" | "unsupported";
 
+/**
+ * Reading Mode vs Edit Mode (#63). Persisted per-tab; only meaningful for
+ * markdown tabs (image / unsupported previews ignore this flag). Defaults
+ * to "edit" when omitted so existing tabs remain editable.
+ */
+export type TabViewMode = "edit" | "read";
+
 /** Sentinel filePath used by the singleton graph tab. */
 export const GRAPH_TAB_PATH = "vault://graph";
 
@@ -39,6 +46,17 @@ export interface Tab {
    * "unsupported" are set by openFileTab() when opening non-markdown files.
    */
   viewer?: TabViewer;
+  /**
+   * Reading Mode toggle (#63). "edit" = CM6 editor with live preview,
+   * "read" = rendered HTML. Omitted tabs behave as "edit".
+   */
+  viewMode?: TabViewMode;
+  /**
+   * Scroll position used by Reading Mode (#63). Tracked separately from
+   * `scrollPos` so switching modes can restore each view's last position
+   * without clobbering the other.
+   */
+  readingScrollPos?: number;
 }
 
 export interface SplitState {
@@ -378,6 +396,34 @@ export const tabStore = {
     _store.update((state) => ({
       ...state,
       tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, scrollPos, cursorPos } : t)),
+    }));
+  },
+
+  /** Persist Reading Mode scroll position (#63). */
+  updateReadingScrollPos(tabId: string, readingScrollPos: number): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, readingScrollPos } : t)),
+    }));
+  },
+
+  /** Set the view mode on a tab (#63). */
+  setViewMode(tabId: string, viewMode: TabViewMode): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, viewMode } : t)),
+    }));
+  },
+
+  /** Toggle between edit / read on a tab; no-op when the tab is missing (#63). */
+  toggleViewMode(tabId: string): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => {
+        if (t.id !== tabId) return t;
+        const next: TabViewMode = (t.viewMode ?? "edit") === "edit" ? "read" : "edit";
+        return { ...t, viewMode: next };
+      }),
     }));
   },
 
