@@ -10,6 +10,7 @@
     getRecentVaults,
     openVault,
     pickVaultFolder,
+    repairVaultIndex,
   } from "./ipc/commands";
   import { listenIndexProgress } from "./ipc/events";
   import { isVaultError, vaultErrorCopy } from "./types/errors";
@@ -21,6 +22,12 @@
 
   let recent: RecentVault[] = $state([]);
   let unlistenProgress: (() => void) | null = null;
+
+  // Index-corrupt recovery dialog — shown when openVault fails with
+  // IndexCorrupt. Confirming wipes .vaultcore/index/tantivy + the version
+  // stamp and retries openVault, which rebuilds from scratch.
+  let repairPrompt = $state<{ vaultPath: string } | null>(null);
+  let repairing = $state(false);
 
   function toVaultError(err: unknown) {
     if (isVaultError(err)) {
@@ -46,10 +53,39 @@
     } catch (err) {
       progressStore.finish();
       const ve = toVaultError(err);
-      const copy = vaultErrorCopy(ve);
-      vaultStore.setError(copy);
-      toastStore.push({ variant: "error", message: copy });
+      if (ve.kind === "IndexCorrupt") {
+        // Offer the user an in-app repair rather than making them delete
+        // .vaultcore/index by hand.
+        repairPrompt = { vaultPath: path };
+        vaultStore.setError(vaultErrorCopy(ve));
+        return;
+      }
+      vaultStore.setError(vaultErrorCopy(ve));
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
+  }
+
+  async function confirmRepair(): Promise<void> {
+    if (!repairPrompt || repairing) return;
+    repairing = true;
+    const path = repairPrompt.vaultPath;
+    try {
+      await repairVaultIndex(path);
+      repairPrompt = null;
+      repairing = false;
+      await loadVault(path);
+    } catch (err) {
+      repairing = false;
+      const ve = toVaultError(err);
+      toastStore.push({
+        variant: "error",
+        message: `Repair failed: ${vaultErrorCopy(ve)}`,
+      });
+    }
+  }
+
+  function cancelRepair(): void {
+    repairPrompt = null;
   }
 
   async function handlePickVault(): Promise<void> {
@@ -131,3 +167,89 @@
 
 <ProgressBar />
 <ToastContainer />
+
+{#if repairPrompt}
+  <div class="vc-repair-backdrop" role="dialog" aria-modal="true" aria-labelledby="vc-repair-title">
+    <div class="vc-repair-modal">
+      <h2 id="vc-repair-title" class="vc-repair-title">Index corrupt</h2>
+      <p class="vc-repair-body">
+        The search index for this vault can't be opened. VaultCore can wipe
+        <code>.vaultcore/index/tantivy</code> and rebuild it from scratch —
+        your notes are not touched.
+      </p>
+      <div class="vc-repair-actions">
+        <button type="button" class="vc-repair-cancel" onclick={cancelRepair} disabled={repairing}>
+          Cancel
+        </button>
+        <button type="button" class="vc-repair-confirm" onclick={confirmRepair} disabled={repairing}>
+          {repairing ? "Rebuilding…" : "Rebuild index"}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .vc-repair-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+  }
+  .vc-repair-modal {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    padding: 20px 24px;
+    max-width: 440px;
+    width: calc(100% - 48px);
+  }
+  .vc-repair-title {
+    margin: 0 0 8px;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--color-text);
+  }
+  .vc-repair-body {
+    margin: 0 0 20px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--color-text);
+  }
+  .vc-repair-body code {
+    font-family: var(--vc-font-mono);
+    font-size: 12px;
+    padding: 1px 4px;
+    background: var(--color-surface-alt, rgba(0, 0, 0, 0.06));
+    border-radius: 3px;
+  }
+  .vc-repair-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .vc-repair-cancel,
+  .vc-repair-confirm {
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+  .vc-repair-confirm {
+    background: var(--color-accent);
+    color: white;
+    border-color: var(--color-accent);
+  }
+  .vc-repair-cancel:disabled,
+  .vc-repair-confirm:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+</style>
