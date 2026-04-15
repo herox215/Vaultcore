@@ -7,6 +7,7 @@
   import GraphView from "../Graph/GraphView.svelte";
   import ImagePreview from "./ImagePreview.svelte";
   import UnsupportedPreview from "./UnsupportedPreview.svelte";
+  import ReadingView from "./ReadingView.svelte";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
   import { vaultStore } from "../../store/vaultStore";
@@ -73,6 +74,8 @@
 
   // Track the previously active tab for scroll save/restore
   let prevActiveTabId: string | null = null;
+  // Track prior viewMode per tab so we can save/restore scroll on mode switches (#63).
+  const prevViewMode = new Map<string, "edit" | "read">();
 
   const paneTabs = $derived(
     paneTabIds
@@ -96,6 +99,20 @@
     if (t.type === "graph") return null;
     return t.filePath;
   });
+
+  // #63: active tab of this pane, exposed so Breadcrumbs can drive its
+  // Reading Mode toggle. Non-markdown / graph tabs get `undefined` so the
+  // toggle is hidden for tab kinds that don't support Reading Mode.
+  const paneActiveTab = $derived<Tab | null>(
+    paneActiveTabId !== null ? paneTabs.find((t) => t.id === paneActiveTabId) ?? null : null,
+  );
+  const paneActiveTabSupportsReading = $derived(
+    paneActiveTab !== null &&
+    paneActiveTab.type !== "graph" &&
+    paneActiveTab.viewer !== "image" &&
+    paneActiveTab.viewer !== "unsupported" &&
+    paneActiveTab.viewer !== "text",
+  );
 
   // #49: tabs whose viewer is not "markdown"/"text" don't host a CM6 view.
   // Used to skip the editor-mount loop and to gate the count status bar.
@@ -286,6 +303,45 @@
     }
   });
 
+  // #63: Persist the editor's scroll position when a tab switches from
+  // edit → read so switching back restores it. Reading Mode tracks its own
+  // readingScrollPos on its side.
+  $effect(() => {
+    for (const tab of paneTabs) {
+      const mode: "edit" | "read" = tab.viewMode ?? "edit";
+      const previous = prevViewMode.get(tab.id);
+      if (previous !== undefined && previous !== mode) {
+        if (previous === "edit" && mode === "read") {
+          const view = viewMap.get(tab.id);
+          if (view) {
+            try {
+              tabStore.updateScrollPos(
+                tab.id,
+                view.scrollDOM.scrollTop,
+                view.state.selection.main.head,
+              );
+            } catch (_) { /* view torn down */ }
+          }
+        } else if (previous === "read" && mode === "edit") {
+          const view = viewMap.get(tab.id);
+          if (view) {
+            const pos = Math.min(tab.cursorPos, view.state.doc.length);
+            if (pos > 0) {
+              view.dispatch({ selection: { anchor: pos } });
+            }
+            requestAnimationFrame(() => {
+              view.scrollDOM.scrollTop = tab.scrollPos;
+            });
+          }
+        }
+      }
+      prevViewMode.set(tab.id, mode);
+    }
+    for (const id of prevViewMode.keys()) {
+      if (!paneTabIds.includes(id)) prevViewMode.delete(id);
+    }
+  });
+
   // Handle scroll save/restore on tab switch — separate effect to avoid
   // coupling with the lifecycle effect above
   $effect(() => {
@@ -319,7 +375,7 @@
           editorStore.syncFromTab(
             activeTab.filePath,
             activeView.state.doc.toString(),
-            activeTab.lastSaved ? String(activeTab.lastSaved) : null
+            activeTab.lastSavedHash ?? null,
           );
           if (activePane === paneId) {
             activeViewStore.setActive(activeView);
@@ -428,8 +484,9 @@
           }
         }
 
-        // Snapshot the expected hash (what VaultCore last wrote / first read).
-        const expected = lastSavedHashSnapshot;
+        // Per-tab expected hash (#80). Reading the global editorStore snapshot
+        // here leaked another tab's hash in when the user switched tabs mid-edit.
+        const expected = allTabs.find((t) => t.id === tab.id)?.lastSavedHash ?? null;
 
         if (diskHash !== null && expected !== null && diskHash !== expected) {
           // MISMATCH: external edit detected — route through three-way merge engine.
@@ -447,6 +504,7 @@
           // Write the merged content to disk so hash converges.
           const newHash = await writeFile(tab.filePath, result.merged_content);
           editorStore.setLastSavedHash(newHash);
+          tabStore.setLastSavedHash(tab.id, newHash);
           tabStore.setLastSavedContent(tab.id, result.merged_content);
           tabStore.setDirty(tab.id, false);
           searchStore.setIndexStale(true);
@@ -466,6 +524,7 @@
         const hash = await writeFile(tab.filePath, text);
         tabStore.setDirty(tab.id, false);
         tabStore.setLastSavedContent(tab.id, text);
+        tabStore.setLastSavedHash(tab.id, hash);
         editorStore.setLastSavedHash(hash);
         searchStore.setIndexStale(true);
         void tagsStore.reload();
@@ -683,7 +742,11 @@
   />
 
   <!-- Breadcrumb path bar — self-hides when no tab is open (AC-06). -->
-  <Breadcrumbs filePath={paneActiveFilePath} />
+  <Breadcrumbs
+    filePath={paneActiveFilePath}
+    tabId={paneActiveTabSupportsReading && paneActiveTab ? paneActiveTab.id : null}
+    viewMode={paneActiveTabSupportsReading && paneActiveTab ? (paneActiveTab.viewMode ?? "edit") : undefined}
+  />
 
   <!-- Editor content area -->
   <div class="vc-editor-content">
@@ -723,11 +786,23 @@
           <UnsupportedPreview abs={tab.filePath} />
         </div>
       {:else}
+        <!-- #63: both containers are rendered; visibility is toggled by
+             tab.viewMode so switching modes doesn't destroy the CM6 view
+             (preserves undo history + load state). -->
         <div
           class="vc-editor-container"
           data-tab-id={tab.id}
-          style:display={tab.id === paneActiveTabId ? "block" : "none"}
+          style:display={tab.id === paneActiveTabId && (tab.viewMode ?? "edit") === "edit" ? "block" : "none"}
         ></div>
+        {#if (tab.viewMode ?? "edit") === "read"}
+          <div
+            class="vc-editor-container"
+            data-reading-tab-id={tab.id}
+            style:display={tab.id === paneActiveTabId ? "block" : "none"}
+          >
+            <ReadingView {tab} isActive={tab.id === paneActiveTabId} />
+          </div>
+        {/if}
       {/if}
     {/each}
   </div>
