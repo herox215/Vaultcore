@@ -3,7 +3,7 @@
   import { ChevronDown, ChevronRight } from "lucide-svelte";
   import { activeViewStore } from "../../store/activeViewStore";
   import { vaultStore } from "../../store/vaultStore";
-  import { tabStore, type Tab } from "../../store/tabStore";
+  import { tabStore } from "../../store/tabStore";
   import { getLocalGraph } from "../../ipc/commands";
   import { listenFileChange } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -43,31 +43,30 @@
   let handle: GraphHandle | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFileChange: UnlistenFn | null = null;
+  let resizeObserver: ResizeObserver | null = null;
 
-  // Reactive active-tab / doc-version plumbing mirrors OutgoingLinksPanel.
-  let tabs = $state<Tab[]>([]);
-  let activeTabId = $state<string | null>(null);
-  let vaultPath = $state<string | null>(null);
+  // sigma needs a non-zero container — treat anything below this as "layout
+  // not resolved yet" and wait for a ResizeObserver tick.
+  const MIN_MOUNT_DIMENSION = 8;
 
-  const unsubTabs = tabStore.subscribe((s) => {
-    tabs = s.tabs;
-    activeTabId = s.activeTabId;
-  });
-  const unsubVault = vaultStore.subscribe((s) => {
-    vaultPath = s.currentPath;
-  });
-
-  // Compute the vault-relative path of the active tab. Returns null when
-  // no tab is active or the filePath doesn't sit under the vault root.
+  // Reactive active-tab / doc-version plumbing — driven by Svelte-store
+  // auto-subscription so the derived chain actually re-runs on tab switch.
+  // A classic `tabStore.subscribe(cb)` that writes into $state was silently
+  // dropping updates after the initial mount, leaving the graph stuck on
+  // the first note. OutgoingLinksPanel uses the same direct-$derived
+  // pattern and behaves correctly.
   const activeRelPath = $derived.by<string | null>(() => {
-    if (!activeTabId || !vaultPath) return null;
-    const tab = tabs.find((t) => t.id === activeTabId);
+    const s = $tabStore;
+    const v = $vaultStore;
+    if (!s.activeTabId || !v.currentPath) return null;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
     if (!tab) return null;
-    if (tab.filePath.startsWith(vaultPath + "/")) {
-      return tab.filePath.slice(vaultPath.length + 1);
+    if (tab.filePath.startsWith(v.currentPath + "/")) {
+      return tab.filePath.slice(v.currentPath.length + 1);
     }
     return null;
   });
+  const vaultPath = $derived($vaultStore.currentPath);
 
   // When the active tab changes, reset the center to the active file.
   $effect(() => {
@@ -128,9 +127,26 @@
     if (!canvasEl || !graphData || !centerRel) return;
     // sigma measures the container on construct — make sure it has a size
     // before we mount. When the panel just opened the layout tick might not
-    // have run yet; defer until next frame if clientWidth is still 0.
-    if (canvasEl.clientWidth === 0 || canvasEl.clientHeight === 0) {
-      requestAnimationFrame(tryMount);
+    // have run yet; wait for the first ResizeObserver entry that reports a
+    // usable width/height. rAF fires before layout so polling it just spins.
+    if (
+      canvasEl.clientWidth < MIN_MOUNT_DIMENSION ||
+      canvasEl.clientHeight < MIN_MOUNT_DIMENSION
+    ) {
+      if (resizeObserver) return;
+      const target = canvasEl;
+      resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width >= MIN_MOUNT_DIMENSION && height >= MIN_MOUNT_DIMENSION) {
+            resizeObserver?.disconnect();
+            resizeObserver = null;
+            tryMount();
+            return;
+          }
+        }
+      });
+      resizeObserver.observe(target);
       return;
     }
     handle = mountGraph(canvasEl, graphData, {
@@ -160,6 +176,10 @@
   // Mount/unmount sigma as the panel expands or collapses.
   $effect(() => {
     if (collapsed) {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
       if (handle) {
         destroyGraph(handle);
         handle = null;
@@ -199,9 +219,11 @@
 
   onDestroy(() => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    unsubTabs();
-    unsubVault();
     unlistenFileChange?.();
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
     if (handle) {
       destroyGraph(handle);
       handle = null;
@@ -241,14 +263,24 @@
         <div class="vc-graph-empty">Keine Datei geöffnet.</div>
       {:else if errorMessage}
         <div class="vc-graph-empty">{errorMessage}</div>
-      {:else if graphData && !hasLinks}
-        <div class="vc-graph-empty">Keine Verbindungen</div>
       {:else}
+        <!-- Always render the canvas when a note is open, even when the
+             local graph has no edges. If we swap it out for a
+             "Keine Verbindungen" message the bind:this=canvasEl element
+             leaves the DOM and the live sigma handle is left pointing at a
+             detached node; when the user switches back to a linked note the
+             next mountGraph is called into a freshly inserted, zero-width
+             div and Sigma logs 'Container has no width' (#43). Keeping the
+             div in place lets updateGraph render the center-only graph,
+             and we overlay a message when hasLinks is false. -->
         <div
           class="vc-graph-canvas"
           bind:this={canvasEl}
           title={centerRel ?? ""}
         ></div>
+        {#if graphData && !hasLinks}
+          <div class="vc-graph-no-links">Keine Verbindungen</div>
+        {/if}
       {/if}
       {#if loading}
         <div class="vc-graph-loading">…</div>
@@ -307,6 +339,18 @@
     text-align: center;
     color: var(--color-text-muted);
     font-size: 14px;
+  }
+  .vc-graph-no-links {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+    border-radius: 4px;
+    pointer-events: none;
   }
   .vc-graph-loading {
     position: absolute;
