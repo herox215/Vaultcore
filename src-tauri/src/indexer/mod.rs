@@ -65,6 +65,10 @@ pub enum IndexCmd {
     DeleteFile {
         path: PathBuf,
     },
+    /// Drop every document from the index without re-walking the vault.
+    /// Used on vault open to evict orphan entries whose on-disk files were
+    /// removed between sessions; `index_vault` immediately re-populates.
+    DeleteAll,
     Commit,
     Rebuild {
         vault_path: PathBuf,
@@ -390,6 +394,17 @@ async fn run_queue_consumer(
             IndexCmd::DeleteFile { path } => {
                 let path_str = path.to_string_lossy().into_owned();
                 writer.delete_term(Term::from_field_text(path_field, &path_str));
+            }
+            IndexCmd::DeleteAll => {
+                if let Err(e) = writer.delete_all_documents() {
+                    log::error!("Tantivy delete_all failed: {e}");
+                    continue;
+                }
+                if let Err(e) = writer.commit() {
+                    log::error!("Tantivy delete_all commit failed: {e}");
+                } else if let Err(e) = reader.reload() {
+                    log::error!("Tantivy delete_all reader reload failed: {e}");
+                }
             }
             IndexCmd::Commit => {
                 if let Err(e) = writer.commit() {
