@@ -9,6 +9,7 @@
     type BodyFont,
     type MonoFont,
   } from "../../store/settingsStore";
+  import { DEFAULT_DAILY_DATE_FORMAT } from "../../lib/dailyNotes";
   import { vaultStore } from "../../store/vaultStore";
   import { formatShortcut } from "../../lib/shortcuts";
   import { commandRegistry, type Command } from "../../lib/commands/registry";
@@ -25,10 +26,18 @@
   let currentSize = $state<number>(14);
   let currentVaultPath = $state<string | null>(null);
   let shortcuts = $state<Command[]>([]);
+  let dailyFolder = $state<string>("");
+  let dailyFormat = $state<string>(DEFAULT_DAILY_DATE_FORMAT);
+  let dailyTemplate = $state<string>("");
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
   const unsubSettings = settingsStore.subscribe((s) => {
-    currentBody = s.fontBody; currentMono = s.fontMono; currentSize = s.fontSize;
+    currentBody = s.fontBody;
+    currentMono = s.fontMono;
+    currentSize = s.fontSize;
+    dailyFolder = s.dailyNotesFolder;
+    dailyFormat = s.dailyNotesDateFormat;
+    dailyTemplate = s.dailyNotesTemplate;
   });
   const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
   const unsubCommands = commandRegistry.subscribe((list) => {
@@ -55,6 +64,15 @@
   }
   function onSizeInput(e: Event) {
     settingsStore.setFontSize(Number((e.target as HTMLInputElement).value));
+  }
+  function onDailyFolderInput(e: Event) {
+    settingsStore.setDailyNotesFolder((e.target as HTMLInputElement).value);
+  }
+  function onDailyFormatInput(e: Event) {
+    settingsStore.setDailyNotesDateFormat((e.target as HTMLInputElement).value);
+  }
+  function onDailyTemplateInput(e: Event) {
+    settingsStore.setDailyNotesTemplate((e.target as HTMLInputElement).value);
   }
 
   onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); });
@@ -154,6 +172,51 @@
         />
       </section>
 
+      <!-- Section — Tagesnotizen (#59) -->
+      <section class="vc-settings-section" data-testid="settings-daily-notes">
+        <h3 class="vc-settings-section-title">TAGESNOTIZEN</h3>
+        <div class="vc-settings-row">
+          <label for="daily-folder-input">Ordner (relativ zum Vault)</label>
+          <input
+            id="daily-folder-input"
+            data-testid="settings-daily-folder"
+            type="text"
+            class="vc-settings-text"
+            placeholder="z. B. Daily"
+            value={dailyFolder}
+            oninput={onDailyFolderInput}
+          />
+        </div>
+        <div class="vc-settings-row">
+          <label for="daily-format-input">Datumsformat</label>
+          <input
+            id="daily-format-input"
+            data-testid="settings-daily-format"
+            type="text"
+            class="vc-settings-text"
+            placeholder={DEFAULT_DAILY_DATE_FORMAT}
+            value={dailyFormat}
+            oninput={onDailyFormatInput}
+          />
+        </div>
+        <div class="vc-settings-row">
+          <label for="daily-template-input">Vorlage (relativ zum Vault)</label>
+          <input
+            id="daily-template-input"
+            data-testid="settings-daily-template"
+            type="text"
+            class="vc-settings-text"
+            placeholder="z. B. Templates/Daily.md"
+            value={dailyTemplate}
+            oninput={onDailyTemplateInput}
+          />
+        </div>
+        <p class="vc-settings-hint">
+          Unterstützte Tokens: <code>YYYY</code>, <code>MM</code>, <code>DD</code>.
+          Fehlender Ordner wird beim ersten Öffnen erstellt.
+        </p>
+      </section>
+
       <!-- Section C — Tastaturkürzel (UI-05 / D-11) -->
       <section class="vc-settings-section" data-testid="settings-shortcuts">
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
@@ -248,6 +311,24 @@
     border: 1px solid var(--color-border); border-radius: 4px;
     background: var(--color-surface); color: var(--color-text);
     min-width: 180px;
+  }
+  .vc-settings-row :global(.vc-settings-text) {
+    font-size: 14px; padding: 4px 8px;
+    border: 1px solid var(--color-border); border-radius: 4px;
+    background: var(--color-surface); color: var(--color-text);
+    min-width: 240px;
+    font-family: var(--vc-font-mono);
+  }
+  .vc-settings-hint {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    margin: 4px 0 0;
+  }
+  .vc-settings-hint code {
+    font-family: var(--vc-font-mono);
+    padding: 0 4px;
+    background: var(--color-accent-bg);
+    border-radius: 3px;
   }
   .vc-settings-size-value { font-size: 14px; color: var(--color-text-muted); }
   .vc-settings-slider { width: 100%; }
