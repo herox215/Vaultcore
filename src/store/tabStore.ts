@@ -13,6 +13,13 @@ import { writable } from "svelte/store";
  */
 export type TabType = "file" | "graph";
 
+/**
+ * Non-markdown file previews (#49). `viewer` selects which UI branch
+ * EditorPane renders. Omitted on markdown tabs for backwards compatibility
+ * with existing callers that never set this field.
+ */
+export type TabViewer = "markdown" | "image" | "text" | "unsupported";
+
 /** Sentinel filePath used by the singleton graph tab. */
 export const GRAPH_TAB_PATH = "vault://graph";
 
@@ -26,6 +33,12 @@ export interface Tab {
   lastSavedContent: string;  // base snapshot for three-way merge (Plan 05)
   /** Tab kind — "file" when omitted. */
   type?: TabType;
+  /**
+   * Viewer used to render the tab (#49). Omitted on existing markdown tabs
+   * so previous callers continue to work unchanged. "image" / "text" /
+   * "unsupported" are set by openFileTab() when opening non-markdown files.
+   */
+  viewer?: TabViewer;
 }
 
 export interface SplitState {
@@ -103,6 +116,52 @@ export const tabStore = {
         lastSavedContent: "",
       };
 
+      const activePane = state.splitState.activePane;
+      const newPaneIds = [...state.splitState[activePane], id];
+      return {
+        ...state,
+        tabs: [...state.tabs, tab],
+        activeTabId: id,
+        splitState: {
+          ...state.splitState,
+          [activePane]: newPaneIds,
+        },
+      };
+    });
+    return returnId;
+  },
+
+  /**
+   * Open a tab with an explicit viewer kind (#49). Used for non-markdown
+   * files — images, read-only text previews, and unsupported binaries.
+   * Same dedupe-by-filePath semantics as openTab().
+   */
+  openFileTab(filePath: string, viewer: TabViewer): string {
+    let returnId = "";
+    _store.update((state) => {
+      const existing = state.tabs.find((t) => t.filePath === filePath);
+      if (existing) {
+        returnId = existing.id;
+        const pane = whichPane(state, existing.id) ?? "left";
+        return {
+          ...state,
+          activeTabId: existing.id,
+          splitState: { ...state.splitState, activePane: pane },
+        };
+      }
+
+      const id = crypto.randomUUID();
+      returnId = id;
+      const tab: Tab = {
+        id,
+        filePath,
+        isDirty: false,
+        scrollPos: 0,
+        cursorPos: 0,
+        lastSaved: Date.now(),
+        lastSavedContent: "",
+        viewer,
+      };
       const activePane = state.splitState.activePane;
       const newPaneIds = [...state.splitState[activePane], id];
       return {

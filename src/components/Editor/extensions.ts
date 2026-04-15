@@ -96,3 +96,27 @@ export function buildExtensions(
 
   return extensions;
 }
+
+/**
+ * Read-only extension list for non-markdown text previews (#49). Drops:
+ *   - autoSaveExtension — these tabs must NEVER write back to disk
+ *     (e.g. opening a .json or .csv would otherwise rewrite it on edit).
+ *   - wikiLinkPlugin / embedPlugin / livePreviewPlugin — wiki / embed syntax
+ *     does not apply outside markdown files.
+ *   - markdown grammar — non-markdown content shouldn't be highlighted as md.
+ *   - countsPlugin — word counts for a CSV/log are misleading.
+ * Keeps history (undo/redo as no-op since the doc is immutable),
+ * line-wrapping, and an EditorState.readOnly + EditorView.editable=false
+ * pair so the cursor still lets users select-and-copy.
+ */
+export function buildReadOnlyExtensions(): Extension[] {
+  return [
+    history(),
+    drawSelection(),
+    EditorView.lineWrapping,
+    EditorView.editable.of(false),
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+    syntaxHighlighting(markdownHighlightStyle),
+    markdownTheme,
+  ];
+}
