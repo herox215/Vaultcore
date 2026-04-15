@@ -389,3 +389,23 @@ export async function getTagOccurrences(tag: string): Promise<TagOccurrence[]> {
     throw normalizeError(e);
   }
 }
+
+// ── Bookmarks commands (#12) ───────────────────────────────────────────────────
+
+/** Load the vault's bookmark list (vault-relative paths) from .vaultcore/bookmarks.json. */
+export async function loadBookmarks(vaultPath: string): Promise<string[]> {
+  try {
+    return await invoke<string[]>("load_bookmarks", { vaultPath });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/** Persist the vault's bookmark list to .vaultcore/bookmarks.json (atomic rename). */
+export async function saveBookmarks(vaultPath: string, bookmarks: string[]): Promise<void> {
+  try {
+    await invoke<void>("save_bookmarks", { vaultPath, bookmarks });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
