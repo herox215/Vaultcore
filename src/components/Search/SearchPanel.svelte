@@ -7,6 +7,7 @@
   import { toastStore } from "../../store/toastStore";
   import type { SearchResult } from "../../types/search";
   import { isVaultError } from "../../types/errors";
+  import { listenFileChange } from "../../ipc/events";
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import SearchInput from "./SearchInput.svelte";
   import SearchResults from "./SearchResults.svelte";
@@ -18,6 +19,18 @@
   let { onOpenFile }: Props = $props();
 
   let inputRef: SearchInput | undefined = $state();
+
+  $effect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listenFileChange(() => {
+      if (!cancelled) searchStore.setIndexStale(true);
+    }).then((fn) => {
+      if (cancelled) { fn(); return; }
+      unlisten = fn;
+    });
+    return () => { cancelled = true; unlisten?.(); };
+  });
 
   // Auto-focus input when panel mounts (Suche tab just became active)
   $effect(() => {
