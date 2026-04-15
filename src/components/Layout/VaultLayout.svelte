@@ -14,8 +14,18 @@
   import { vaultStore } from "../../store/vaultStore";
   import { commandRegistry } from "../../lib/commands/registry";
   import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
+  import {
+    createFile,
+    createFolder,
+    exportNoteHtml,
+    listDirectory,
+    pickSavePath,
+    readFile,
+    renderNoteHtml,
+    writeFile,
+  } from "../../ipc/commands";
+  import { collectThemeCss, defaultExportFilename } from "../../lib/exportHtml";
   import { initHotkeyOverrides } from "../../lib/commands/hotkeyOverrides";
-  import { createFile, createFolder, listDirectory, readFile, writeFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
@@ -341,6 +351,101 @@
     }
   }
 
+  /**
+   * Issue #61: export the active note as a self-contained HTML file.
+   *
+   * Flow:
+   *  1. Resolve the active markdown tab; abort silently for non-file tabs
+   *     (graph, image, etc.) — export doesn't apply.
+   *  2. Pop the native save dialog so the user picks any location (not vault-
+   *     scoped; the HTML file is meant to be shared outside the vault).
+   *  3. Snapshot the applied theme's CSS variables and hand them to Rust
+   *     alongside the note path; Rust reads the markdown, inlines
+   *     `![[image.png]]` embeds as base64 `data:` URLs, rewrites resolvable
+   *     `[[heading]]` wiki-links into `#slug` anchors, and writes the final
+   *     document.
+   */
+  async function exportActiveNoteHtml() {
+    const active = tabStore.getActiveTab();
+    if (!active || active.type === "graph") {
+      toastStore.push({ variant: "error", message: "Keine Notiz aktiv." });
+      return;
+    }
+    if (active.viewer !== undefined && active.viewer !== "markdown") {
+      toastStore.push({ variant: "error", message: "Nur Markdown-Notizen können exportiert werden." });
+      return;
+    }
+    const defaultName = defaultExportFilename(active.filePath, "html");
+    let chosen: string | null;
+    try {
+      chosen = await pickSavePath(defaultName, [
+        { name: "HTML", extensions: ["html", "htm"] },
+      ]);
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+      return;
+    }
+    if (chosen === null) return;
+    try {
+      const themeCss = collectThemeCss();
+      await exportNoteHtml(active.filePath, chosen, themeCss);
+      const filename = chosen.split(/[\\/]/).pop() ?? chosen;
+      toastStore.push({ variant: "clean-merge", message: `Notiz als HTML exportiert — ${filename}` });
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
+  /**
+   * Issue #61 stretch: render the active note via the same Rust pipeline used
+   * by HTML export, then drop the result into a hidden iframe and call
+   * `window.print()`. The native dialog exposes "Save as PDF" on every major
+   * platform — no Tauri print plugin required.
+   */
+  async function exportActiveNotePdf() {
+    const active = tabStore.getActiveTab();
+    if (!active || active.type === "graph") {
+      toastStore.push({ variant: "error", message: "Keine Notiz aktiv." });
+      return;
+    }
+    if (active.viewer !== undefined && active.viewer !== "markdown") {
+      toastStore.push({ variant: "error", message: "Nur Markdown-Notizen können exportiert werden." });
+      return;
+    }
+    try {
+      const themeCss = collectThemeCss();
+      const html = await renderNoteHtml(active.filePath, themeCss);
+      const iframe = document.createElement("iframe");
+      iframe.setAttribute("aria-hidden", "true");
+      iframe.style.position = "fixed";
+      iframe.style.right = "0";
+      iframe.style.bottom = "0";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.style.border = "0";
+      // srcdoc keeps the document in-memory (no blob URL to revoke) so cleanup
+      // is simple and there is no same-origin / CSP surprise for the print hook.
+      iframe.srcdoc = html;
+      iframe.onload = () => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } finally {
+          // Give the webview a moment to surface the print dialog before we
+          // tear down the iframe.
+          setTimeout(() => iframe.remove(), 1000);
+        }
+      };
+      document.body.appendChild(iframe);
+      toastStore.push({ variant: "clean-merge", message: "Druckdialog geöffnet — wähle »Als PDF speichern«." });
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
   /** Issue #63: toggle Reading vs Edit mode on the active markdown tab. */
   function toggleActiveReadingMode() {
     const active = tabStore.getActiveTab();
@@ -406,6 +511,8 @@
       openCommandPalette: () => { commandPaletteOpen = true; },
       toggleBookmark: () => { void toggleActiveBookmark(); },
       openTodayNote: () => { void openTodayNote(); },
+      exportActiveNoteHtml: () => { void exportActiveNoteHtml(); },
+      exportActiveNotePdf: () => { void exportActiveNotePdf(); },
       toggleReadingMode: () => { toggleActiveReadingMode(); },
     });
     initHotkeyOverrides();
