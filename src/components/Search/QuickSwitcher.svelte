@@ -22,6 +22,26 @@
   // Recently opened files from tabStore (for empty-query state)
   let recentFiles = $state<Array<{ filename: string; path: string }>>([]);
 
+  // Issue #46: clear stale query + results when the active vault changes.
+  // The modal retains local state across open/close, so a filename search
+  // run in Vault A would otherwise still render its old hits after
+  // switching to Vault B (hits pointing to files outside the new root).
+  let prevVaultPath: string | null = null;
+  let vaultSubInitialised = false;
+  const unsubVault = vaultStore.subscribe((state) => {
+    if (!vaultSubInitialised) {
+      vaultSubInitialised = true;
+      prevVaultPath = state.currentPath;
+      return;
+    }
+    if (state.currentPath !== prevVaultPath) {
+      prevVaultPath = state.currentPath;
+      query = "";
+      results = [];
+      selectedIndex = 0;
+    }
+  });
+
   // Subscribe to tabStore for recents
   const unsubTab = tabStore.subscribe((state) => {
     // Extract unique file paths from tabs, take last 8
@@ -130,6 +150,7 @@
   import { onDestroy } from "svelte";
   onDestroy(() => {
     unsubTab();
+    unsubVault();
   });
 </script>
 
