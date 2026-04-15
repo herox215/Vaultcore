@@ -265,8 +265,29 @@
       toggleBookmark: () => { void toggleActiveBookmark(); },
     });
     document.addEventListener("keydown", handleKeydown, { capture: true });
-    return () => document.removeEventListener("keydown", handleKeydown, { capture: true });
+    document.addEventListener("contextmenu", handleContextMenu, { capture: true });
+    return () => {
+      document.removeEventListener("keydown", handleKeydown, { capture: true });
+      document.removeEventListener("contextmenu", handleContextMenu, { capture: true });
+    };
   });
+
+  // Issue #47: suppress the native webview context menu inside app chrome.
+  // Elements that still need the OS menu (e.g. inputs in modals) can opt out
+  // by attaching their own `oncontextmenu` that calls `e.stopPropagation()`.
+  // The sidebar tree and bookmarks panel render their own menus so they're
+  // unaffected here.
+  function handleContextMenu(e: MouseEvent) {
+    const target = e.target as Element | null;
+    if (target && typeof target.closest === "function") {
+      // Allow native menu inside real text entry (inputs, textareas,
+      // contenteditable) so copy/paste/spellcheck stay available.
+      if (target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]')) {
+        return;
+      }
+    }
+    e.preventDefault();
+  }
 
   function handleKeydown(e: KeyboardEvent) {
     if (settingsOpen || inlineRenameActive()) return;
