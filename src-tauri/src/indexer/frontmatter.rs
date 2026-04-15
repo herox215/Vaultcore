@@ -72,9 +72,14 @@ pub fn parse_frontmatter(content: &str) -> Frontmatter {
         return Frontmatter::default();
     };
 
+    let mut aliases = read_string_seq_or_scalar(&value, "aliases");
+    if aliases.is_empty() {
+        aliases = read_string_seq_or_scalar(&value, "alias");
+    }
+
     Frontmatter {
         tags: read_string_seq_or_scalar(&value, "tags"),
-        aliases: read_string_seq_or_scalar(&value, "aliases"),
+        aliases,
     }
 }
 
@@ -157,6 +162,24 @@ mod tests {
         let fm = parse_frontmatter(content);
         assert_eq!(fm.tags, vec!["rust"]);
         assert_eq!(fm.aliases, vec!["ui", "interface"]);
+    }
+
+    #[test]
+    fn alias_singular_list_form() {
+        let content = "---\nalias: [UI, User Interface]\n---\nbody";
+        assert_eq!(extract_yaml_aliases(content), vec!["ui", "user interface"]);
+    }
+
+    #[test]
+    fn alias_singular_scalar_form() {
+        let content = "---\nalias: UI\n---\nbody";
+        assert_eq!(extract_yaml_aliases(content), vec!["ui"]);
+    }
+
+    #[test]
+    fn aliases_plural_takes_priority_over_singular() {
+        let content = "---\naliases: [plural]\nalias: [singular]\n---\nbody";
+        assert_eq!(extract_yaml_aliases(content), vec!["plural"]);
     }
 
     #[test]
