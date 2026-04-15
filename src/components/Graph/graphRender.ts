@@ -7,49 +7,64 @@
 //   updateGraph(handle, data)
 //   destroyGraph(handle)
 //
-// It also owns the ForceAtlas2 layout pass (~50 iterations, static after).
+// Layout is driven by d3-force to match Obsidian's physics feel (stronger
+// separation, less jitter, natural cooling via d3-force's own alpha decay).
+// Sigma remains the renderer — only the layout engine was swapped.
 // Node sizing, center-node accent, unresolved styling and the hover-dim
 // effect are applied through sigma's node/edge reducers so they can react
 // live to the current center + hovered node without rebuilding the graph.
 
 import Graph from "graphology";
 import Sigma from "sigma";
-import forceAtlas2 from "graphology-layout-forceatlas2";
-import FA2LayoutSupervisor from "graphology-layout-forceatlas2/worker";
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  type Simulation,
+  type SimulationLinkDatum,
+  type SimulationNodeDatum,
+} from "d3-force";
 import type { GraphEdge, GraphNode, LocalGraph } from "../../types/links";
 
 /**
- * User-tunable force parameters. Mapped onto the subset of ForceAtlas2
- * settings that actually shape the "organic" feel — gravity, repulsion,
- * edge-weight influence, and the motion damping (`slowDown`). Defaults are
- * tuned for an Obsidian-like drift rather than FA2's aggressive convergence.
+ * User-tunable force parameters. Field names are kept from the previous
+ * ForceAtlas2 shape so callers (GraphForces.svelte UI, persisted state in
+ * GraphView) don't need to change. Internally each field maps to the nearest
+ * d3-force concept — see `applyForceSettings` below.
  */
 export interface ForceSettings {
-  /** Center pull. 0 = graph drifts apart, 5 = strong clump. */
+  /** Center pull. Maps to d3-force `forceCenter` strength multiplier. */
   gravity: number;
-  /** Node repulsion strength. Higher = nodes push apart more. */
+  /** Node repulsion strength. Maps to d3-force `forceManyBody` strength
+   *  (negative — stronger values push nodes further apart). */
   scalingRatio: number;
-  /** How much edge weight / existence attracts endpoints. */
+  /** How much edge existence attracts endpoints. Maps to the d3-force
+   *  `forceLink` strength multiplier. */
   edgeWeightInfluence: number;
-  /** Motion damping. Higher = slower, calmer movement. */
+  /** Motion damping. Maps inversely to d3-force `velocityDecay` — higher
+   *  values = calmer graph. */
   slowDown: number;
 }
 
 export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
   gravity: 1,
   scalingRatio: 40,
-  edgeWeightInfluence: 1,
+  // 0.7 pulls linked nodes visibly together so clusters form, but
+  // short of 1.0 where the whole graph collapses onto itself.
+  edgeWeightInfluence: 0.7,
   slowDown: 10,
 };
 
-/** Interface shape of the running FA2 supervisor we care about. */
-interface FA2Supervisor {
-  start(): unknown;
-  stop(): unknown;
-  kill(): unknown;
-  isRunning(): boolean;
-  settings: Record<string, unknown>;
+/** Node datum handed to d3-force — references the underlying graphology id
+ *  so `forceLink` can resolve source/target by string. */
+interface SimNode extends SimulationNodeDatum {
+  id: string;
+  radius: number;
 }
+
+type SimLink = SimulationLinkDatum<SimNode>;
 
 /** Options accepted by `mountGraph` — future-proofed for the #32 global view.
  *  The `| undefined` on every optional member is deliberate: svelte-check runs
@@ -73,8 +88,9 @@ export interface GraphRenderOptions {
   /** Callback for double-click on empty space (used by the global graph's
    *  "fit to view" reset). */
   onStageDoubleClick?: (() => void) | undefined;
-  /** Number of ForceAtlas2 iterations. Local graph uses the default 50
-   *  for snappy redraws; global graph passes ~300 for a 2 s warm-up. */
+  /** Legacy knob from the FA2 era. Still accepted for API stability but
+   *  d3-force's alpha decay drives cooling natively — larger values simply
+   *  mean a warmer initial state. */
   layoutIterations?: number | undefined;
   /** Enable drag-to-reposition on individual nodes. Defaults to false. */
   enableNodeDrag?: boolean | undefined;
@@ -84,9 +100,9 @@ export interface GraphRenderOptions {
   dimForNode?: ((id: string, attrs: Record<string, unknown>) => number | undefined) | undefined;
   /** Labels always shown for these node ids regardless of zoom threshold. */
   alwaysShowLabel?: ((id: string) => boolean) | undefined;
-  /** Force-simulation parameters. Passing this enables continuous (live)
-   *  layout via the ForceAtlas2 worker — the default batch `layoutIterations`
-   *  path is used when this field is absent. */
+  /** Force-simulation parameters. Passing this enables the continuous live
+   *  layout; when absent a single warm-up tick-set is run and the simulation
+   *  is then stopped. */
   forceSettings?: ForceSettings | undefined;
   /** Start the continuous simulation paused. Toggle later via
    *  `setLayoutFrozen`. No effect when `forceSettings` is absent. */
@@ -105,31 +121,14 @@ export interface GraphHandle {
   neighborMap: Map<string, Set<string>>;
   /** Disposers for DOM listeners attached outside sigma. */
   disposers: Array<() => void>;
-  /** Live ForceAtlas2 supervisor when continuous sim is active. */
-  layoutSupervisor: FA2Supervisor | null;
-  /** Frozen state mirror — drives pause/resume without reading the supervisor. */
+  /** Live d3-force simulation when continuous sim is active. */
+  simulation: Simulation<SimNode, SimLink> | null;
+  /** Frozen state mirror — drives pause/resume without reading the sim. */
   frozen: boolean;
-  /** Active cooling monitor — responsible for stopping the supervisor once
-   *  the graph has settled. Null when no monitor is running. */
-  cooling: CoolingMonitor | null;
+  /** Cached SimNode list indexed by id — used by update/drag handlers to
+   *  preserve positions and set fx/fy without rebuilding the d3-force state. */
+  simNodes: Map<string, SimNode>;
 }
-
-/** RAF-driven settlement watcher. Each frame samples node positions, computes
- *  average per-node movement², and stops the supervisor once motion falls
- *  below the threshold for enough consecutive frames (or a hard time cap). */
-interface CoolingMonitor {
-  raf: number | null;
-  lastSample: Map<string, { x: number; y: number }>;
-  lowEnergyFrames: number;
-  startTime: number;
-}
-
-/** Average per-node movement² below this counts as "quiet" for cooldown. */
-const COOLING_STOP_ENERGY = 0.005;
-/** Consecutive quiet frames needed to declare the graph settled. */
-const COOLING_STOP_FRAMES = 30;
-/** Hard cap on simulation runtime — safety net for pathological graphs. */
-const COOLING_MAX_MS = 15_000;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -175,16 +174,24 @@ function resolveColor(container: HTMLElement, color: string): string {
  */
 function populateGraph(graph: Graph, data: LocalGraph): void {
   graph.clear();
+  // Seed positions on a disc whose radius scales with node count. d3-force
+  // works in raw units; starting every node inside a 1x1 square forces the
+  // simulation to explode out of a degenerate cluster before anything useful
+  // can form. A radius proportional to sqrt(N) matches the expected rest
+  // distance of a connected graph with link.distance ~80 and keeps the
+  // visual kick-off loose enough that clusters have room to resolve.
+  const n = data.nodes.length;
+  const spread = 40 * Math.max(4, Math.sqrt(n));
   for (const node of data.nodes) {
-    // Random seed position — ForceAtlas2 needs non-zero coordinates to escape
-    // the trivial equilibrium at the origin. The actual layout overwrites these.
+    const angle = Math.random() * Math.PI * 2;
+    const r = spread * Math.sqrt(Math.random());
     graph.addNode(node.id, {
       label: node.label,
       path: node.path,
       backlinkCount: node.backlinkCount,
       resolved: node.resolved,
-      x: Math.random() - 0.5,
-      y: Math.random() - 0.5,
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r,
       size: nodeSize(node, false),
     });
   }
@@ -195,130 +202,150 @@ function populateGraph(graph: Graph, data: LocalGraph): void {
   }
 }
 
-/** Start (or restart) the cooling monitor. Cancels any previous monitor,
- *  seeds with current node positions, and polls each frame. When the graph
- *  settles or the time cap is hit the supervisor is stopped. */
-function startCooling(handle: GraphHandle): void {
-  stopCooling(handle);
-  if (!handle.layoutSupervisor) return;
-
-  const state: CoolingMonitor = {
-    raf: null,
-    lastSample: new Map(),
-    lowEnergyFrames: 0,
-    startTime: performance.now(),
-  };
-  handle.cooling = state;
-
-  // Seed snapshot so the first tick's delta is against the current frame.
-  handle.graph.forEachNode((id, attrs) => {
-    state.lastSample.set(id, {
-      x: Number(attrs.x ?? 0),
-      y: Number(attrs.y ?? 0),
-    });
+/** Build the d3-force node/link datum arrays from the current graphology
+ *  graph. When `reuse` is provided, nodes with the same id keep their
+ *  existing position/velocity so incremental updates don't jump. */
+function buildSimState(
+  graph: Graph,
+  reuse: Map<string, SimNode> | null,
+): { nodes: SimNode[]; links: SimLink[]; index: Map<string, SimNode> } {
+  const nodes: SimNode[] = [];
+  const index = new Map<string, SimNode>();
+  graph.forEachNode((id, attrs) => {
+    const existing = reuse?.get(id);
+    const backlinkCount = Number(attrs.backlinkCount ?? 0);
+    const radius = Math.max(4, Math.min(12, 4 + backlinkCount * 1.5));
+    const sim: SimNode =
+      existing ?? {
+        id,
+        x: Number(attrs.x ?? Math.random() - 0.5),
+        y: Number(attrs.y ?? Math.random() - 0.5),
+        radius,
+      };
+    sim.radius = radius;
+    nodes.push(sim);
+    index.set(id, sim);
   });
-
-  const tick = (): void => {
-    const sv = handle.layoutSupervisor;
-    if (!sv || !sv.isRunning()) {
-      state.raf = null;
-      return;
+  const links: SimLink[] = [];
+  graph.forEachEdge((_edge, _attrs, source, target) => {
+    if (index.has(source) && index.has(target)) {
+      links.push({ source, target });
     }
-
-    let totalSq = 0;
-    let count = 0;
-    handle.graph.forEachNode((id, attrs) => {
-      const prev = state.lastSample.get(id);
-      const x = Number(attrs.x ?? 0);
-      const y = Number(attrs.y ?? 0);
-      if (prev) {
-        const dx = x - prev.x;
-        const dy = y - prev.y;
-        totalSq += dx * dx + dy * dy;
-        count += 1;
-      }
-      state.lastSample.set(id, { x, y });
-    });
-    const avg = count > 0 ? totalSq / count : 0;
-
-    if (avg < COOLING_STOP_ENERGY) {
-      state.lowEnergyFrames += 1;
-    } else {
-      state.lowEnergyFrames = 0;
-    }
-
-    const elapsed = performance.now() - state.startTime;
-    if (
-      state.lowEnergyFrames >= COOLING_STOP_FRAMES ||
-      elapsed > COOLING_MAX_MS
-    ) {
-      try {
-        sv.stop();
-      } catch {
-        /* ignore */
-      }
-      state.raf = null;
-      return;
-    }
-
-    state.raf = requestAnimationFrame(tick);
-  };
-
-  state.raf = requestAnimationFrame(tick);
+  });
+  return { nodes, links, index };
 }
 
-/** Cancel the cooling monitor without touching the supervisor. */
-function stopCooling(handle: GraphHandle): void {
-  if (!handle.cooling) return;
-  if (handle.cooling.raf !== null) {
+/** Translate the user-facing ForceSettings knobs onto the running d3-force
+ *  simulation. All strength tweaks apply immediately via the force accessors. */
+function applyForceSettings(
+  simulation: Simulation<SimNode, SimLink>,
+  settings: ForceSettings,
+): void {
+  // slowDown slider (0 … 20) → velocityDecay (0.1 … 0.9) centered on d3-force's
+  // native default of 0.4 at slowDown = 10. Too aggressive damping (>0.8) kills
+  // motion before the simulation can spread the graph.
+  const decay = Math.min(0.9, Math.max(0.1, 0.4 + 0.04 * (settings.slowDown - 10)));
+  simulation.velocityDecay(decay);
+
+  const charge = simulation.force("charge") as
+    | ReturnType<typeof forceManyBody<SimNode>>
+    | undefined;
+  if (charge) {
+    // Default scalingRatio=40 → strength -600. Enough to separate
+    // unconnected nodes while links pull the connected ones into clusters.
+    // Note: no distanceMax — an earlier attempt to cap repulsion range
+    // killed cluster formation because the whole graph started too densely
+    // packed and couldn't escape the tight initial seed.
+    charge.strength(-(settings.scalingRatio * 15));
+  }
+
+  const link = simulation.force("link") as
+    | ReturnType<typeof forceLink<SimNode, SimLink>>
+    | undefined;
+  if (link) {
+    const strength = Math.min(1, Math.max(0, settings.edgeWeightInfluence));
+    link.strength(strength);
+    // Shorter rest length pulls linked nodes closer — combined with the
+    // capped repulsion range above this produces visible clusters instead
+    // of an evenly-spread globe.
+    link.distance(80);
+  }
+
+  const center = simulation.force("center") as
+    | ReturnType<typeof forceCenter<SimNode>>
+    | undefined;
+  if (center) {
+    center.strength(Math.max(0, Math.min(1, settings.gravity * 0.1)));
+  }
+}
+
+/** Push sim-node positions back onto graphology so sigma's reducers see them.
+ *  Called on every simulation tick. */
+function syncSimToGraph(handle: GraphHandle): void {
+  const { graph, simNodes } = handle;
+  for (const [id, sim] of simNodes) {
+    if (!graph.hasNode(id)) continue;
+    if (typeof sim.x === "number" && Number.isFinite(sim.x)) {
+      graph.setNodeAttribute(id, "x", sim.x);
+    }
+    if (typeof sim.y === "number" && Number.isFinite(sim.y)) {
+      graph.setNodeAttribute(id, "y", sim.y);
+    }
+  }
+}
+
+/** Create a d3-force simulation around the current graph + settings. */
+function buildSimulation(
+  handle: GraphHandle,
+  settings: ForceSettings | undefined,
+): Simulation<SimNode, SimLink> {
+  const { nodes, links, index } = buildSimState(handle.graph, handle.simNodes);
+  handle.simNodes = index;
+
+  const effective = settings ?? DEFAULT_FORCE_SETTINGS;
+  const simulation = forceSimulation<SimNode>(nodes)
+    .force(
+      "link",
+      forceLink<SimNode, SimLink>(links)
+        .id((n) => n.id)
+        .distance(80),
+    )
+    .force("charge", forceManyBody<SimNode>())
+    .force("center", forceCenter<SimNode>(0, 0))
+    .force(
+      "collide",
+      forceCollide<SimNode>((n) => n.radius + 2),
+    )
+    .alpha(1);
+
+  applyForceSettings(simulation, effective);
+
+  simulation.on("tick", () => {
+    syncSimToGraph(handle);
     try {
-      cancelAnimationFrame(handle.cooling.raf);
+      handle.renderer.refresh({ skipIndexation: true });
+    } catch {
+      /* sigma may be mid-teardown */
+    }
+  });
+  simulation.on("end", () => {
+    // Final sync on natural cool-down.
+    syncSimToGraph(handle);
+    try {
+      handle.renderer.refresh({ skipIndexation: true });
     } catch {
       /* ignore */
     }
-  }
-  handle.cooling = null;
+  });
+
+  return simulation;
 }
 
-/** Reheat the sim: ensure the supervisor is running (unless frozen) and
- *  restart the cooldown clock. Called after drag-release, slider tweaks,
- *  and data updates so the user sees movement in response. */
+/** Reheat the sim so the user sees motion after drag / settings changes. */
 function reheat(handle: GraphHandle): void {
-  if (!handle.layoutSupervisor || handle.frozen) return;
-  // FA2 supervisor with <2 nodes has no edges to apply forces over and can
-  // leave itself in a non-running-but-not-cleanly-stopped state that throws
-  // on the next .start() call. Skip the continuous sim for tiny graphs —
-  // they don't need layout anyway.
+  if (!handle.simulation || handle.frozen) return;
   if (handle.graph.order < 2) return;
-  if (!handle.layoutSupervisor.isRunning()) {
-    try {
-      handle.layoutSupervisor.start();
-    } catch {
-      return;
-    }
-  }
-  startCooling(handle);
-}
-
-/** Run ForceAtlas2 and assign final positions in place. */
-function runLayout(graph: Graph, iterations = 50): void {
-  // Skip layout for degenerate graphs — FA2 with a single node (empty note
-  // with no links) can produce NaN settings and leave the supervisor in an
-  // inconsistent state that breaks every subsequent updateGraph (#43).
-  if (graph.order < 2) return;
-  const settings = forceAtlas2.inferSettings(graph);
-  // Speed up convergence on small graphs.
-  settings.slowDown = 2;
-  settings.gravity = 1;
-  try {
-    forceAtlas2.assign(graph, { iterations, settings });
-  } catch (err) {
-    // Any layout error — NaN settings, worker issue, etc. Leave the
-    // random-seed positions from populateGraph in place rather than
-    // propagating a crash that tears down the panel.
-    // eslint-disable-next-line no-console
-    console.warn("[graphRender] layout assign failed:", err);
-  }
+  handle.simulation.alpha(0.3).restart();
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -336,10 +363,6 @@ export function mountGraph(
 ): GraphHandle {
   const graph = new Graph({ type: "undirected", multi: false });
   populateGraph(graph, data);
-  // Short seed pass so nodes spread out before the live supervisor (or the
-  // final rendered frame) takes over. Without this FA2 starts from near-zero
-  // positions and the first few frames look like a single cluster.
-  runLayout(graph, options.forceSettings ? 30 : (options.layoutIterations ?? 50));
 
   const accent = resolveColor(container, options.accentColor);
   const nodeColor = resolveColor(container, options.nodeColor);
@@ -371,37 +394,25 @@ export function mountGraph(
     hoveredNode: null,
     neighborMap,
     disposers: [],
-    layoutSupervisor: null,
+    simulation: null,
     frozen: options.startFrozen === true,
-    cooling: null,
+    simNodes: new Map(),
   };
 
-  // Live ForceAtlas2 supervisor — organic, Obsidian-style drift. Sigma
-  // listens to node-attr changes emitted by the worker and redraws each
-  // time, so we don't need an explicit requestAnimationFrame loop here.
-  if (options.forceSettings) {
+  // Spin up the d3-force simulation — skip degenerate graphs to avoid
+  // spurious NaN positions and to match the previous FA2 guard.
+  if (graph.order >= 2) {
     try {
-      const supervisor = new (FA2LayoutSupervisor as unknown as {
-        new (g: Graph, p: { settings: Record<string, unknown> }): FA2Supervisor;
-      })(graph, {
-        settings: {
-          ...forceAtlas2.inferSettings(graph),
-          ...options.forceSettings,
-          barnesHutOptimize: graph.order > 200,
-          adjustSizes: true,
-        },
-      });
-      handle.layoutSupervisor = supervisor;
-      if (!handle.frozen) {
-        supervisor.start();
-        startCooling(handle);
+      handle.simulation = buildSimulation(handle, options.forceSettings);
+      if (handle.frozen) {
+        handle.simulation.stop();
       }
     } catch (err) {
-      // Worker spawn can fail in CSP-restricted or jsdom environments.
-      // Fall back to the existing static layout and log so we notice.
+      // Any construction error — leave the random-seed positions in place
+      // rather than propagating a crash that tears down the panel.
       // eslint-disable-next-line no-console
-      console.warn("[graphRender] live layout unavailable, static fallback:", err);
-      handle.layoutSupervisor = null;
+      console.warn("[graphRender] d3-force setup failed:", err);
+      handle.simulation = null;
     }
   }
 
@@ -533,24 +544,24 @@ export function mountGraph(
   }
 
   // Drag-to-reposition — sigma 3 exposes raw mouse events; capture & convert
-  // viewport coords to graph coords and write back to the node attributes.
+  // viewport coords to graph coords, pin the d3-force node via fx/fy while
+  // dragging, then release on mouseup so the simulation can reclaim it.
   if (options.enableNodeDrag) {
     let draggedNode: string | null = null;
     let draggingActive = false;
 
-    let resumeOnRelease = false;
-
     renderer.on("downNode", ({ node, event }) => {
       draggedNode = node;
       draggingActive = true;
-      // Pause cooling + supervisor while dragging so they don't fight the
-      // user's finger. On release we reheat so the drop rings through.
-      stopCooling(handle);
-      if (handle.layoutSupervisor && handle.layoutSupervisor.isRunning()) {
-        handle.layoutSupervisor.stop();
+      const sim = handle.simNodes.get(node);
+      if (sim) {
+        sim.fx = sim.x;
+        sim.fy = sim.y;
       }
-      resumeOnRelease = true;
-      // Disable camera movement while dragging a node.
+      // Gentle reheat so the user's drag ripples through neighbours.
+      if (handle.simulation && !handle.frozen) {
+        handle.simulation.alphaTarget(0.3).restart();
+      }
       renderer.getCamera().disable();
       event.preventSigmaDefault();
     });
@@ -561,17 +572,28 @@ export function mountGraph(
       const coords = renderer.viewportToGraph({ x: ev.x, y: ev.y });
       graph.setNodeAttribute(draggedNode, "x", coords.x);
       graph.setNodeAttribute(draggedNode, "y", coords.y);
+      const sim = handle.simNodes.get(draggedNode);
+      if (sim) {
+        sim.fx = coords.x;
+        sim.fy = coords.y;
+      }
       ev.preventSigmaDefault();
     };
     const onMouseUp = () => {
       if (draggingActive) {
         draggingActive = false;
+        const sim = draggedNode ? handle.simNodes.get(draggedNode) : null;
         draggedNode = null;
         renderer.getCamera().enable();
-        // Reheat after drop so neighbors physically respond to the released
-        // node. reheat() is a no-op when the sim is frozen by the user.
-        if (resumeOnRelease) reheat(handle);
-        resumeOnRelease = false;
+        if (sim) {
+          sim.fx = null;
+          sim.fy = null;
+        }
+        // Release alphaTarget so the simulation cools naturally.
+        if (handle.simulation && !handle.frozen) {
+          handle.simulation.alphaTarget(0);
+          reheat(handle);
+        }
       }
     };
     mouseCaptor.on("mousemovebody", onMouseMove);
@@ -598,8 +620,9 @@ export function mountGraph(
 }
 
 /**
- * Replace the graph's nodes + edges with a fresh payload. Re-runs the layout
- * so newly added nodes snap into place.
+ * Replace the graph's nodes + edges with a fresh payload. Re-seeds the
+ * d3-force simulation so newly added nodes snap in while existing ones
+ * keep their current position.
  *
  * If `relayout` is false, existing node positions are preserved for any id
  * still present in the new dataset — useful for incremental refreshes in the
@@ -611,66 +634,78 @@ export function updateGraph(
   opts: { relayout?: boolean; iterations?: number } = {},
 ): void {
   const relayout = opts.relayout ?? true;
-  const iterations = opts.iterations ?? handle.options.layoutIterations ?? 50;
 
-  // Pause the live supervisor so it doesn't race with `graph.clear()` /
-  // re-seed. We'll restart it at the end if it was running and the view is
-  // not frozen. Guard both the status check and stop() — a supervisor that
-  // hit a bad state on a previous single-node update can throw on either
-  // call, which otherwise blows away the rest of updateGraph and leaves the
-  // panel stuck.
-  let wasRunning = false;
-  try {
-    wasRunning =
-      handle.layoutSupervisor !== null &&
-      handle.layoutSupervisor.isRunning();
-  } catch {
-    wasRunning = false;
-  }
-  if (wasRunning && handle.layoutSupervisor) {
-    try {
-      handle.layoutSupervisor.stop();
-    } catch {
-      /* ignore — reheat will be skipped below */
-    }
-  }
+  // Snapshot existing positions before we rebuild the graphology graph so we
+  // can merge them back in after populateGraph clears everything.
+  const prevPos = new Map<string, { x: number; y: number }>();
+  handle.graph.forEachNode((id, attrs) => {
+    prevPos.set(id, {
+      x: Number(attrs.x ?? 0),
+      y: Number(attrs.y ?? 0),
+    });
+  });
+
+  populateGraph(handle.graph, data);
 
   if (!relayout) {
     // Preserve positions for nodes that already exist.
-    const prevPos = new Map<string, { x: number; y: number }>();
-    handle.graph.forEachNode((id, attrs) => {
-      prevPos.set(id, {
-        x: Number(attrs.x ?? 0),
-        y: Number(attrs.y ?? 0),
-      });
-    });
-    populateGraph(handle.graph, data);
     for (const [id, pos] of prevPos) {
       if (handle.graph.hasNode(id)) {
         handle.graph.setNodeAttribute(id, "x", pos.x);
         handle.graph.setNodeAttribute(id, "y", pos.y);
       }
     }
-    // Only run a short refinement pass if there are new nodes.
-    let newCount = 0;
-    handle.graph.forEachNode((id) => {
-      if (!prevPos.has(id)) newCount += 1;
-    });
-    if (newCount > 0) {
-      runLayout(handle.graph, Math.min(iterations, 30));
-    }
-  } else {
-    populateGraph(handle.graph, data);
-    runLayout(handle.graph, iterations);
   }
+
+  // Prune sim nodes that no longer exist in the new graph; keep the rest so
+  // positions/velocities carry over.
+  const reuse = new Map<string, SimNode>();
+  for (const [id, sim] of handle.simNodes) {
+    if (handle.graph.hasNode(id)) reuse.set(id, sim);
+  }
+  if (relayout) {
+    // On vault identity change, also reset seeded x/y on carried-over nodes
+    // so the fresh simulation can spread them — but keep the SimNode object
+    // identity so d3-force doesn't rebuild allocator state unnecessarily.
+    for (const sim of reuse.values()) {
+      sim.x = Math.random() - 0.5;
+      sim.y = Math.random() - 0.5;
+      sim.vx = 0;
+      sim.vy = 0;
+    }
+  }
+  handle.simNodes = reuse;
 
   handle.neighborMap = buildNeighborMap(data.edges);
   handle.hoveredNode = null;
-  handle.renderer.refresh();
 
-  if (wasRunning && handle.layoutSupervisor && !handle.frozen) {
-    reheat(handle);
+  // Rebuild the simulation around the new node/link datums. The previous
+  // simulation is stopped first so it doesn't keep ticking against stale
+  // refs between the two call frames.
+  if (handle.simulation) {
+    handle.simulation.stop();
+    handle.simulation.on("tick", null);
+    handle.simulation.on("end", null);
+    handle.simulation = null;
   }
+  if (handle.graph.order >= 2) {
+    try {
+      handle.simulation = buildSimulation(handle, handle.options.forceSettings);
+      if (handle.frozen) {
+        handle.simulation.stop();
+      } else if (!relayout) {
+        // Cooler restart for incremental refreshes so the view doesn't
+        // jitter for nodes whose neighborhood is unchanged.
+        handle.simulation.alpha(0.3).restart();
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[graphRender] d3-force update failed:", err);
+      handle.simulation = null;
+    }
+  }
+
+  handle.renderer.refresh();
 }
 
 /** Tear down the sigma renderer and remove all listeners. */
@@ -683,15 +718,17 @@ export function destroyGraph(handle: GraphHandle): void {
     }
   }
   handle.disposers.length = 0;
-  stopCooling(handle);
-  if (handle.layoutSupervisor) {
+  if (handle.simulation) {
     try {
-      handle.layoutSupervisor.kill();
+      handle.simulation.stop();
+      handle.simulation.on("tick", null);
+      handle.simulation.on("end", null);
     } catch {
       /* ignore */
     }
-    handle.layoutSupervisor = null;
+    handle.simulation = null;
   }
+  handle.simNodes.clear();
   try {
     handle.renderer.kill();
   } catch {
@@ -701,18 +738,17 @@ export function destroyGraph(handle: GraphHandle): void {
 }
 
 /**
- * Update the live force parameters. Mutates the supervisor's settings in place
- * — the next iteration message to the worker picks them up. No-op when the
- * handle has no supervisor (static-layout mode).
+ * Update the live force parameters. Patches the simulation's forces in
+ * place; the next tick picks up the new strengths. No-op when the handle has
+ * no simulation (degenerate graph).
  */
 export function setForceSettings(
   handle: GraphHandle,
   settings: ForceSettings,
 ): void {
   handle.options = { ...handle.options, forceSettings: settings };
-  if (!handle.layoutSupervisor) return;
-  Object.assign(handle.layoutSupervisor.settings, settings);
-  // Reheat so the change is visible — the graph may have already settled.
+  if (!handle.simulation) return;
+  applyForceSettings(handle.simulation, settings);
   reheat(handle);
 }
 
@@ -724,16 +760,12 @@ export function setForceSettings(
  */
 export function setLayoutFrozen(handle: GraphHandle, frozen: boolean): void {
   handle.frozen = frozen;
-  if (!handle.layoutSupervisor) return;
-  const running = handle.layoutSupervisor.isRunning();
+  if (!handle.simulation) return;
   if (frozen) {
-    stopCooling(handle);
-    if (running) handle.layoutSupervisor.stop();
+    handle.simulation.stop();
     return;
   }
-  // Un-freezing — reheat so the user sees motion resume.
-  if (!running) handle.layoutSupervisor.start();
-  startCooling(handle);
+  handle.simulation.alpha(0.3).restart();
 }
 
 /**
