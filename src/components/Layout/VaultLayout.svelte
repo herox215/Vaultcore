@@ -9,6 +9,7 @@
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
+  import { bookmarksStore } from "../../store/bookmarksStore";
   import { vaultStore } from "../../store/vaultStore";
   import { SHORTCUTS, handleShortcut, type ShortcutContext, type ShortcutGuard } from "../../lib/shortcuts";
   import { createFile } from "../../ipc/commands";
@@ -210,6 +211,22 @@
     }
   }
 
+  /** Issue #12: toggle bookmark on the active tab's file path. */
+  async function toggleActiveBookmark() {
+    let captured: string | null = null;
+    const u1 = vaultStore.subscribe((s) => { captured = s.currentPath; });
+    u1();
+    const vaultPath: string | null = captured;
+    if (vaultPath === null) return;
+    const active = tabStore.getActiveTab();
+    if (!active || active.type === "graph") return;
+    const abs = active.filePath;
+    const prefix = `${vaultPath}/`;
+    if (!abs.startsWith(prefix)) return;
+    const rel = abs.slice(prefix.length).replace(/\\/g, "/");
+    await bookmarksStore.toggle(rel, vaultPath);
+  }
+
   function handleSelect(path: string) {
     selectedPath = path;
   }
@@ -238,6 +255,7 @@
       },
       createNewNote: () => { void createNewNote(); },
       openGraph: () => { tabStore.openGraphTab(); },
+      toggleBookmark: () => { void toggleActiveBookmark(); },
     };
     const guard: ShortcutGuard = {
       settingsOpen,

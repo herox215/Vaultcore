@@ -44,6 +44,7 @@ function makeCtx(overrides: Partial<ShortcutContext> = {}): ShortcutContext {
     closeActiveTab: vi.fn(),
     createNewNote: vi.fn(),
     openGraph: vi.fn(),
+    toggleBookmark: vi.fn(),
     ...overrides,
   };
 }
@@ -71,10 +72,11 @@ describe("SHORTCUTS array", () => {
     "next-tab",
     "close-tab",
     "open-graph", // #32: Cmd/Ctrl+Shift+G — global graph tab
+    "toggle-bookmark", // #12: Cmd/Ctrl+D — toggle bookmark on active note
   ];
 
-  it("contains exactly 10 entries with the correct ids in order", () => {
-    expect(SHORTCUTS).toHaveLength(10);
+  it("contains exactly 11 entries with the correct ids in order", () => {
+    expect(SHORTCUTS).toHaveLength(11);
     const ids = SHORTCUTS.map((s) => s.id);
     expect(ids).toEqual(EXPECTED_IDS);
   });
