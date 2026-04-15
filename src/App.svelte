@@ -6,6 +6,7 @@
   import { tabStore } from "./store/tabStore";
   import { toastStore } from "./store/toastStore";
   import { progressStore } from "./store/progressStore";
+  import { snippetsStore } from "./store/snippetsStore";
   import {
     getRecentVaults,
     openVault,
@@ -22,6 +23,42 @@
 
   let recent: RecentVault[] = $state([]);
   let unlistenProgress: (() => void) | null = null;
+
+  // Custom CSS snippets (#64): keep one HTMLStyleElement per enabled snippet
+  // mounted at the top of document.head, tagged with data-snippet="<filename>".
+  // We manage these imperatively because Svelte template style blocks are
+  // compiler-scoped — inline CSS text can't be piped into them at runtime.
+  // Reacting to the store keeps toggling instant (no restart, no remount).
+  const SNIPPET_ATTR = "data-snippet";
+  const unsubSnippets = snippetsStore.subscribe((s) => {
+    // Run after Svelte finishes mounting so document.head exists during SSR-like
+    // early ticks (unit tests / jsdom). Defer to a microtask if head isn't ready.
+    if (typeof document === "undefined") return;
+    const head = document.head;
+    if (!head) return;
+    const active = s.enabled.filter((name) => s.contents[name] !== undefined);
+    const activeSet = new Set(active);
+    // Remove tags for snippets that are no longer enabled or whose contents
+    // disappeared (e.g. the file was deleted on disk).
+    const existing = head.querySelectorAll(`style[${SNIPPET_ATTR}]`);
+    for (const el of Array.from(existing)) {
+      const name = el.getAttribute(SNIPPET_ATTR) ?? "";
+      if (!activeSet.has(name)) el.remove();
+    }
+    // Add / update tags for everything that should be active now.
+    for (const name of active) {
+      const css = s.contents[name] ?? "";
+      let el = head.querySelector<HTMLStyleElement>(
+        `style[${SNIPPET_ATTR}="${CSS.escape(name)}"]`,
+      );
+      if (!el) {
+        el = document.createElement("style");
+        el.setAttribute(SNIPPET_ATTR, name);
+        head.appendChild(el);
+      }
+      if (el.textContent !== css) el.textContent = css;
+    }
+  });
 
   // Index-corrupt recovery dialog — shown when openVault fails with
   // IndexCorrupt. Confirming wipes .vaultcore/index/tantivy + the version
@@ -50,6 +87,9 @@
       // Refresh recent-vaults list so the just-opened entry floats to the top
       // next time the Welcome card is shown.
       recent = await getRecentVaults();
+      // Snippets are per-vault — reload the enabled set and CSS text now
+      // that we know which vault is active.
+      void snippetsStore.load(info.path);
     } catch (err) {
       progressStore.finish();
       const ve = toVaultError(err);
@@ -152,6 +192,7 @@
 
   onDestroy(() => {
     unlistenProgress?.();
+    unsubSnippets();
   });
 </script>
 
