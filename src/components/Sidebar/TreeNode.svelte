@@ -8,6 +8,7 @@
   import InlineRename from "./InlineRename.svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
+  import { tabStore } from "../../store/tabStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { sortEntries, type SortBy } from "../../lib/treeState";
@@ -23,6 +24,10 @@
     onPathChanged: (oldPath: string, newPath: string) => void;
     onExpandToggle?: (relPath: string, isExpanded: boolean) => void;
     initiallyExpanded?: boolean;
+    /** Vault-relative folder paths persisted as expanded — propagated through
+     *  the recursive tree so deeply nested descendants can restore their
+     *  open/closed state on mount instead of always starting collapsed. */
+    expandedPaths?: readonly string[];
     sortBy?: SortBy;
   }
 
@@ -36,6 +41,7 @@
     onPathChanged,
     onExpandToggle,
     initiallyExpanded = false,
+    expandedPaths = [],
     sortBy = "name",
   }: Props = $props();
 
@@ -323,22 +329,33 @@
     showDeleteConfirm = false;
   }
 
+  /**
+   * Persist this folder as expanded in the Sidebar's TreeState so later
+   * re-mounts (e.g. triggered by a tree refresh) start expanded too.
+   */
+  function persistExpanded() {
+    if (!entry.is_dir) return;
+    const vault = getVaultRoot();
+    const rel = vault ? toRelPath(entry.path, vault) : entry.path;
+    onExpandToggle?.(rel, true);
+  }
+
   async function handleNewFileHere() {
     closeContextMenu();
     try {
       const newPath = await createFile(entry.path, "");
-      if (!expanded) {
-        expanded = true;
-        await loadChildren();
-      } else {
-        await loadChildren();
-      }
-      // Find the newly created entry and trigger inline rename
-      const newEntry = children.find((c) => c.path === newPath);
-      if (newEntry) {
-        // Trigger rename on the new entry — handled via child component
-        // The child will receive isNewFile=true
-      }
+      // Issue #50: keep the containing folder expanded after a create.
+      // The assignments are intentional even when `expanded` was already
+      // true — a simultaneous watcher-driven tree refresh can otherwise
+      // race with the local state flip. Persist the expanded flag so a
+      // full re-mount of this subtree restores it.
+      expanded = true;
+      persistExpanded();
+      await loadChildren();
+      expanded = true;
+      // Open the new note so the active-tab reveal hook (VaultLayout)
+      // selects it in the tree automatically.
+      tabStore.openTab(newPath);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -349,12 +366,11 @@
     closeContextMenu();
     try {
       await createFolder(entry.path, "");
-      if (!expanded) {
-        expanded = true;
-        await loadChildren();
-      } else {
-        await loadChildren();
-      }
+      // Issue #50: same expanded-state protection as handleNewFileHere.
+      expanded = true;
+      persistExpanded();
+      await loadChildren();
+      expanded = true;
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -667,7 +683,13 @@
           onRefreshParent={refreshChildren}
           {onPathChanged}
           {onExpandToggle}
-          initiallyExpanded={false}
+          initiallyExpanded={(() => {
+            const vault = getVaultRoot();
+            if (!vault) return false;
+            const rel = toRelPath(child.path, vault);
+            return child.is_dir && rel !== null && expandedPaths.includes(rel);
+          })()}
+          {expandedPaths}
           {sortBy}
         />
       {/each}
