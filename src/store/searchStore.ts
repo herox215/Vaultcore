@@ -14,6 +14,7 @@
 import { writable } from "svelte/store";
 import type { SearchResult } from "../types/search";
 import { searchFulltext } from "../ipc/commands";
+import { isVaultError } from "../types/errors";
 import { vaultStore } from "./vaultStore";
 
 export interface SearchStoreState {
@@ -27,6 +28,8 @@ export interface SearchStoreState {
   isSearching: boolean;
   /** True while a rebuild_index IPC call is in-flight. */
   isRebuilding: boolean;
+  /** True when the search index is stale or corrupt (Issue #82). */
+  indexStale: boolean;
   /** Controls which sidebar panel is visible (D-01). */
   activeTab: "files" | "search" | "tags";
 }
@@ -38,6 +41,7 @@ const initial: SearchStoreState = {
   totalFiles: 0,
   isSearching: false,
   isRebuilding: false,
+  indexStale: false,
   activeTab: "files",
 };
 
@@ -70,6 +74,10 @@ function createSearchStore() {
     /** Mark a rebuild_index IPC call as in-flight (true) or completed (false). */
     setRebuilding: (isRebuilding: boolean) =>
       update((s) => ({ ...s, isRebuilding })),
+
+    /** Mark the search index as stale/corrupt or healthy (Issue #82). */
+    setIndexStale: (indexStale: boolean) =>
+      update((s) => ({ ...s, indexStale })),
 
     /** Switch the sidebar between the file browser, search results, and tags panels. */
     setActiveTab: (tab: "files" | "search" | "tags") =>
@@ -109,8 +117,12 @@ function createSearchStore() {
           totalFiles: uniqueFileCount,
           isSearching: false,
         }));
-      } catch {
-        update((s) => ({ ...s, isSearching: false }));
+      } catch (e) {
+        if (isVaultError(e) && e.kind === "IndexCorrupt") {
+          update((s) => ({ ...s, isSearching: false, indexStale: true }));
+        } else {
+          update((s) => ({ ...s, isSearching: false }));
+        }
       }
     },
 
