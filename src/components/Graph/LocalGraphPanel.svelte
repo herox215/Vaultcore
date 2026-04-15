@@ -43,6 +43,11 @@
   let handle: GraphHandle | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFileChange: UnlistenFn | null = null;
+  let resizeObserver: ResizeObserver | null = null;
+
+  // sigma needs a non-zero container — treat anything below this as "layout
+  // not resolved yet" and wait for a ResizeObserver tick.
+  const MIN_MOUNT_DIMENSION = 8;
 
   // Reactive active-tab / doc-version plumbing mirrors OutgoingLinksPanel.
   let tabs = $state<Tab[]>([]);
@@ -128,9 +133,26 @@
     if (!canvasEl || !graphData || !centerRel) return;
     // sigma measures the container on construct — make sure it has a size
     // before we mount. When the panel just opened the layout tick might not
-    // have run yet; defer until next frame if clientWidth is still 0.
-    if (canvasEl.clientWidth === 0 || canvasEl.clientHeight === 0) {
-      requestAnimationFrame(tryMount);
+    // have run yet; wait for the first ResizeObserver entry that reports a
+    // usable width/height. rAF fires before layout so polling it just spins.
+    if (
+      canvasEl.clientWidth < MIN_MOUNT_DIMENSION ||
+      canvasEl.clientHeight < MIN_MOUNT_DIMENSION
+    ) {
+      if (resizeObserver) return;
+      const target = canvasEl;
+      resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width >= MIN_MOUNT_DIMENSION && height >= MIN_MOUNT_DIMENSION) {
+            resizeObserver?.disconnect();
+            resizeObserver = null;
+            tryMount();
+            return;
+          }
+        }
+      });
+      resizeObserver.observe(target);
       return;
     }
     handle = mountGraph(canvasEl, graphData, {
@@ -160,6 +182,10 @@
   // Mount/unmount sigma as the panel expands or collapses.
   $effect(() => {
     if (collapsed) {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
       if (handle) {
         destroyGraph(handle);
         handle = null;
@@ -202,6 +228,10 @@
     unsubTabs();
     unsubVault();
     unlistenFileChange?.();
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
     if (handle) {
       destroyGraph(handle);
       handle = null;
