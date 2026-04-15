@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { themeStore } from "./store/themeStore";
   import { settingsStore } from "./store/settingsStore";
   import { vaultStore } from "./store/vaultStore";
@@ -73,6 +73,12 @@
       unsub();
       if (currentPath === picked) return;
       tabStore.closeAll();
+      // Let EditorPane's $effect observe the now-empty tab list and destroy
+      // the old CM6 views before we resolve the new vault (#39). Without
+      // this tick, mountEditorView can race the reactive unmount — its
+      // paneEl.querySelector lookup silently returns null if the new tab's
+      // container hasn't materialised yet, leaving the editor blank.
+      await tick();
       await loadVault(picked);
     } catch (err) {
       const ve = toVaultError(err);
