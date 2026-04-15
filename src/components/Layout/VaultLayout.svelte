@@ -224,6 +224,10 @@
   }
 
   // Global keyboard shortcuts — delegated to the command registry (#13).
+  // Attached in CAPTURE phase so the handler fires before any descendant
+  // (CodeMirror editor, modal inputs, etc.) can stopPropagation on Cmd/Ctrl
+  // combos we own. Bubble-phase attachment was unreliable once the editor
+  // had focus.
   onMount(() => {
     registerDefaultCommands({
       openQuickSwitcher: () => { quickSwitcherOpen = true; },
@@ -242,6 +246,8 @@
       openGraph: () => { tabStore.openGraphTab(); },
       openCommandPalette: () => { commandPaletteOpen = true; },
     });
+    document.addEventListener("keydown", handleKeydown, { capture: true });
+    return () => document.removeEventListener("keydown", handleKeydown, { capture: true });
   });
 
   function handleKeydown(e: KeyboardEvent) {
@@ -273,7 +279,7 @@
   });
 </script>
 
-<svelte:document onkeydown={handleKeydown} />
+<!-- keydown listener attached via document.addEventListener in onMount (capture phase) -->
 
 <div
   class="vc-vault-layout"
