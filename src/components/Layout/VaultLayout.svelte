@@ -4,6 +4,7 @@
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
   import QuickSwitcher from "../Search/QuickSwitcher.svelte";
+  import CommandPalette from "../CommandPalette/CommandPalette.svelte";
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import { tabStore } from "../../store/tabStore";
@@ -11,7 +12,8 @@
   import { backlinksStore } from "../../store/backlinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { vaultStore } from "../../store/vaultStore";
-  import { SHORTCUTS, handleShortcut, type ShortcutContext, type ShortcutGuard } from "../../lib/shortcuts";
+  import { commandRegistry } from "../../lib/commands/registry";
+  import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
   import { createFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
@@ -28,6 +30,7 @@
   let sidebarCollapsed = $state(false);
   let isDragging = $state(false);
   let quickSwitcherOpen = $state(false);
+  let commandPaletteOpen = $state(false);
   let settingsOpen = $state(false);
   let dragStartX = 0;
   let dragStartWidth = 0;
@@ -237,10 +240,13 @@
     tabStore.openTab(path);
   }
 
-  // Global keyboard shortcuts — delegated to the central SHORTCUTS registry (UI-05 / D-11).
-  // Registered here (not per-TabBar) to avoid duplicate handlers.
-  function handleKeydown(e: KeyboardEvent) {
-    const ctx: ShortcutContext = {
+  // Global keyboard shortcuts — delegated to the command registry (#13).
+  // Attached in CAPTURE phase so the handler fires before any descendant
+  // (CodeMirror editor, modal inputs, etc.) can stopPropagation on Cmd/Ctrl
+  // combos we own. Bubble-phase attachment was unreliable once the editor
+  // had focus.
+  onMount(() => {
+    registerDefaultCommands({
       openQuickSwitcher: () => { quickSwitcherOpen = true; },
       toggleSidebar: () => { toggleSidebar(); },
       openBacklinks: () => { backlinksStore.toggle(); },
@@ -255,14 +261,28 @@
       },
       createNewNote: () => { void createNewNote(); },
       openGraph: () => { tabStore.openGraphTab(); },
+      openCommandPalette: () => { commandPaletteOpen = true; },
       toggleBookmark: () => { void toggleActiveBookmark(); },
-    };
-    const guard: ShortcutGuard = {
-      settingsOpen,
-      quickSwitcherOpen,
-      inlineRenameActive: inlineRenameActive(),
-    };
-    handleShortcut(e, ctx, guard);
+    });
+    document.addEventListener("keydown", handleKeydown, { capture: true });
+    return () => document.removeEventListener("keydown", handleKeydown, { capture: true });
+  });
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (settingsOpen || inlineRenameActive()) return;
+    if (commandPaletteOpen) return; // palette handles its own keys
+    if (quickSwitcherOpen) return; // quick switcher handles its own keys
+
+    const cmd = commandRegistry.findByHotkey(e);
+    if (!cmd) return;
+
+    if (cmd.id === "tabs:next" && e.shiftKey) {
+      e.preventDefault();
+      tabStore.cycleTab(-1);
+      return;
+    }
+    e.preventDefault();
+    commandRegistry.execute(cmd.id);
   }
 
   const isSplit = $derived(rightPaneIds.length > 0);
@@ -276,7 +296,7 @@
   });
 </script>
 
-<svelte:document onkeydown={handleKeydown} />
+<!-- keydown listener attached via document.addEventListener in onMount (capture phase) -->
 
 <div
   class="vc-vault-layout"
@@ -421,6 +441,11 @@
   open={quickSwitcherOpen}
   onClose={() => { quickSwitcherOpen = false; }}
   onOpenFile={handleOpenFile}
+/>
+
+<CommandPalette
+  open={commandPaletteOpen}
+  onClose={() => { commandPaletteOpen = false; }}
 />
 
 <SettingsModal

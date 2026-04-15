@@ -35,7 +35,7 @@
 >
   <!-- Filename line with per-char match highlighting -->
   <span class="vc-qs-row-filename">
-    {#each filenameChars as { char, highlighted } (char + Math.random())}
+    {#each filenameChars as { char, highlighted }, i (i)}
       {#if highlighted}
         <span style="font-weight: 700; color: var(--color-accent)">{char}</span>
       {:else}
