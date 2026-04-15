@@ -73,8 +73,10 @@ const frontmatterField = StateField.define<DecorationSet>({
 // When the body is empty, the editor cursor sits at position 0 — before the
 // block-replace decoration — and typing inserts a character ahead of the
 // opening `---`, which breaks frontmatter detection and exposes the raw YAML.
-// Redirect user-input insertions that land at or inside the frontmatter region
-// to the first body position instead.
+// Redirect user-input insertions that touch the frontmatter region to the
+// first body position instead, while preserving any body-portion deletion
+// that was part of the same change (e.g. Cmd+A → type one char must still
+// remove the body, not leave it intact with the new char prepended — issue #80).
 const frontmatterBoundaryGuard = EditorState.transactionFilter.of((tr) => {
   if (!tr.docChanged) return tr;
   const userEvent = tr.annotation(Transaction.userEvent);
@@ -84,16 +86,45 @@ const frontmatterBoundaryGuard = EditorState.transactionFilter.of((tr) => {
   if (!region) return tr;
 
   const rewrites: ChangeSpec[] = [];
-  let insertedAtBoundary = 0;
   let redirected = false;
+  let finalCursor = region.to;
 
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-    if (fromA < region.to && inserted.length > 0) {
-      rewrites.push({ from: region.to, to: region.to, insert: inserted.toString() });
-      insertedAtBoundary += inserted.length;
-      redirected = true;
-    } else {
+    const touchesFrontmatter = fromA < region.to;
+    const hasInsert = inserted.length > 0;
+
+    if (!touchesFrontmatter) {
+      // Change lives entirely in the body — pass through unmodified.
       rewrites.push({ from: fromA, to: toA, insert: inserted.toString() });
+      if (hasInsert) finalCursor = fromA + inserted.length;
+      else finalCursor = fromA;
+      return;
+    }
+
+    // Change touches (or is entirely inside) the frontmatter region.
+    // Preserve the body-side portion of the deletion [region.to..toA) so
+    // actions like Cmd+A → type one character still remove the original
+    // body (issue #80: without this, the original body was left intact
+    // and the inserted character appeared "before" it, making the doc
+    // look like its content had been moved to the end).
+    const bodyDeletionFrom = Math.max(fromA, region.to);
+    const bodyDeletionTo = Math.max(toA, region.to);
+    if (bodyDeletionFrom < bodyDeletionTo) {
+      rewrites.push({ from: bodyDeletionFrom, to: bodyDeletionTo, insert: "" });
+    }
+
+    if (hasInsert) {
+      rewrites.push({ from: region.to, to: region.to, insert: inserted.toString() });
+      finalCursor = region.to + inserted.length;
+      redirected = true;
+    } else if (fromA < region.to && toA > region.to) {
+      // Pure deletion spanning the boundary — cursor lands at region.to.
+      finalCursor = region.to;
+      redirected = true;
+    } else if (fromA < region.to && toA <= region.to) {
+      // Pure deletion entirely inside the frontmatter — drop it silently
+      // (the filter's whole purpose is to keep the frontmatter intact).
+      redirected = true;
     }
   });
 
@@ -101,7 +132,7 @@ const frontmatterBoundaryGuard = EditorState.transactionFilter.of((tr) => {
 
   return {
     changes: rewrites,
-    selection: { anchor: region.to + insertedAtBoundary },
+    selection: { anchor: finalCursor },
     sequential: true,
   };
 });
