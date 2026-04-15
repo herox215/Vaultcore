@@ -82,8 +82,13 @@ export async function wikiLinkCompletionSource(
     from: match.from + 2, // from is after the [[
     options: results.map((r) => {
       const name = basename(r.path);
+      // Issue #60: surface alias hits as `alias → filename` in the label so
+      // users understand why a note with a non-matching filename surfaced.
+      // The inserted wiki-link target stays the filename — Obsidian-compatible
+      // resolution lives on the backend (`resolved_map_with_aliases`).
+      const label = r.matchedAlias ? `${r.matchedAlias} \u2192 ${name}` : name;
       return {
-        label: name,
+        label,
         detail: r.path, // relative path shown in grey (D-04)
         // apply as function: consume existing `]` chars after the cursor so the
         // final result has exactly `[[Name]]` regardless of closeBrackets state.

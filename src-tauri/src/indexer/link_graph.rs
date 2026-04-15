@@ -399,3 +399,59 @@ pub fn resolved_map(all_rel_paths: &[String]) -> HashMap<String, String> {
 
     map
 }
+
+/// Build a `key (lowercased) → vault-relative path` map that includes both
+/// filename stems AND frontmatter aliases (issue #60).
+///
+/// Collision priority (document in code — do not change without updating
+/// acceptance criteria in issue #60):
+///   1. Exact filename-stem match wins over alias match. If an alias string
+///      is also the stem of a different file, the stem's file is authoritative
+///      and the alias never reaches the map.
+///   2. Between two aliases on different notes, first-indexed wins. The loser
+///      is logged at `info` — same structured-logging strategy used by
+///      `resolve_link`'s stem-collision path.
+///
+/// `file_aliases` is a slice of `(rel_path, aliases)` pairs in whatever order
+/// the `FileIndex` iterator produced. Iteration order drives alias-collision
+/// resolution, matching the "first-indexed wins" rule.
+pub fn resolved_map_with_aliases(
+    all_rel_paths: &[String],
+    file_aliases: &[(String, Vec<String>)],
+) -> HashMap<String, String> {
+    let stem_map = resolved_map(all_rel_paths);
+
+    // Start from the stem map so stems always beat aliases (priority rule #1).
+    let mut map = stem_map.clone();
+
+    for (rel_path, aliases) in file_aliases {
+        for alias in aliases {
+            let key = alias.to_lowercase();
+
+            // Priority 1: stem always wins. If the key is already a stem,
+            // skip — stems are authoritative.
+            if stem_map.contains_key(&key) {
+                continue;
+            }
+
+            // Priority 2: first-indexed alias wins. Log the loser so
+            // vault-health checks can surface duplicate-alias configurations
+            // (same pattern as stem-collision logging in `resolve_link`).
+            if let Some(existing) = map.get(&key) {
+                if existing != rel_path {
+                    log::info!(
+                        "alias collision: '{}' already points to {}, ignoring duplicate from {}",
+                        alias,
+                        existing,
+                        rel_path
+                    );
+                }
+                continue;
+            }
+
+            map.insert(key, rel_path.clone());
+        }
+    }
+
+    map
+}

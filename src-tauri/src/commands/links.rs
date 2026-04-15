@@ -125,7 +125,11 @@ pub async fn get_unresolved_links(
 
 /// Fuzzy filename search for `[[` autocomplete — delegates to nucleo matcher.
 ///
-/// Reuses the same FileIndex + Matcher as search_filename (Phase 3).
+/// Candidate set: filenames AND frontmatter aliases (issue #60). Alias hits
+/// carry the matched alias text in `matched_alias` so the popup can render
+/// `alias → filename`. When the same file surfaces from both a filename and
+/// an alias haystack, the higher-scoring row wins (filename hits take the
+/// tiebreak so ranking stays consistent with pure-filename search).
 #[tauri::command]
 pub async fn suggest_links(
     query: String,
@@ -145,49 +149,103 @@ pub async fn suggest_links(
         }
     };
 
-    let paths: Vec<String> = {
+    // Snapshot paths + per-file aliases under a single lock so the subsequent
+    // matcher work runs without holding the FileIndex mutex.
+    let (paths, file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
         let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        fi.all_relative_paths()
+        let paths = fi.all_relative_paths();
+        let aliases: Vec<(String, Vec<String>)> = fi
+            .all_entries()
+            .map(|(_, m)| (m.relative_path.clone(), m.aliases.clone()))
+            .filter(|(_, a)| !a.is_empty())
+            .collect();
+        (paths, aliases)
     };
 
     // Empty query: return the first N files sorted alphabetically (Obsidian-style
     // "browse" mode for [[|]]). Skip nucleo ranking — there's no pattern to rank by.
+    // Aliases are not surfaced in browse mode; alias surfacing requires a query.
     if query.trim().is_empty() {
         let mut sorted = paths;
         sorted.sort_unstable();
         sorted.truncate(effective_limit);
         return Ok(sorted
             .into_iter()
-            .map(|path| FileMatch { path, score: 0, match_indices: Vec::new() })
+            .map(|path| FileMatch {
+                path,
+                score: 0,
+                match_indices: Vec::new(),
+                matched_alias: None,
+            })
             .collect());
     }
 
     let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
 
     let mut buf: Vec<char> = Vec::new();
-    let mut matches: Vec<(String, u32, Vec<u32>)> = {
+    let mut matches: Vec<FileMatch> = {
         let mut matcher = matcher_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        paths
-            .into_iter()
+
+        // Filename haystack
+        let mut out: Vec<FileMatch> = paths
+            .iter()
             .filter_map(|path| {
                 buf.clear();
-                let haystack = Utf32Str::new(&path, &mut buf);
+                let haystack = Utf32Str::new(path, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
                 let score = pattern.indices(haystack, &mut *matcher, &mut indices)?;
                 indices.sort_unstable();
                 indices.dedup();
-                Some((path, score, indices))
+                Some(FileMatch {
+                    path: path.clone(),
+                    score,
+                    match_indices: indices,
+                    matched_alias: None,
+                })
             })
-            .collect()
+            .collect();
+
+        // Alias haystack — one nucleo pass per (file, alias) pair. Alias
+        // matches carry empty `match_indices` because the indices would point
+        // into the alias string, not the path shown in the popup.
+        for (rel_path, aliases) in &file_aliases {
+            for alias in aliases {
+                buf.clear();
+                let haystack = Utf32Str::new(alias, &mut buf);
+                let mut indices: Vec<u32> = Vec::new();
+                if let Some(score) = pattern.indices(haystack, &mut *matcher, &mut indices) {
+                    out.push(FileMatch {
+                        path: rel_path.clone(),
+                        score,
+                        match_indices: Vec::new(),
+                        matched_alias: Some(alias.clone()),
+                    });
+                }
+            }
+        }
+
+        out
     };
 
-    matches.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    // Per-path dedupe: keep the best row per file. Tie-break prefers filename
+    // hits (matched_alias=None) over alias hits so ranking stays predictable
+    // when a note's filename and alias both score equally.
+    matches.sort_unstable_by(|a, b| {
+        b.score.cmp(&a.score).then_with(|| {
+            // alias None sorts before alias Some at equal score
+            match (&a.matched_alias, &b.matched_alias) {
+                (None, Some(_)) => std::cmp::Ordering::Less,
+                (Some(_), None) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+        })
+    });
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    matches.retain(|m| seen.insert(m.path.clone()));
     matches.truncate(effective_limit);
 
-    Ok(matches
-        .into_iter()
-        .map(|(path, score, match_indices)| FileMatch { path, score, match_indices })
-        .collect())
+    Ok(matches)
 }
 
 // ── update_links_after_rename ──────────────────────────────────────────────────
@@ -372,10 +430,17 @@ pub async fn update_links_after_rename(
 
 // ── get_resolved_links ─────────────────────────────────────────────────────────
 
-/// Return a stem → vault-relative-path map for all files in the vault.
+/// Return a (stem OR alias) → vault-relative-path map for all files in the vault.
 ///
-/// Keys are lowercased stems; values are vault-relative paths.
-/// The frontend converts this to `Map<string, string>` for zero-IPC click handling.
+/// Keys are lowercased — stems come from filenames, aliases come from YAML
+/// frontmatter (issue #60). Values are vault-relative paths. The frontend
+/// converts this to `Map<string, string>` for zero-IPC click handling.
+///
+/// Collision priority (also documented at the call site in `link_graph::
+/// resolved_map_with_aliases`):
+///   1. Filename-stem match wins over alias match.
+///   2. Between two aliases on different notes, first-indexed wins; the loser
+///      is logged.
 #[tauri::command]
 pub async fn get_resolved_links(
     state: tauri::State<'_, VaultState>,
@@ -391,12 +456,17 @@ pub async fn get_resolved_links(
         }
     };
 
-    let paths = {
+    let (paths, file_aliases) = {
         let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        fi.all_relative_paths()
+        let paths = fi.all_relative_paths();
+        let file_aliases: Vec<(String, Vec<String>)> = fi
+            .all_entries()
+            .map(|(_, m)| (m.relative_path.clone(), m.aliases.clone()))
+            .collect();
+        (paths, file_aliases)
     };
 
-    Ok(link_graph::resolved_map(&paths))
+    Ok(link_graph::resolved_map_with_aliases(&paths, &file_aliases))
 }
 
 // ── get_resolved_attachments ───────────────────────────────────────────────────

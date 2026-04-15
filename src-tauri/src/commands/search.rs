@@ -52,6 +52,14 @@ pub struct FileMatch {
     pub score: u32,
     /// Character positions in `path` that matched the query (sorted, deduplicated).
     pub match_indices: Vec<u32>,
+    /// Matched alias text (from frontmatter `aliases:`) when the nucleo hit
+    /// came from an alias haystack rather than the filename. `None` for
+    /// path-based matches. Issue #60: the Quick Switcher and `[[` popup
+    /// render this as `alias → filename` so the user sees why the row
+    /// surfaced. `default` makes older callers (search_filename) continue to
+    /// serialize a `matchedAlias: null` field, which the TS types tolerate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_alias: Option<String>,
 }
 
 // ── search_fulltext ───────────────────────────────────────────────────────────
@@ -157,6 +165,12 @@ pub async fn search_fulltext(
 
 /// Fuzzy filename search using the pre-warmed nucleo Matcher.
 ///
+/// Candidate set: filenames AND frontmatter aliases (issue #60). Alias hits
+/// carry the matched alias text in `matched_alias` so Quick Switcher rows
+/// render as `alias → filename`. Per-path dedupe keeps the best row per
+/// file; filename hits win at equal score so ranking is consistent with
+/// pre-alias behaviour.
+///
 /// Results are sorted by composite score descending and capped at `limit`.
 #[tauri::command]
 pub async fn search_filename(
@@ -183,53 +197,84 @@ pub async fn search_filename(
         }
     };
 
-    // Gather all relative paths from the in-memory file index.
-    let paths: Vec<String> = {
+    // Gather paths + per-file aliases in a single lock hold.
+    let (paths, file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
         let fi = file_index_arc
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
-        fi.all_relative_paths()
+        let paths = fi.all_relative_paths();
+        let aliases: Vec<(String, Vec<String>)> = fi
+            .all_entries()
+            .map(|(_, m)| (m.relative_path.clone(), m.aliases.clone()))
+            .filter(|(_, a)| !a.is_empty())
+            .collect();
+        (paths, aliases)
     };
 
     // Build nucleo pattern with special syntax support.
     let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
 
-    // Score and collect matches using the pre-warmed Matcher.
+    // Score filenames + aliases.
     let mut buf: Vec<char> = Vec::new();
-    let mut matches: Vec<(String, u32, Vec<u32>)> = {
+    let mut matches: Vec<FileMatch> = {
         let mut matcher = matcher_arc
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
 
-        paths
-            .into_iter()
+        let mut out: Vec<FileMatch> = paths
+            .iter()
             .filter_map(|path| {
                 buf.clear();
-                let haystack = Utf32Str::new(&path, &mut buf);
+                let haystack = Utf32Str::new(path, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
                 let score = pattern.indices(haystack, &mut *matcher, &mut indices)?;
                 // Sort + dedup per nucleo docs — multiple atoms append independently.
                 indices.sort_unstable();
                 indices.dedup();
-                Some((path, score, indices))
+                Some(FileMatch {
+                    path: path.clone(),
+                    score,
+                    match_indices: indices,
+                    matched_alias: None,
+                })
             })
-            .collect()
+            .collect();
+
+        for (rel_path, aliases) in &file_aliases {
+            for alias in aliases {
+                buf.clear();
+                let haystack = Utf32Str::new(alias, &mut buf);
+                let mut indices: Vec<u32> = Vec::new();
+                if let Some(score) = pattern.indices(haystack, &mut *matcher, &mut indices) {
+                    out.push(FileMatch {
+                        path: rel_path.clone(),
+                        score,
+                        match_indices: Vec::new(),
+                        matched_alias: Some(alias.clone()),
+                    });
+                }
+            }
+        }
+
+        out
     };
 
-    // Sort by score descending, cap at limit.
-    matches.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    // Sort by score desc; at equal score, filename hits beat alias hits.
+    matches.sort_unstable_by(|a, b| {
+        b.score.cmp(&a.score).then_with(|| {
+            match (&a.matched_alias, &b.matched_alias) {
+                (None, Some(_)) => std::cmp::Ordering::Less,
+                (Some(_), None) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+        })
+    });
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    matches.retain(|m| seen.insert(m.path.clone()));
     matches.truncate(limit);
 
-    let results = matches
-        .into_iter()
-        .map(|(path, score, match_indices)| FileMatch {
-            path,
-            score,
-            match_indices,
-        })
-        .collect();
-
-    Ok(results)
+    Ok(matches)
 }
 
 // ── rebuild_index ─────────────────────────────────────────────────────────────
