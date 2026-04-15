@@ -417,3 +417,31 @@ export async function saveBookmarks(vaultPath: string, bookmarks: string[]): Pro
     throw normalizeError(e);
   }
 }
+
+// ── Custom CSS snippets (#64) ──────────────────────────────────────────────────
+
+/**
+ * List `*.css` filenames in `<vault>/.vaultcore/snippets/`. The directory is
+ * created on first call so the user has a stable drop-in path, and an empty
+ * list is returned when nothing is present.
+ */
+export async function listSnippets(vaultPath: string): Promise<string[]> {
+  try {
+    return await invoke<string[]>("list_snippets", { vaultPath });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Read the contents of a single snippet file. The Rust side vault-scope-
+ * guards the path and rejects traversal attempts (`..`, absolute paths,
+ * anything outside the snippets dir).
+ */
+export async function readSnippet(vaultPath: string, filename: string): Promise<string> {
+  try {
+    return await invoke<string>("read_snippet", { vaultPath, filename });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}

@@ -84,4 +84,58 @@ describe("settingsStore", () => {
       document.documentElement.style.getPropertyValue("--vc-font-size")
     ).toBe("14px");
   });
+
+  // ─── Daily Notes fields (#59) ────────────────────────────────────────────
+  it("Test 9: defaults for daily-notes fields are empty folder/template + YYYY-MM-DD format", async () => {
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    const state = get(settingsStore);
+    expect(state.dailyNotesFolder).toBe("");
+    expect(state.dailyNotesDateFormat).toBe("YYYY-MM-DD");
+    expect(state.dailyNotesTemplate).toBe("");
+  });
+
+  it("Test 10: daily-notes setters persist via the K_* localStorage keys", async () => {
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    settingsStore.setDailyNotesFolder("Daily");
+    settingsStore.setDailyNotesDateFormat("DD.MM.YYYY");
+    settingsStore.setDailyNotesTemplate("Templates/Daily.md");
+    const state = get(settingsStore);
+    expect(state.dailyNotesFolder).toBe("Daily");
+    expect(state.dailyNotesDateFormat).toBe("DD.MM.YYYY");
+    expect(state.dailyNotesTemplate).toBe("Templates/Daily.md");
+    expect(localStorage.getItem("vaultcore-daily-notes-folder")).toBe("Daily");
+    expect(localStorage.getItem("vaultcore-daily-notes-date-format")).toBe("DD.MM.YYYY");
+    expect(localStorage.getItem("vaultcore-daily-notes-template")).toBe("Templates/Daily.md");
+  });
+
+  it("Test 11: init reads stored daily-notes strings on reload", async () => {
+    localStorage.setItem("vaultcore-daily-notes-folder", "Journal");
+    localStorage.setItem("vaultcore-daily-notes-date-format", "YYYY/MM/DD");
+    localStorage.setItem("vaultcore-daily-notes-template", "tpl.md");
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    const state = get(settingsStore);
+    expect(state.dailyNotesFolder).toBe("Journal");
+    expect(state.dailyNotesDateFormat).toBe("YYYY/MM/DD");
+    expect(state.dailyNotesTemplate).toBe("tpl.md");
+  });
+
+  it("Test 12: init rejects oversized tampered daily-notes entries and falls back to defaults", async () => {
+    const huge = "x".repeat(10_000);
+    localStorage.setItem("vaultcore-daily-notes-folder", huge);
+    localStorage.setItem("vaultcore-daily-notes-date-format", huge);
+    localStorage.setItem("vaultcore-daily-notes-template", huge);
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    const state = get(settingsStore);
+    expect(state.dailyNotesFolder).toBe("");
+    expect(state.dailyNotesDateFormat).toBe("YYYY-MM-DD");
+    expect(state.dailyNotesTemplate).toBe("");
+  });
 });

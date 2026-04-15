@@ -14,13 +14,19 @@
   import { vaultStore } from "../../store/vaultStore";
   import { commandRegistry } from "../../lib/commands/registry";
   import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
-  import { createFile } from "../../ipc/commands";
+  import { createFile, createFolder, listDirectory, readFile, writeFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
   import { openFileAsTab } from "../../lib/openFileAsTab";
   import { resolveRevealRelPath } from "../../lib/activeTabReveal";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
+  import { settingsStore } from "../../store/settingsStore";
+  import {
+    DEFAULT_DAILY_DATE_FORMAT,
+    dailyNoteFilename,
+    splitFolderSegments,
+  } from "../../lib/dailyNotes";
 
   let { onSwitchVault }: { onSwitchVault: () => void } = $props();
 
@@ -245,6 +251,95 @@
     }
   }
 
+  /**
+   * Issue #59: open (or create) today's daily note.
+   *
+   * Resolution order:
+   *  1. Resolve the target folder from settingsStore.dailyNotesFolder. Each
+   *     segment is created if missing (listDirectory probe avoids the
+   *     createFolder auto-suffix that would make "Daily" turn into
+   *     "Daily 1").
+   *  2. Build the filename from today's local date using the configured
+   *     format (minimal YYYY/MM/DD token subset — see lib/dailyNotes.ts).
+   *  3. If the file already exists (detected by listing the parent),
+   *     reuse the existing absolute path so we never overwrite.
+   *  4. Otherwise createFile() writes an empty file; if a template path is
+   *     configured AND readable, its contents are then written into the
+   *     new file. Unreadable template silently falls back to empty.
+   */
+  async function openTodayNote() {
+    let vaultPath: string | null = null;
+    const unsubVault = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
+    unsubVault();
+    if (!vaultPath) return;
+
+    let folder = "";
+    let format = DEFAULT_DAILY_DATE_FORMAT;
+    let template = "";
+    const unsubSettings = settingsStore.subscribe((s) => {
+      folder = s.dailyNotesFolder;
+      format = s.dailyNotesDateFormat.trim().length > 0
+        ? s.dailyNotesDateFormat
+        : DEFAULT_DAILY_DATE_FORMAT;
+      template = s.dailyNotesTemplate.trim();
+    });
+    unsubSettings();
+
+    try {
+      // 1. Resolve / create folder chain.
+      const vault: string = vaultPath;
+      let parent: string = vault;
+      for (const segment of splitFolderSegments(folder)) {
+        const candidate = `${parent}/${segment}`;
+        try {
+          await listDirectory(candidate);
+          parent = candidate;
+        } catch {
+          // listDirectory throws for "doesn't exist" — create it.
+          parent = await createFolder(parent, segment);
+        }
+      }
+
+      // 2. Build filename from today's local date.
+      const filename = dailyNoteFilename(new Date(), format);
+
+      // 3. If the note already exists, open it without modifying.
+      let existingAbsPath: string | null = null;
+      try {
+        const entries = await listDirectory(parent);
+        const hit = entries.find((e) => !e.is_dir && e.name === filename);
+        if (hit) existingAbsPath = hit.path;
+      } catch {
+        // Listing a just-created folder can race — treat as "no existing file".
+      }
+      if (existingAbsPath) {
+        tabStore.openTab(existingAbsPath);
+        return;
+      }
+
+      // 4. Create the file (createFile auto-suffixes on collision, but step 3
+      //    already ruled collision out, so the returned path matches `filename`).
+      const newPath = await createFile(parent, filename);
+
+      // Seed with template contents if configured and readable.
+      if (template.length > 0) {
+        const templateAbs = `${vault}/${template.replace(/^[/\\]+/, "")}`;
+        try {
+          const contents = await readFile(templateAbs);
+          await writeFile(newPath, contents);
+        } catch {
+          // Missing/unreadable template — leave the note empty. No toast:
+          // AC explicitly says this must not block creation.
+        }
+      }
+
+      tabStore.openTab(newPath);
+      treeRefreshStore.requestRefresh();
+    } catch {
+      toastStore.push({ variant: "error", message: "Tagesnotiz konnte nicht geöffnet werden." });
+    }
+  }
+
   /** Issue #12: toggle bookmark on the active tab's file path. */
   async function toggleActiveBookmark() {
     let captured: string | null = null;
@@ -298,6 +393,7 @@
       openGraph: () => { tabStore.openGraphTab(); },
       openCommandPalette: () => { commandPaletteOpen = true; },
       toggleBookmark: () => { void toggleActiveBookmark(); },
+      openTodayNote: () => { void openTodayNote(); },
     });
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
