@@ -38,6 +38,14 @@ export interface Tab {
   cursorPos: number;
   lastSaved: number;
   lastSavedContent: string;  // base snapshot for three-way merge (Plan 05)
+  /**
+   * SHA-256 of the last content VaultCore wrote to disk for this tab.
+   * Per-tab so switching between tabs doesn't leak another tab's hash into
+   * the auto-save merge check (#80). `null` when the tab has never been
+   * saved in this session — the first auto-save skips the hash-verify
+   * merge branch and takes the direct-write path.
+   */
+  lastSavedHash?: string | null;
   /** Tab kind — "file" when omitted. */
   type?: TabType;
   /**
@@ -481,6 +489,19 @@ export const tabStore = {
     _store.update((state) => ({
       ...state,
       tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedContent: content } : t)),
+    }));
+  },
+
+  /**
+   * Record the SHA-256 hash VaultCore wrote for this tab's last save.
+   * Called by EditorPane after every successful writeFile so the auto-save
+   * merge-check can compare disk hash against the per-tab expected hash
+   * (#80 — global editorStore.lastSavedHash leaked across tabs).
+   */
+  setLastSavedHash(tabId: string, hash: string | null): void {
+    _store.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedHash: hash } : t)),
     }));
   },
 
