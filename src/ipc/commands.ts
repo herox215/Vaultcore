@@ -5,7 +5,7 @@
 //      component calling `invoke` directly with an arbitrary path (T-02-01).
 
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
@@ -441,6 +441,53 @@ export async function listSnippets(vaultPath: string): Promise<string[]> {
 export async function readSnippet(vaultPath: string, filename: string): Promise<string> {
   try {
     return await invoke<string>("read_snippet", { vaultPath, filename });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+// ── HTML export (#61) ─────────────────────────────────────────────────────────
+
+/**
+ * Native save-as dialog. Returns the user-chosen absolute path, or `null` when
+ * the dialog is cancelled. `defaultPath` suggests the starting filename.
+ */
+export async function pickSavePath(
+  defaultPath: string,
+  filters: { name: string; extensions: string[] }[] = [],
+): Promise<string | null> {
+  const picked = await saveDialog({ defaultPath, filters });
+  return picked ?? null;
+}
+
+/**
+ * Render the note at `notePath` to a self-contained HTML file at `outputPath`.
+ * `themeCss` is inlined into a `<style>` tag in the exported document so it
+ * renders correctly offline without the vault.
+ */
+export async function exportNoteHtml(
+  notePath: string,
+  outputPath: string,
+  themeCss: string,
+): Promise<void> {
+  try {
+    await invoke<void>("export_note_html", { notePath, outputPath, themeCss });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Same rendering pipeline as `exportNoteHtml`, but returns the HTML string
+ * instead of writing a file. The PDF-export flow feeds this into a hidden
+ * iframe and calls `window.print()`.
+ */
+export async function renderNoteHtml(
+  notePath: string,
+  themeCss: string,
+): Promise<string> {
+  try {
+    return await invoke<string>("render_note_html", { notePath, themeCss });
   } catch (e) {
     throw normalizeError(e);
   }
