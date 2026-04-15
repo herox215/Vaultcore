@@ -51,7 +51,9 @@ export interface ForceSettings {
 export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
   gravity: 1,
   scalingRatio: 40,
-  edgeWeightInfluence: 1,
+  // Default 0.4: linked nodes pull toward each other but don't collapse.
+  // 1.0 is a very strong rubber-band that clumps the whole graph.
+  edgeWeightInfluence: 0.4,
   slowDown: 10,
 };
 
@@ -231,18 +233,20 @@ function applyForceSettings(
   simulation: Simulation<SimNode, SimLink>,
   settings: ForceSettings,
 ): void {
-  // slowDown (0.5 … 20) → velocityDecay (0.95 … 0.1). Higher slowDown means
-  // more damping, so we clamp into d3-force's (0, 1) expected range.
-  const decay = Math.min(0.95, Math.max(0.1, 1 - 1 / (1 + settings.slowDown)));
+  // slowDown slider (0 … 20) → velocityDecay (0.1 … 0.9) centered on d3-force's
+  // native default of 0.4 at slowDown = 10. Too aggressive damping (>0.8) kills
+  // motion before the simulation can spread the graph.
+  const decay = Math.min(0.9, Math.max(0.1, 0.4 + 0.04 * (settings.slowDown - 10)));
   simulation.velocityDecay(decay);
 
   const charge = simulation.force("charge") as
     | ReturnType<typeof forceManyBody<SimNode>>
     | undefined;
   if (charge) {
-    // Negative = repulsion. Obsidian's default is roughly -300 at
-    // scalingRatio = 40; scale linearly off that baseline.
-    charge.strength(-(settings.scalingRatio * 7.5));
+    // Stronger repulsion — default scalingRatio=40 now lands at -600 so the
+    // global graph spreads out instead of clumping at the center. Obsidian's
+    // default repulsion feels roughly in this range.
+    charge.strength(-(settings.scalingRatio * 15));
   }
 
   const link = simulation.force("link") as
@@ -251,6 +255,8 @@ function applyForceSettings(
   if (link) {
     const strength = Math.min(1, Math.max(0, settings.edgeWeightInfluence));
     link.strength(strength);
+    // Longer rest length so linked nodes don't pile up on top of each other.
+    link.distance(120);
   }
 
   const center = simulation.force("center") as
