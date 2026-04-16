@@ -277,4 +277,25 @@ export const markdownTheme = EditorView.theme({
     padding: "1px 2px",
     borderRadius: "2px",
   },
+
+  // ── GFM table rendering (#99) ────────────────────────────────────────────
+  ".cm-table-rendered": {
+    width: "100%",
+    borderCollapse: "collapse",
+    margin: "8px 0",
+    fontSize: "inherit",
+    fontFamily: "inherit",
+  },
+  ".cm-table-rendered th, .cm-table-rendered td": {
+    border: "1px solid var(--color-border)",
+    padding: "6px 12px",
+    lineHeight: "1.5",
+  },
+  ".cm-table-rendered th": {
+    fontWeight: "600",
+    backgroundColor: "var(--color-code-bg)",
+  },
+  ".cm-table-rendered tbody tr:hover": {
+    backgroundColor: "var(--color-accent-bg)",
+  },
 });
