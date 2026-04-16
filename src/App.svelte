@@ -175,13 +175,87 @@
       progressStore.update(payload.current, payload.total, payload.current_file);
     });
 
+    // E2E test hook: expose loadVault + switchVault on window so WebDriver
+    // specs can bypass the native file picker. Gated behind VITE_E2E=1 so
+    // the hook is completely absent from normal release builds (tree-shaken
+    // out). switchVault mirrors handleSwitchVault but takes the target path
+    // directly — use it when a test needs to transition between two vaults.
+    if (import.meta.env.VITE_E2E === "1") {
+      const switchVault = async (path: string): Promise<void> => {
+        let currentPath: string | null = null;
+        const unsub = vaultStore.subscribe((s) => { currentPath = s.currentPath; });
+        unsub();
+        if (currentPath === path) return;
+        tabStore.closeAll();
+        await tick();
+        await loadVault(path);
+      };
+      const closeVault = async (): Promise<void> => {
+        tabStore.closeAll();
+        vaultStore.reset();
+        await tick();
+      };
+      const pushToast = (variant: "error" | "conflict" | "clean-merge", message: string): void => {
+        toastStore.push({ variant, message });
+      };
+      const startProgress = (total: number): void => {
+        progressStore.start(total);
+      };
+      const updateProgress = (current: number, total: number, currentFile?: string): void => {
+        progressStore.update(current, total, currentFile ?? "");
+      };
+      const finishProgress = (): void => {
+        progressStore.finish();
+      };
+      // Type-into-active-editor hook. WebKit driver keystrokes don't reach
+      // CM6 contenteditable reliably, so we dispatch a transaction against
+      // the EditorView resolved from the currently visible .cm-content.
+      const typeInActiveEditor = async (text: string): Promise<void> => {
+        const { EditorView } = await import("@codemirror/view");
+        const els = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
+        const active = els.find((el) => el.offsetParent !== null);
+        if (!active) return;
+        const view = EditorView.findFromDOM(active);
+        if (!view) return;
+        view.focus();
+        const pos = view.state.doc.length;
+        view.dispatch({
+          changes: { from: pos, to: pos, insert: text },
+          selection: { anchor: pos + text.length },
+          userEvent: "input.type",
+        });
+      };
+      (window as unknown as {
+        __e2e__: {
+          loadVault: (p: string) => Promise<void>;
+          switchVault: (p: string) => Promise<void>;
+          closeVault: () => Promise<void>;
+          pushToast: (variant: "error" | "conflict" | "clean-merge", message: string) => void;
+          startProgress: (total: number) => void;
+          updateProgress: (current: number, total: number, currentFile?: string) => void;
+          finishProgress: () => void;
+          typeInActiveEditor: (text: string) => Promise<void>;
+        };
+      }).__e2e__ = {
+        loadVault,
+        switchVault,
+        closeVault,
+        pushToast,
+        startProgress,
+        updateProgress,
+        finishProgress,
+        typeInActiveEditor,
+      };
+    }
+
     // VAULT-03: on startup, attempt to reopen the most-recent reachable vault.
     // VAULT-05: if that vault has been moved/deleted/unmounted, we stay on the
     // Welcome screen and surface a toast instead of crashing.
     try {
       recent = await getRecentVaults();
       const last = recent[0];
-      if (last !== undefined) {
+      // Skip auto-load in e2e mode so each spec controls its own vault.
+      if (last !== undefined && import.meta.env.VITE_E2E !== "1") {
         await loadVault(last.path);
       }
     } catch (err) {
