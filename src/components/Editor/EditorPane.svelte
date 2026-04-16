@@ -43,6 +43,11 @@
   // This preserves undo history across tab switches without remounting.
   const viewMap = new Map<string, EditorView>();
 
+  // #90: Track tab IDs currently being mounted (readFile in-flight).
+  // Prevents duplicate concurrent mountEditorView calls when the
+  // mount-lifecycle $effect re-fires while a mount is already in progress.
+  const mountingIds = new Set<string>();
+
   // Local reactive state driven by store subscription
   let paneTabIds = $state<string[]>([]);
   let allTabs = $state<Tab[]>([]);
@@ -311,7 +316,7 @@
     // Graph tabs are rendered via <GraphView /> and must NOT get a CM6 view.
     // Image / unsupported preview tabs render their own components and skip CM6.
     for (const tabId of paneTabIds) {
-      if (!viewMap.has(tabId)) {
+      if (!viewMap.has(tabId) && !mountingIds.has(tabId)) {
         const tab = allTabs.find((t) => t.id === tabId);
         if (tab && tabHasEditor(tab)) {
           mountEditorView(tab);
@@ -462,12 +467,25 @@
    */
   async function mountEditorView(tab: Tab) {
     if (viewMap.has(tab.id)) return;
+    // #90: prevent duplicate concurrent mounts when the $effect re-fires
+    // while readFile is still in-flight.
+    if (mountingIds.has(tab.id)) return;
+    mountingIds.add(tab.id);
 
+    try {
+      return await mountEditorViewInner(tab);
+    } finally {
+      mountingIds.delete(tab.id);
+    }
+  }
+
+  async function mountEditorViewInner(tab: Tab) {
     let content = "";
     try {
       content = await readFile(tab.filePath);
     } catch (err) {
-      toastStore.push({ variant: "error", message: `Failed to open file.` });
+      const filename = tab.filePath.split("/").pop() ?? tab.filePath;
+      toastStore.push({ variant: "error", message: `Failed to open ${filename}.` });
       return;
     }
 
