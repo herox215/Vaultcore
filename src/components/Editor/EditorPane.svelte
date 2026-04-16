@@ -319,7 +319,10 @@
       if (!viewMap.has(tabId) && !mountingIds.has(tabId)) {
         const tab = allTabs.find((t) => t.id === tabId);
         if (tab && tabHasEditor(tab)) {
-          mountEditorView(tab);
+          // Snapshot the tab as a plain object so the async mount function
+          // is not affected by reactive proxy shifts when allTabs is
+          // reassigned by the store subscription mid-mount (#88).
+          mountEditorView({ ...tab });
         }
       }
     }
@@ -466,25 +469,33 @@
    * The container is found via data-tab-id attribute in the DOM.
    */
   async function mountEditorView(tab: Tab) {
-    if (viewMap.has(tab.id)) return;
+    const id = tab.id;
+    if (viewMap.has(id)) return;
     // #90: prevent duplicate concurrent mounts when the $effect re-fires
     // while readFile is still in-flight.
-    if (mountingIds.has(tab.id)) return;
-    mountingIds.add(tab.id);
+    if (mountingIds.has(id)) return;
+    mountingIds.add(id);
 
     try {
       return await mountEditorViewInner(tab);
     } finally {
-      mountingIds.delete(tab.id);
+      mountingIds.delete(id);
     }
   }
 
   async function mountEditorViewInner(tab: Tab) {
+    // Snapshot tab identity before the async boundary so the values are
+    // stable even if the reactive proxy behind `tab` shifts when allTabs
+    // is reassigned by the store subscription while readFile is
+    // in-flight (#88).
+    const tabId = tab.id;
+    const tabFilePath = tab.filePath;
+
     let content = "";
     try {
-      content = await readFile(tab.filePath);
+      content = await readFile(tabFilePath);
     } catch (err) {
-      const filename = tab.filePath.split("/").pop() ?? tab.filePath;
+      const filename = tabFilePath.split("/").pop() ?? tabFilePath;
       toastStore.push({ variant: "error", message: `Failed to open ${filename}.` });
       return;
     }
@@ -493,25 +504,24 @@
     // Scope to this pane's DOM element — document.querySelector would match
     // the first .vc-editor-pane in the DOM, breaking right-pane mounts.
     const container = paneEl?.querySelector(
-      `[data-tab-id="${tab.id}"]`
+      `[data-tab-id="${tabId}"]`
     ) as HTMLDivElement | null;
     if (!container) return; // tab was closed before async completed
 
     // Guard against double-mount (async race)
-    if (viewMap.has(tab.id)) return;
+    if (viewMap.has(tabId)) return;
 
     const onSave = async (text: string): Promise<void> => {
       // ERR-03: skip auto-save when vault is unreachable
       if (!vaultReachable) return;
 
-      // #89: Read the current filePath from the store at save time rather than
-      // using the mount-time capture. When a file is renamed while the editor
-      // is open, tabStore.updateFilePath updates the tab's filePath but the
-      // closure's captured `tab` object still holds the old path. Using the
-      // stale path causes the save to target the deleted old path, which
-      // silently fails and eventually closes the editor.
-      const currentTab = allTabs.find((t) => t.id === tab.id);
-      const filePath = currentTab?.filePath ?? tab.filePath;
+      // Read the current filePath from the store at save time rather than
+      // using the mount-time capture (#89). When a file is renamed while
+      // the editor is open, tabStore.updateFilePath updates the tab's
+      // filePath but the closure's captured snapshot still holds the old
+      // path.
+      const currentTab = allTabs.find((t) => t.id === tabId);
+      const filePath = currentTab?.filePath ?? tabFilePath;
 
       try {
         // EDIT-10: Hash-verify branch — detect external modifications before writing.
@@ -530,15 +540,15 @@
 
         // Per-tab expected hash (#80). Reading the global editorStore snapshot
         // here leaked another tab's hash in when the user switched tabs mid-edit.
-        const expected = allTabs.find((t) => t.id === tab.id)?.lastSavedHash ?? null;
+        const expected = allTabs.find((t) => t.id === tabId)?.lastSavedHash ?? null;
 
         if (diskHash !== null && expected !== null && diskHash !== expected) {
           // MISMATCH: external edit detected — route through three-way merge engine.
-          const baseContent = currentTab?.lastSavedContent ?? tab.lastSavedContent;
+          const baseContent = currentTab?.lastSavedContent ?? "";
           const result = await mergeExternalChange(filePath, text, baseContent);
 
           // Apply merged content back to the CM6 view for this tab.
-          const view = viewMap.get(tab.id);
+          const view = viewMap.get(tabId);
           if (view) {
             view.dispatch({
               changes: { from: 0, to: view.state.doc.length, insert: result.merged_content },
@@ -548,9 +558,9 @@
           // Write the merged content to disk so hash converges.
           const newHash = await writeFile(filePath, result.merged_content);
           editorStore.setLastSavedHash(newHash);
-          tabStore.setLastSavedHash(tab.id, newHash);
-          tabStore.setLastSavedContent(tab.id, result.merged_content);
-          tabStore.setDirty(tab.id, false);
+          tabStore.setLastSavedHash(tabId, newHash);
+          tabStore.setLastSavedContent(tabId, result.merged_content);
+          tabStore.setDirty(tabId, false);
           searchStore.setIndexStale(true);
           void tagsStore.reload();
 
@@ -566,9 +576,9 @@
 
         // Hashes match (or file missing → create-path) — safe to write directly.
         const hash = await writeFile(filePath, text);
-        tabStore.setDirty(tab.id, false);
-        tabStore.setLastSavedContent(tab.id, text);
-        tabStore.setLastSavedHash(tab.id, hash);
+        tabStore.setDirty(tabId, false);
+        tabStore.setLastSavedContent(tabId, text);
+        tabStore.setLastSavedHash(tabId, hash);
         editorStore.setLastSavedHash(hash);
         searchStore.setIndexStale(true);
         void tagsStore.reload();
@@ -583,7 +593,7 @@
             lastDiskFullToast = now;
             toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
           }
-          tabStore.setDirty(tab.id, true);
+          tabStore.setDirty(tabId, true);
         } else {
           toastStore.push({ variant: "error", message: "Disk full. Could not save changes." });
         }
@@ -591,7 +601,7 @@
     };
 
     const onDirty = () => {
-      tabStore.setDirty(tab.id, true);
+      tabStore.setDirty(tabId, true);
     };
 
     // #49: non-markdown text previews use the read-only extension list so
@@ -609,8 +619,8 @@
     });
 
     // Final guard — tab may have been closed during second await
-    if (!paneEl?.querySelector(`[data-tab-id="${tab.id}"]`)) return;
-    if (viewMap.has(tab.id)) return;
+    if (!paneEl?.querySelector(`[data-tab-id="${tabId}"]`)) return;
+    if (viewMap.has(tabId)) return;
 
     const view = new EditorView({
       state: EditorState.create({
@@ -620,12 +630,12 @@
       parent: container,
     });
 
-    viewMap.set(tab.id, view);
+    viewMap.set(tabId, view);
 
     // Initialize lastSavedContent snapshot AFTER viewMap.set so the store
     // mutation can't re-trigger the mount-lifecycle $effect while this
     // mount is still in-flight (issue #41).
-    tabStore.setLastSavedContent(tab.id, content);
+    tabStore.setLastSavedContent(tabId, content);
 
     // Attach wiki-link-click listener only on editable markdown tabs —
     // read-only previews don't have the wiki-link plugin loaded so no
@@ -635,8 +645,8 @@
     }
 
     // Sync editorStore if this is the active tab
-    if (tab.id === paneActiveTabId) {
-      editorStore.syncFromTab(tab.filePath, content, null);
+    if (tabId === paneActiveTabId) {
+      editorStore.syncFromTab(tabFilePath, content, null);
       if (activePane === paneId) {
         activeViewStore.setActive(view);
       }
