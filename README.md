@@ -53,6 +53,46 @@ Svelte 5 + TailwindCSS 4 + CodeMirror 6
 Rust · Tantivy · Tokio · Rayon
 ```
 
+## End-to-end tests
+
+The E2E suite (42 specs) runs real WebDriver sessions against a release build of the app via [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/). Linux only — tauri-driver does not support macOS, and Windows support is not wired up yet.
+
+One-time setup:
+
+```bash
+cargo install tauri-driver          # spawns the WebDriver bridge
+sudo pacman -S webkitgtk-6.0        # ships /usr/bin/WebKitWebDriver (Arch)
+                                     # Debian/Ubuntu: apt install webkit2gtk-driver
+```
+
+Running the suite:
+
+```bash
+# 1. Build the release binary with the E2E hook enabled.
+#    (Only needed after changes to frontend or Rust code.)
+VITE_E2E=1 pnpm tauri build --no-bundle
+
+# 2. Start tauri-driver in the background (port 4444, spawns WebKitWebDriver on 4445).
+tauri-driver --port 4444 &
+
+# 3. Run the full suite …
+pnpm test:e2e
+
+# … or a single spec.
+pnpm test:e2e --spec ./e2e/specs/search.spec.ts
+```
+
+The `VITE_E2E=1` flag exposes a `window.__e2e__` hook so specs can bypass native pickers, drive stores directly, and inject text into the CodeMirror view. It is tree-shaken out of non-E2E builds. Current surface:
+
+| Hook | Purpose |
+| --- | --- |
+| `loadVault(path)` / `switchVault(path)` / `closeVault()` | Vault lifecycle without the native file picker |
+| `pushToast(variant, message)` | Exercise the toast renderer from async failure paths |
+| `startProgress` / `updateProgress` / `finishProgress` | Drive the indexing-progress overlay deterministically |
+| `typeInActiveEditor(text)` | Dispatch a CM6 transaction — WebKit driver keystrokes don't reach contenteditable |
+
+Three specs are marked `describe.skip` with inline rationale: `drag-drop` (WebKit can't carry `DataTransfer.setData` across synthetic events), `local-graph` (panel is built but not mounted in the current layout), `index-repair` (needs a Rust-side hook to poison the Tantivy index).
+
 ## Contributing
 
 PRs welcome. Run `pnpm test` and `pnpm typecheck` before submitting — broken tests make CI cry.
