@@ -107,6 +107,8 @@ export interface GraphRenderOptions {
   /** Start the continuous simulation paused. Toggle later via
    *  `setLayoutFrozen`. No effect when `forceSettings` is absent. */
   startFrozen?: boolean | undefined;
+  /** Whether to render node labels. Defaults to true. */
+  renderLabels?: boolean | undefined;
 }
 
 /** Opaque handle returned by `mountGraph`. Callers pass it to update/destroy. */
@@ -377,7 +379,7 @@ export function mountGraph(
   const labelThreshold = options.layoutIterations && options.layoutIterations > 50 ? 6 : 0;
 
   const renderer = new Sigma(graph, container, {
-    renderLabels: true,
+    renderLabels: options.renderLabels !== false,
     labelRenderedSizeThreshold: labelThreshold,
     labelSize: 11,
     labelWeight: "500",
