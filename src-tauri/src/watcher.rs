@@ -59,7 +59,7 @@ pub struct VaultStatusPayload {
 
 // ─── Event name constants ───────────────────────────────────────────────────────
 
-const FILE_CHANGED_EVENT: &str = "vault://file_changed";
+pub const FILE_CHANGED_EVENT: &str = "vault://file_changed";
 const BULK_CHANGE_START_EVENT: &str = "vault://bulk_change_start";
 const BULK_CHANGE_END_EVENT: &str = "vault://bulk_change_end";
 const VAULT_STATUS_EVENT: &str = "vault://vault_status";

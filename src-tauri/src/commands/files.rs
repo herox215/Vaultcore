@@ -424,10 +424,29 @@ pub fn delete_file_impl(state: &VaultState, path: String) -> Result<(), VaultErr
 
 #[tauri::command]
 pub async fn delete_file(
+    app: tauri::AppHandle,
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<(), VaultError> {
-    delete_file_impl(&state, path)
+    use tauri::Emitter;
+    // Canonicalize before delete so the emitted path matches the form the
+    // watcher would have used (and matches how tabs/sidebar store paths).
+    let canonical_str = std::fs::canonicalize(&path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.clone());
+    delete_file_impl(&state, path)?;
+    // Bug #102: the watcher suppresses this delete via write_ignore (D-12),
+    // so emit a synthetic file_changed event so tabs bound to the deleted
+    // path close.
+    let _ = app.emit(
+        crate::watcher::FILE_CHANGED_EVENT,
+        crate::watcher::FileChangePayload {
+            path: canonical_str,
+            kind: "delete".to_string(),
+            new_path: None,
+        },
+    );
+    Ok(())
 }
 
 // ─── move_file ───────────────────────────────────────────────────────────────
