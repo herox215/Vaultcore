@@ -5,6 +5,7 @@
  * without a deliberate refactor. Every error/merge/rename/delete notice goes
  * through toastStore.push or a dialog component.
  */
+/// <reference types="node" />
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
