@@ -122,6 +122,8 @@ pub fn run() {
             commands::bookmarks::save_bookmarks,
             commands::snippets::list_snippets,
             commands::snippets::read_snippet,
+            commands::templates::list_templates,
+            commands::templates::read_template,
             commands::export::export_note_html,
             commands::export::render_note_html,
         ])

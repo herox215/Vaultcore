@@ -446,6 +446,32 @@ export async function readSnippet(vaultPath: string, filename: string): Promise<
   }
 }
 
+// ── Note templates (#67) ──────────────────────────────────────────────────────
+
+/**
+ * List `*.md` filenames in `<vault>/.vaultcore/templates/`. The directory is
+ * created on first call so the user has a stable drop-in path.
+ */
+export async function listTemplates(vaultPath: string): Promise<string[]> {
+  try {
+    return await invoke<string[]>("list_templates", { vaultPath });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Read the contents of a single template file. The Rust side vault-scope-
+ * guards the path and rejects traversal attempts.
+ */
+export async function readTemplate(vaultPath: string, filename: string): Promise<string> {
+  try {
+    return await invoke<string>("read_template", { vaultPath, filename });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 // ── HTML export (#61) ─────────────────────────────────────────────────────────
 
 /**
