@@ -81,6 +81,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    e.stopPropagation();
     if (e.key === "Enter") {
       e.preventDefault();
       void handleConfirm();
