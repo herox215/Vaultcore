@@ -240,4 +240,41 @@ export const markdownTheme = EditorView.theme({
     color: "var(--color-text-muted)",
     fontStyle: "italic",
   },
+
+  // ── Inline HTML rendering (#70) ──────────────────────────────────────────
+  ".cm-html-rendered": {
+    display: "block",
+    color: "var(--color-text)",
+    lineHeight: "1.6",
+  },
+  ".cm-html-rendered-inline": {
+    color: "var(--color-text)",
+  },
+  // <kbd> styling
+  ".cm-html-rendered kbd, .cm-html-rendered-inline kbd": {
+    fontFamily: "var(--vc-font-mono)",
+    fontSize: "0.85em",
+    padding: "2px 6px",
+    border: "1px solid var(--color-border)",
+    borderRadius: "3px",
+    backgroundColor: "var(--color-code-bg)",
+    boxShadow: "0 1px 0 rgba(0, 0, 0, 0.08)",
+  },
+  // <details> styling
+  ".cm-html-rendered details": {
+    border: "1px solid var(--color-border)",
+    borderRadius: "4px",
+    padding: "8px 12px",
+    margin: "4px 0",
+  },
+  ".cm-html-rendered details summary": {
+    cursor: "pointer",
+    fontWeight: "600",
+  },
+  // <mark> styling
+  ".cm-html-rendered mark, .cm-html-rendered-inline mark": {
+    backgroundColor: "rgba(255, 213, 79, 0.4)",
+    padding: "1px 2px",
+    borderRadius: "2px",
+  },
 });
