@@ -292,15 +292,14 @@ export const tabStore = {
         if (state.activeTabId === tabId) {
           // Prefer left sibling, then right sibling
           if (idx > 0 && newPaneIds[idx - 1]) {
-            newActiveTabId = newPaneIds[idx - 1];
+            newActiveTabId = newPaneIds[idx - 1] ?? null;
           } else if (newPaneIds[idx]) {
-            newActiveTabId = newPaneIds[idx];
+            newActiveTabId = newPaneIds[idx] ?? null;
           } else if (newPaneIds.length > 0) {
-            newActiveTabId = newPaneIds[newPaneIds.length - 1];
+            newActiveTabId = newPaneIds[newPaneIds.length - 1] ?? null;
           } else {
-            // Pane empty but split still exists — pick from other pane
             const other = state.splitState[otherPane];
-            newActiveTabId = other.length > 0 ? other[0] : null;
+            newActiveTabId = other.length > 0 ? (other[0] ?? null) : null;
           }
         }
       }
@@ -340,7 +339,7 @@ export const tabStore = {
 
       const currentIdx = state.activeTabId ? paneIds.indexOf(state.activeTabId) : -1;
       const nextIdx = (currentIdx + direction + paneIds.length) % paneIds.length;
-      return { ...state, activeTabId: paneIds[nextIdx] };
+      return { ...state, activeTabId: paneIds[nextIdx] ?? state.activeTabId };
     });
   },
 

@@ -35,8 +35,8 @@ describe("tabStore", () => {
       const state = get(tabStore);
 
       expect(state.tabs).toHaveLength(1);
-      expect(state.tabs[0].filePath).toBe("/vault/note-a.md");
-      expect(state.tabs[0].id).toBe(id);
+      expect(state.tabs[0]!.filePath).toBe("/vault/note-a.md");
+      expect(state.tabs[0]!.id).toBe(id);
       expect(state.activeTabId).toBe(id);
       // Tab goes in left pane by default
       expect(state.splitState.left).toContain(id);
