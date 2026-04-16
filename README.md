@@ -14,6 +14,10 @@ Open-source · Markdown-first · Local-first · Not built on Electron
 
 ---
 
+> **Status: Work in Progress.** VaultCore is under active development and not yet production-ready. Expect breaking changes, missing features, and sharp edges. Don't point it at your only copy of anything important.
+
+---
+
 Obsidian is great. Shipping an entire Chromium to edit a `.md` file is... a choice. VaultCore takes the ideas that make Obsidian brilliant — wikilinks, graph view, backlinks, local-first everything — and puts them on a stack that doesn't need a cooling pad.
 
 **Rust backend. Svelte frontend. Native webview.** No Electron. No 500MB RAM for a text editor.
@@ -31,7 +35,7 @@ Obsidian is great. Shipping an entire Chromium to edit a `.md` file is... a choi
 ## Quick start
 
 ```bash
-git clone https://github.com/your-org/vaultcore.git
+git clone https://github.com/herox215/Vaultcore.git
 cd vaultcore
 pnpm install
 pnpm tauri dev
