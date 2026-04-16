@@ -37,8 +37,33 @@ fn templates_dir_for(state: &VaultState, vault_path: &str) -> Result<PathBuf, Va
         return Err(VaultError::PermissionDenied { path: canonical.display().to_string() });
     }
     let dir = canonical.join(VAULTCORE_DIR).join(TEMPLATES_DIR);
+    let fresh = !dir.exists();
     std::fs::create_dir_all(&dir).map_err(VaultError::Io)?;
+    if fresh {
+        seed_default_templates(&dir);
+    }
     Ok(dir)
+}
+
+/// Write bundled example templates into a freshly created templates directory.
+/// Failures are silently ignored — missing examples are not worth blocking the
+/// user. Files that already exist (e.g. from a previous partial seed) are not
+/// overwritten.
+fn seed_default_templates(dir: &Path) {
+    const DEFAULTS: &[(&str, &str)] = &[
+        ("Meeting Notes.md", include_str!("../default_templates/Meeting Notes.md")),
+        ("Daily Journal.md", include_str!("../default_templates/Daily Journal.md")),
+        ("Project Brief.md", include_str!("../default_templates/Project Brief.md")),
+        ("Weekly Review.md", include_str!("../default_templates/Weekly Review.md")),
+        ("Book Notes.md", include_str!("../default_templates/Book Notes.md")),
+        ("Bug Report.md", include_str!("../default_templates/Bug Report.md")),
+    ];
+    for (name, content) in DEFAULTS {
+        let path = dir.join(name);
+        if !path.exists() {
+            let _ = std::fs::write(&path, content);
+        }
+    }
 }
 
 /// Reject filenames that would escape the templates directory.
