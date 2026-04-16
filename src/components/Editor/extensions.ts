@@ -36,6 +36,7 @@ import type { PaneId } from "../../store/countsStore";
 import { activeViewStore } from "../../store/activeViewStore";
 import { imageAttachmentExtension } from "./imageAttachment";
 import { inlineHtmlPlugin } from "./inlineHtml";
+import { tablePlugin } from "./tablePlugin";
 
 // Debounce sidebar panel re-renders during typing: rapid docChanged updates
 // otherwise flood PropertiesPanel and OutgoingLinksPanel with re-parses on
@@ -89,6 +90,7 @@ export function buildExtensions(
     calloutPlugin,
     taskListPlugin,
     inlineHtmlPlugin,
+    tablePlugin,
     docVersionBumpListener,
     imageAttachmentExtension(),
   ];
