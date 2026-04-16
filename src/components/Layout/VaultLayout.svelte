@@ -5,6 +5,7 @@
   import EditorPane from "../Editor/EditorPane.svelte";
   import QuickSwitcher from "../Search/QuickSwitcher.svelte";
   import CommandPalette from "../CommandPalette/CommandPalette.svelte";
+  import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import { tabStore } from "../../store/tabStore";
@@ -52,6 +53,7 @@
   let isDragging = $state(false);
   let quickSwitcherOpen = $state(false);
   let commandPaletteOpen = $state(false);
+  let templatePickerOpen = $state(false);
   let settingsOpen = $state(false);
   let dragStartX = 0;
   let dragStartWidth = 0;
@@ -514,6 +516,7 @@
       exportActiveNoteHtml: () => { void exportActiveNoteHtml(); },
       exportActiveNotePdf: () => { void exportActiveNotePdf(); },
       toggleReadingMode: () => { toggleActiveReadingMode(); },
+      insertTemplate: () => { templatePickerOpen = true; },
     });
     initHotkeyOverrides();
     document.addEventListener("keydown", handleKeydown, { capture: true });
@@ -545,6 +548,7 @@
     if (settingsOpen || inlineRenameActive()) return;
     if (commandPaletteOpen) return; // palette handles its own keys
     if (quickSwitcherOpen) return; // quick switcher handles its own keys
+    if (templatePickerOpen) return; // template picker handles its own keys
 
     const cmd = commandRegistry.findByHotkey(e);
     if (!cmd) return;
@@ -719,6 +723,11 @@
 <CommandPalette
   open={commandPaletteOpen}
   onClose={() => { commandPaletteOpen = false; }}
+/>
+
+<TemplatePicker
+  open={templatePickerOpen}
+  onClose={() => { templatePickerOpen = false; }}
 />
 
 <SettingsModal
