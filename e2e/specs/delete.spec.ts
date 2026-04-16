@@ -91,12 +91,7 @@ describe("Delete file", () => {
     );
   });
 
-  // BUG #102: app-initiated deletes are filtered from the FS watcher by
-  // write_ignore, so the frontend never receives kind:"delete" and
-  // Sidebar.svelte:112 never calls tabStore.closeByPath(). Skip until the
-  // Rust side emits a dedicated delete notification (or stops recording
-  // the source path in write_ignore).
-  it.skip("closes the open tab when its backing file is deleted", async () => {
+  it("closes the open tab when its backing file is deleted", async () => {
     await openSidebarNote("Ideas.md");
     const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
     await activeLabel.waitForDisplayed({ timeout: 3000 });
