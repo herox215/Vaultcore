@@ -46,6 +46,12 @@ vi.mock("../../Graph/GraphView.svelte", async () => {
   const { default: Empty } = await import("./emptyComponent.svelte");
   return { default: Empty };
 });
+vi.mock("../../Graph/graphRender", () => ({
+  mountGraph: vi.fn(),
+  updateGraph: vi.fn(),
+  destroyGraph: vi.fn(),
+  DEFAULT_FORCE_SETTINGS: {},
+}));
 
 // Deterministic, path-encoded asset URL so assertions compare exactly.
 vi.mock("@tauri-apps/api/core", () => ({
