@@ -50,13 +50,18 @@ vi.mock("../../../ipc/events", () => ({
   listenIndexProgress: vi.fn().mockResolvedValue(() => {}),
 }));
 
-// GraphView pulls in sigma → WebGL2RenderingContext at module init, which
-// jsdom doesn't provide. We never render a graph tab in this test, so stub
-// the component with an empty placeholder to keep the import tree light.
+// GraphView and graphRender pull in sigma → WebGL2RenderingContext at module
+// init, which jsdom doesn't provide. Stub them with empty placeholders.
 vi.mock("../../Graph/GraphView.svelte", async () => {
   const { default: Empty } = await import("./emptyComponent.svelte");
   return { default: Empty };
 });
+vi.mock("../../Graph/graphRender", () => ({
+  mountGraph: vi.fn(),
+  updateGraph: vi.fn(),
+  destroyGraph: vi.fn(),
+  DEFAULT_FORCE_SETTINGS: {},
+}));
 
 import { tabStore } from "../../../store/tabStore";
 import { vaultStore } from "../../../store/vaultStore";
