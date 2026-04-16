@@ -99,7 +99,7 @@ PRs welcome. Run `pnpm test` and `pnpm typecheck` before submitting — broken t
 
 ## License
 
-TBD
+MIT — see [LICENSE](LICENSE).
 
 ---
 
