@@ -19,6 +19,7 @@ export interface DefaultCommandContext {
   exportActiveNoteHtml: () => void;
   exportActiveNotePdf: () => void;
   toggleReadingMode: () => void;
+  insertTemplate: () => void;
 }
 
 /** Id constants — consumed by tests and anyone dispatching by id. */
@@ -39,6 +40,7 @@ export const CMD_IDS = {
   EXPORT_HTML: "vault:export-html",
   EXPORT_PDF: "vault:export-pdf",
   TOGGLE_READING_MODE: "editor:toggle-reading-mode",
+  INSERT_TEMPLATE: "editor:insert-template",
 } as const;
 
 export interface DefaultCommandSpec {
@@ -65,6 +67,7 @@ export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
   { id: CMD_IDS.EXPORT_HTML, name: "Notiz als HTML exportieren" },
   { id: CMD_IDS.EXPORT_PDF, name: "Notiz als PDF exportieren" },
   { id: CMD_IDS.TOGGLE_READING_MODE, name: "Lesemodus umschalten", hotkey: { meta: true, key: "e" } },
+  { id: CMD_IDS.INSERT_TEMPLATE, name: "Vorlage einfügen", hotkey: { meta: true, shift: true, key: "t" } },
 ] as const;
 
 /**
@@ -90,6 +93,7 @@ export function registerDefaultCommands(ctx: DefaultCommandContext): void {
     [CMD_IDS.EXPORT_HTML]: ctx.exportActiveNoteHtml,
     [CMD_IDS.EXPORT_PDF]: ctx.exportActiveNotePdf,
     [CMD_IDS.TOGGLE_READING_MODE]: ctx.toggleReadingMode,
+    [CMD_IDS.INSERT_TEMPLATE]: ctx.insertTemplate,
   };
 
   for (const spec of DEFAULT_COMMAND_SPECS) {
