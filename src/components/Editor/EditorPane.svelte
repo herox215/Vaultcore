@@ -504,11 +504,20 @@
       // ERR-03: skip auto-save when vault is unreachable
       if (!vaultReachable) return;
 
+      // #89: Read the current filePath from the store at save time rather than
+      // using the mount-time capture. When a file is renamed while the editor
+      // is open, tabStore.updateFilePath updates the tab's filePath but the
+      // closure's captured `tab` object still holds the old path. Using the
+      // stale path causes the save to target the deleted old path, which
+      // silently fails and eventually closes the editor.
+      const currentTab = allTabs.find((t) => t.id === tab.id);
+      const filePath = currentTab?.filePath ?? tab.filePath;
+
       try {
         // EDIT-10: Hash-verify branch — detect external modifications before writing.
         let diskHash: string | null;
         try {
-          diskHash = await getFileHash(tab.filePath);
+          diskHash = await getFileHash(filePath);
         } catch (e) {
           // FileNotFound means the file was deleted externally → fall through to
           // write (create path). Any other error re-throws via existing toast plumbing.
@@ -525,8 +534,8 @@
 
         if (diskHash !== null && expected !== null && diskHash !== expected) {
           // MISMATCH: external edit detected — route through three-way merge engine.
-          const baseContent = tab.lastSavedContent;
-          const result = await mergeExternalChange(tab.filePath, text, baseContent);
+          const baseContent = currentTab?.lastSavedContent ?? tab.lastSavedContent;
+          const result = await mergeExternalChange(filePath, text, baseContent);
 
           // Apply merged content back to the CM6 view for this tab.
           const view = viewMap.get(tab.id);
@@ -537,7 +546,7 @@
           }
 
           // Write the merged content to disk so hash converges.
-          const newHash = await writeFile(tab.filePath, result.merged_content);
+          const newHash = await writeFile(filePath, result.merged_content);
           editorStore.setLastSavedHash(newHash);
           tabStore.setLastSavedHash(tab.id, newHash);
           tabStore.setLastSavedContent(tab.id, result.merged_content);
@@ -546,7 +555,7 @@
           void tagsStore.reload();
 
           // Toasts — reuse the exact Phase 2 German strings.
-          const filename = tab.filePath.split("/").pop() ?? tab.filePath;
+          const filename = filePath.split("/").pop() ?? filePath;
           if (result.outcome === "clean") {
             toastStore.push({ variant: "clean-merge", message: "Externe Änderungen wurden eingebunden" });
           } else {
@@ -556,7 +565,7 @@
         }
 
         // Hashes match (or file missing → create-path) — safe to write directly.
-        const hash = await writeFile(tab.filePath, text);
+        const hash = await writeFile(filePath, text);
         tabStore.setDirty(tab.id, false);
         tabStore.setLastSavedContent(tab.id, text);
         tabStore.setLastSavedHash(tab.id, hash);

@@ -278,7 +278,8 @@
     return null;
   }
 
-  function handlePathChanged(_oldPath: string, _newPath: string) {
+  function handlePathChanged(oldPath: string, newPath: string) {
+    tabStore.updateFilePath(oldPath, newPath);
     void loadRoot();
   }
 </script>
