@@ -47,8 +47,10 @@ describe("Navigation", () => {
 
   describe("quick switcher", () => {
     it("opens and searches for a file", async () => {
-      // Open quick switcher with Ctrl+Shift+O (macOS: Cmd+Shift+O)
-      await browser.keys(["Meta", "Shift", "o"]);
+      // Open quick switcher with Ctrl+O on Linux (the hotkey dispatch
+      // in src/lib/commands/registry.ts treats metaKey || ctrlKey as "meta",
+      // and the default binding is { meta: true, key: "o" }).
+      await browser.keys(["Control", "o"]);
 
       // The quick switcher modal should appear
       const input = await browser.$(".vc-qs-input");

@@ -1,8 +1,9 @@
 import path from "node:path";
 
-const app = path.resolve(
-  "src-tauri/target/release/bundle/macos/VaultCore.app/Contents/MacOS/VaultCore",
-);
+// Linux release binary. tauri-driver does not support macOS; a portable
+// platform-agnostic helper was avoided on purpose — the suite is gated
+// to Linux until upstream WebKitWebDriver support lands elsewhere.
+const app = path.resolve("src-tauri/target/release/vaultcore");
 
 export const config: WebdriverIO.Config = {
   runner: "local",

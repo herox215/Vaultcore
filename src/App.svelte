@@ -175,13 +175,23 @@
       progressStore.update(payload.current, payload.total, payload.current_file);
     });
 
+    // E2E test hook: expose loadVault on window so WebDriver specs can
+    // bypass the native file picker. Gated behind VITE_E2E=1 so the hook
+    // is completely absent from normal release builds (tree-shaken out).
+    if (import.meta.env.VITE_E2E === "1") {
+      (window as unknown as { __e2e__: { loadVault: (p: string) => Promise<void> } }).__e2e__ = {
+        loadVault,
+      };
+    }
+
     // VAULT-03: on startup, attempt to reopen the most-recent reachable vault.
     // VAULT-05: if that vault has been moved/deleted/unmounted, we stay on the
     // Welcome screen and surface a toast instead of crashing.
     try {
       recent = await getRecentVaults();
       const last = recent[0];
-      if (last !== undefined) {
+      // Skip auto-load in e2e mode so each spec controls its own vault.
+      if (last !== undefined && import.meta.env.VITE_E2E !== "1") {
         await loadVault(last.path);
       }
     } catch (err) {
