@@ -37,6 +37,7 @@ function makeCtx(overrides: Partial<DefaultCommandContext> = {}): DefaultCommand
     exportActiveNoteHtml: noop,
     exportActiveNotePdf: noop,
     toggleReadingMode: noop,
+    insertTemplate: noop,
     ...overrides,
   };
 }
