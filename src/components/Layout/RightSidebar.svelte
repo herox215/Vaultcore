@@ -1,23 +1,19 @@
 <script lang="ts">
-  import { FileText, ListTree, ArrowUpRight, ArrowDownLeft, Network } from "lucide-svelte";
+  import { FileText, ListTree, ArrowUpRight, ArrowDownLeft } from "lucide-svelte";
   import BacklinksPanel from "../Backlinks/BacklinksPanel.svelte";
   import OutgoingLinksPanel from "../OutgoingLinks/OutgoingLinksPanel.svelte";
   import OutlinePanel from "../Outline/OutlinePanel.svelte";
   import PropertiesPanel from "../Properties/PropertiesPanel.svelte";
-  import LocalGraphPanel from "../Graph/LocalGraphPanel.svelte";
 
   // Obsidian-style tabbed right sidebar: only one panel visible at a time, the
-  // active panel takes the full sidebar height. Replaces the previous stacked
-  // layout which became unusable once the Graph panel was added (too cramped
-  // at ~240 px sidebar width with five stacked sections).
+  // active panel takes the full sidebar height.
   const STORAGE_KEY = "vaultcore-right-sidebar-tab";
-  type Tab = "properties" | "outline" | "outgoing" | "backlinks" | "graph";
+  type Tab = "properties" | "outline" | "outgoing" | "backlinks";
   const TAB_IDS: readonly Tab[] = [
     "properties",
     "outline",
     "outgoing",
     "backlinks",
-    "graph",
   ] as const;
 
   function loadTab(): Tab {
@@ -92,18 +88,6 @@
     >
       <ArrowDownLeft size={14} strokeWidth={1.75} />
     </button>
-    <button
-      type="button"
-      class="vc-right-tab"
-      class:vc-right-tab--active={activeTab === "graph"}
-      role="tab"
-      aria-selected={activeTab === "graph"}
-      aria-label="Graph"
-      title="Local Graph"
-      onclick={() => setTab("graph")}
-    >
-      <Network size={14} strokeWidth={1.75} />
-    </button>
   </div>
 
   <div class="vc-right-tab-content" role="tabpanel">
@@ -115,8 +99,6 @@
       <OutgoingLinksPanel />
     {:else if activeTab === "backlinks"}
       <BacklinksPanel />
-    {:else if activeTab === "graph"}
-      <LocalGraphPanel />
     {/if}
   </div>
 </div>

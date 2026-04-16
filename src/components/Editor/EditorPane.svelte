@@ -18,6 +18,7 @@
   import { toastStore } from "../../store/toastStore";
   import { searchStore } from "../../store/searchStore";
   import { buildExtensions, buildReadOnlyExtensions } from "./extensions";
+  import EditorGraphBackground from "./EditorGraphBackground.svelte";
   import CountStatusBar from "./CountStatusBar.svelte";
   import { countsStore } from "../../store/countsStore";
   import { computeCounts } from "../../lib/wordCount";
@@ -49,6 +50,7 @@
   let activePane = $state<"left" | "right">("left");
   // ERR-03: vault reachability — driven by vaultStore.vaultReachable
   let vaultReachable = $state(true);
+  let currentVaultPath = $state<string | null>(null);
 
   // Watcher event unlisten handles
   let unlistenFileChange: UnlistenFn | null = null;
@@ -114,6 +116,20 @@
     paneActiveTab.viewer !== "text",
   );
 
+  // #87: show ambient local-graph background in edit mode on markdown tabs.
+  const showGraphBg = $derived(
+    paneActiveTabSupportsReading &&
+    paneActiveTab !== null &&
+    (paneActiveTab.viewMode ?? "edit") === "edit"
+  );
+  const bgRelPath = $derived.by<string | null>(() => {
+    if (!showGraphBg || !paneActiveTab || !currentVaultPath) return null;
+    if (paneActiveTab.filePath.startsWith(currentVaultPath + "/")) {
+      return paneActiveTab.filePath.slice(currentVaultPath.length + 1);
+    }
+    return null;
+  });
+
   // #49: tabs whose viewer is not "markdown"/"text" don't host a CM6 view.
   // Used to skip the editor-mount loop and to gate the count status bar.
   function tabHasEditor(t: Tab | undefined): boolean {
@@ -134,6 +150,7 @@
   // Subscribe to vaultStore for vault reachability (ERR-03)
   const unsubVault = vaultStore.subscribe((state) => {
     vaultReachable = state.vaultReachable;
+    currentVaultPath = state.currentPath;
   });
 
   // ─── Wiki-link resolution map ──────────────────────────────────────────────
@@ -749,13 +766,15 @@
   />
 
   <!-- Editor content area -->
-  <div class="vc-editor-content">
+  <div class="vc-editor-content" class:has-graph-bg={showGraphBg}>
     {#if paneTabs.length === 0}
       <div class="vc-editor-empty">
         <p class="vc-editor-empty-heading">No file open</p>
         <p class="vc-editor-empty-body">Select a file from the sidebar, or drag a tab here to split the view.</p>
       </div>
     {/if}
+    <!-- #87: ambient local-graph background behind the editor in edit mode -->
+    <EditorGraphBackground visible={showGraphBg} relPath={bgRelPath} />
     <!-- Svelte renders one container per tab. Visibility is driven by
          style:display reacting to paneActiveTabId — no manual DOM needed.
          Graph tabs render <GraphView /> instead of a CM6 container so the
@@ -844,6 +863,15 @@
   .vc-editor-container {
     position: absolute;
     inset: 0;
+    z-index: 1;
+  }
+
+  /* #87: semi-transparent editor backgrounds so the ambient graph shows through */
+  .vc-editor-content.has-graph-bg :global(.cm-editor) {
+    background-color: color-mix(in srgb, var(--color-bg) 55%, transparent) !important;
+  }
+  .vc-editor-content.has-graph-bg :global(.cm-content) {
+    background-color: color-mix(in srgb, var(--color-surface) 70%, transparent) !important;
   }
 
   .vc-editor-empty {
