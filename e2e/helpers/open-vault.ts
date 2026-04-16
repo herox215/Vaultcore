@@ -28,4 +28,11 @@ export async function openVaultInApp(vaultPath: string): Promise<void> {
   // Sidebar becomes visible once vaultStore.status === "ready".
   const sidebar = await browser.$('[data-testid="sidebar"]');
   await sidebar.waitForDisplayed({ timeout: 15_000 });
+
+  // The sidebar container appears immediately; the file tree is rendered
+  // asynchronously from vaultStore.fileList on the next Svelte tick. Specs
+  // that query .vc-tree-name right after openVaultInApp() race that render
+  // and see an empty list, so wait for at least one tree entry.
+  const firstNode = await browser.$(".vc-tree-name");
+  await firstNode.waitForDisplayed({ timeout: 10_000 });
 }

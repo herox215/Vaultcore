@@ -1,5 +1,6 @@
 import { createTestVault, type TestVault } from "../helpers/vault.js";
 import { openVaultInApp } from "../helpers/open-vault.js";
+import { textOf } from "../helpers/text.js";
 
 describe("Error handling", () => {
   let vault: TestVault;
@@ -15,24 +16,24 @@ describe("Error handling", () => {
 
   describe("#90 regression — no spurious error toast on note open", () => {
     it("opens a note without triggering an error toast", async () => {
-      // Open a note
       const nodes = await browser.$$(".vc-tree-name");
       for (const node of nodes) {
-        if ((await node.getText()) === "Welcome.md") {
+        if ((await textOf(node)) === "Welcome.md") {
           await node.click();
           break;
         }
       }
 
-      // Wait for the editor to render
-      const editor = await browser.$('[data-testid="cm-editor"]');
-      await editor.waitForDisplayed({ timeout: 5000 });
+      // Wait for CM6's own .cm-content — the outer [data-testid="cm-editor"]
+      // wrapper reports zero dimensions to WebKitWebDriver's isDisplayed check
+      // until CM finishes mounting.
+      const cmContent = await browser.$(".cm-content");
+      await cmContent.waitForDisplayed({ timeout: 5000 });
 
       // Give the app time to settle — the original bug was a race condition
       // between mount and async IPC that produced spurious errors.
       await browser.pause(2000);
 
-      // There should be no error toasts
       const errorToasts = await browser.$$('[data-testid="toast"][data-variant="error"]');
       expect(errorToasts.length).toBe(0);
     });
@@ -43,7 +44,7 @@ describe("Error handling", () => {
       for (const name of fileNames) {
         const nodes = await browser.$$(".vc-tree-name");
         for (const node of nodes) {
-          if ((await node.getText()) === name) {
+          if ((await textOf(node)) === name) {
             await node.click();
             break;
           }
@@ -53,10 +54,8 @@ describe("Error handling", () => {
         await browser.pause(200);
       }
 
-      // Let everything settle
       await browser.pause(2000);
 
-      // Still no error toasts
       const errorToasts = await browser.$$('[data-testid="toast"][data-variant="error"]');
       expect(errorToasts.length).toBe(0);
     });
