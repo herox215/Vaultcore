@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { renameFile, deleteFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
@@ -15,7 +15,11 @@
   let { currentName, oldPath, isNewFile = false, onConfirm, onCancel }: Props = $props();
 
   let inputEl: HTMLInputElement | null = null;
-  let value = $state(currentName);
+  // `currentName` is the prop the parent passes in for this rename session.
+  // The component is destroyed/recreated per session, so seeding `value`
+  // once is intentional — `untrack` documents that and silences Svelte 5's
+  // `state_referenced_locally` warning.
+  let value = $state(untrack(() => currentName));
   let validationError = $state<string | null>(null);
   let confirming = $state(false);
 
