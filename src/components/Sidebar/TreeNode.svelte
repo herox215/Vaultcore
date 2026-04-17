@@ -12,7 +12,7 @@
   import { treeRevealStore } from "../../store/treeRevealStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { sortEntries, type SortBy } from "../../lib/treeState";
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
 
   interface Props {
     entry: DirEntry;
@@ -45,7 +45,12 @@
     sortBy = "name",
   }: Props = $props();
 
-  let expanded = $state(initiallyExpanded);
+  // `initiallyExpanded` is a one-shot seed: the prop reflects the persisted
+  // tree state at mount time, but local expand/collapse is driven by the
+  // user (see `toggleExpand`) and must not be overwritten when the prop
+  // changes. `untrack` makes that intent explicit and silences Svelte 5's
+  // `state_referenced_locally` warning.
+  let expanded = $state(untrack(() => initiallyExpanded));
   let children = $state<DirEntry[]>([]);
   let childrenLoaded = $state(false);
   let loading = $state(false);
@@ -59,7 +64,6 @@
   // and fall back to the row-anchored CSS default.
   let showContextMenu = $state(false);
   let menuPos = $state<{ x: number; y: number } | null>(null);
-  let contextMenuRef: HTMLDivElement | null = null;
 
   // Delete confirmation state
   let showDeleteConfirm = $state(false);
@@ -600,7 +604,6 @@
       class="vc-context-menu"
       class:vc-context-menu--pointer={menuPos !== null}
       style={menuPos ? `top: ${menuPos.y}px; left: ${menuPos.x}px` : undefined}
-      bind:this={contextMenuRef}
     >
       {#if !entry.is_dir}
         <button class="vc-context-item" onclick={handleOpenInSplit}>Open in split</button>
