@@ -593,8 +593,14 @@
     />
   </div>
 
-  <!-- Resize divider -->
-  {#if !sidebarCollapsed}
+  <!-- Resize divider (column 2). Always rendered — a missing element would
+       let CSS grid auto-placement slide every subsequent child one column
+       left, so the editor would land in the `auto` track (col 2) instead of
+       `1fr` (col 3). When collapsed we swap to a zero-width sibling that
+       keeps the placement anchored without showing a visible handle. -->
+  {#if sidebarCollapsed}
+    <div class="vc-layout-divider-hidden" aria-hidden="true"></div>
+  {:else}
     <div
       class="vc-layout-divider"
       class:vc-layout-divider--active={isDragging}
@@ -769,6 +775,10 @@
   .vc-layout-divider:hover,
   .vc-layout-divider--active {
     background: var(--color-accent-bg);
+  }
+
+  .vc-layout-divider-hidden {
+    width: 0;
   }
 
   .vc-layout-editor {
