@@ -601,6 +601,10 @@
   {#if sidebarCollapsed}
     <div class="vc-layout-divider-hidden" aria-hidden="true"></div>
   {:else}
+    <!-- role="separator" is the correct ARIA pattern for a drag-to-resize
+         handle; there is no standard keyboard activation for mouse-drag
+         resizing, so the mouse-only handler is intentional. -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="vc-layout-divider"
       class:vc-layout-divider--active={isDragging}
@@ -664,7 +668,11 @@
       </div>
 
       {#if isSplit}
-        <!-- Split divider -->
+        <!-- Split divider.
+             role="separator" is the correct ARIA pattern for a drag-to-resize
+             handle; no standard keyboard activation applies to mouse-drag
+             resizing. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
           class="vc-split-divider"
           class:vc-split-divider--active={isSplitDragging}
@@ -685,8 +693,12 @@
     </div>
   </div>
 
-  <!-- Right resize divider (4th column) -->
+  <!-- Right resize divider (4th column).
+       role="separator" is the correct ARIA pattern for a drag-to-resize
+       handle; no standard keyboard activation applies to mouse-drag
+       resizing. -->
   {#if backlinksOpen}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="vc-layout-divider-right"
       class:vc-layout-divider-right--active={isRightDragging}

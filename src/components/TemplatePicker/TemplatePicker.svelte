@@ -165,6 +165,7 @@
               class:vc-tp-row--selected={i === selectedIndex}
               role="option"
               aria-selected={i === selectedIndex}
+              tabindex={-1}
               onclick={() => void selectTemplate(tpl)}
               onmouseenter={() => { selectedIndex = i; }}
             >

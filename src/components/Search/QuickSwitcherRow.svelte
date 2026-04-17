@@ -28,7 +28,12 @@
   );
 </script>
 
+<!-- Keyboard nav (ArrowUp/ArrowDown/Enter) is owned by the parent
+     QuickSwitcher's input handler — the row itself only needs to be a
+     click target; its tabindex={-1} keeps it out of the Tab sequence while
+     allowing programmatic focus if ever needed. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   class="vc-qs-row"
   class:vc-qs-row--selected={selected}
@@ -36,6 +41,7 @@
   onmouseenter={onhover}
   role="option"
   aria-selected={selected}
+  tabindex={-1}
 >
   <!-- Filename line with per-char match highlighting -->
   <span class="vc-qs-row-filename">

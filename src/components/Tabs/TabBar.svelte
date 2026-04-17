@@ -74,6 +74,7 @@
   class="vc-tabbar"
   role="tablist"
   aria-label="{paneId} pane tabs"
+  tabindex="0"
   ondragover={handleDragover}
   ondragleave={handleDragleave}
   ondrop={handleDrop}

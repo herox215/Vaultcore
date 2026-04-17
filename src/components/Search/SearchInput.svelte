@@ -60,7 +60,6 @@
   <input
     bind:this={inputEl}
     type="search"
-    role="searchbox"
     aria-label="Volltextsuche"
     aria-busy={disabled}
     placeholder='Suchen... (AND, OR, NOT, "phrase")'
