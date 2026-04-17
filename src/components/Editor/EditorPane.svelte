@@ -7,6 +7,7 @@
   import GraphView from "../Graph/GraphView.svelte";
   import ImagePreview from "./ImagePreview.svelte";
   import UnsupportedPreview from "./UnsupportedPreview.svelte";
+  import CanvasView from "../Canvas/CanvasView.svelte";
   import ReadingView from "./ReadingView.svelte";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
@@ -141,6 +142,7 @@
     if (!t) return false;
     if (t.type === "graph") return false;
     if (t.viewer === "image" || t.viewer === "unsupported") return false;
+    if (t.viewer === "canvas") return false;
     return true;
   }
 
@@ -840,6 +842,14 @@
           style:display={tab.id === paneActiveTabId ? "block" : "none"}
         >
           <UnsupportedPreview abs={tab.filePath} />
+        </div>
+      {:else if tab.viewer === "canvas"}
+        <div
+          class="vc-editor-container"
+          data-tab-id={tab.id}
+          style:display={tab.id === paneActiveTabId ? "block" : "none"}
+        >
+          <CanvasView tabId={tab.id} abs={tab.filePath} />
         </div>
       {:else}
         <!-- #63: both containers are rendered; visibility is toggled by
