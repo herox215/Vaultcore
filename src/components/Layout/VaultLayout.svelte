@@ -607,52 +607,41 @@
 
   <!-- Editor area (3rd column) -->
   <div class="vc-layout-editor" style="--split-ratio: {splitRatio}">
-    <!-- Sidebar collapse toggle (shown when collapsed) -->
-    {#if sidebarCollapsed}
+    <!-- Topbar: always rendered so its buttons (sidebar toggle, backlinks,
+         settings) don't vanish together with the sidebar (issue #112). The
+         sidebar toggle morphs between collapse / expand based on state. -->
+    <div class="vc-editor-topbar">
       <button
-        class="vc-sidebar-expand-btn"
+        class="vc-sidebar-toggle-btn"
         onclick={toggleSidebar}
-        aria-label="Expand sidebar"
-        title="Expand sidebar"
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!sidebarCollapsed}
+        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
-        &#9654;
+        {#if sidebarCollapsed}&#9654;{:else}&#9664;{/if}
       </button>
-    {/if}
-
-    <!-- Topbar with collapse toggle (shown when sidebar visible) -->
-    {#if !sidebarCollapsed}
-      <div class="vc-editor-topbar">
-        <button
-          class="vc-sidebar-toggle-btn"
-          onclick={toggleSidebar}
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar"
-        >
-          &#9664;
-        </button>
-        <div class="vc-editor-topbar-spacer"></div>
-        <button
-          class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
-          class:vc-backlinks-toggle-btn--active={backlinksOpen}
-          onclick={() => backlinksStore.toggle()}
-          aria-label="Backlinks-Panel umschalten"
-          aria-pressed={backlinksOpen}
-          title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
-        >
-          <PanelRight size={16} />
-        </button>
-        <button
-          class="vc-sidebar-toggle-btn"
-          class:vc-backlinks-toggle-btn--active={settingsOpen}
-          onclick={() => { settingsOpen = true; }}
-          aria-label="Einstellungen"
-          aria-haspopup="dialog"
-          title="Einstellungen"
-        >
-          <SettingsIcon size={16} />
-        </button>
-      </div>
-    {/if}
+      <div class="vc-editor-topbar-spacer"></div>
+      <button
+        class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
+        class:vc-backlinks-toggle-btn--active={backlinksOpen}
+        onclick={() => backlinksStore.toggle()}
+        aria-label="Backlinks-Panel umschalten"
+        aria-pressed={backlinksOpen}
+        title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
+      >
+        <PanelRight size={16} />
+      </button>
+      <button
+        class="vc-sidebar-toggle-btn"
+        class:vc-backlinks-toggle-btn--active={settingsOpen}
+        onclick={() => { settingsOpen = true; }}
+        aria-label="Einstellungen"
+        aria-haspopup="dialog"
+        title="Einstellungen"
+      >
+        <SettingsIcon size={16} />
+      </button>
+    </div>
 
     <!-- Editor panes area -->
     <div class="vc-editor-panes">
@@ -843,8 +832,7 @@
     background: var(--color-accent-bg);
   }
 
-  .vc-sidebar-toggle-btn,
-  .vc-sidebar-expand-btn {
+  .vc-sidebar-toggle-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -858,17 +846,9 @@
     font-size: 12px;
   }
 
-  .vc-sidebar-toggle-btn:hover,
-  .vc-sidebar-expand-btn:hover {
+  .vc-sidebar-toggle-btn:hover {
     background: var(--color-accent-bg);
     color: var(--color-accent);
-  }
-
-  .vc-sidebar-expand-btn {
-    position: absolute;
-    left: 8px;
-    top: 50%;
-    transform: translateY(-50%);
   }
 
   .vc-layout-divider-right {
