@@ -43,9 +43,17 @@
     e.dataTransfer.setData("text/vaultcore-tab", tab.id);
     e.dataTransfer.effectAllowed = "move";
   }
+
+  // ARIA tab pattern: Enter or Space activates the focused tab. Space must
+  // preventDefault to stop the default page-scroll behavior.
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onactivate();
+    }
+  }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="vc-tab"
   class:vc-tab--active={isActive}
@@ -53,6 +61,7 @@
   draggable="true"
   onclick={handleClick}
   onmousedown={handleMiddleClick}
+  onkeydown={handleKeydown}
   ondragstart={handleDragStart}
   role="tab"
   aria-selected={isActive}
