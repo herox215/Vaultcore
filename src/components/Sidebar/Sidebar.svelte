@@ -457,10 +457,6 @@
     color: var(--color-accent);
   }
 
-  .vc-sidebar-action-btn--active {
-    color: var(--color-accent);
-  }
-
   /* Bulk-change progress strip — replaces vault name + action buttons */
   .vc-sidebar-bulk-progress {
     display: flex;
