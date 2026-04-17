@@ -350,8 +350,19 @@ describe("Canvas viewer (#124)", () => {
     expect(await visibleTextNodeContent()).toBe("Hallo Canvas");
   });
 
-  it("renders non-text node types as placeholders (round-trip only)", async () => {
-    expect(await visiblePlaceholders()).toBe(1);
+  it("renders non-text node types with their dedicated card (round-trip safe)", async () => {
+    // ROUNDTRIP_DOC has one group node which now renders as a proper
+    // .vc-canvas-node-group card (phase 3). Unknown-type nodes still fall
+    // back to .vc-canvas-node-placeholder.
+    const groupCount = (await browser.execute(() => {
+      const vps = Array.from(
+        document.querySelectorAll<HTMLElement>(".vc-canvas-viewport"),
+      );
+      const visible = vps.find((v) => v.offsetParent !== null);
+      return visible?.querySelectorAll(".vc-canvas-node-group").length ?? 0;
+    })) as number;
+    expect(groupCount).toBe(1);
+    expect(await visiblePlaceholders()).toBe(0);
   });
 
   // ─── Roundtrip ────────────────────────────────────────────────────────
