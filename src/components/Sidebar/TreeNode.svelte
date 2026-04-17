@@ -237,6 +237,12 @@
     isNewEntry = false;
   }
 
+  function handleOpenInSplit() {
+    closeContextMenu();
+    tabStore.openTab(entry.path);
+    tabStore.moveToPane("right");
+  }
+
   function getVaultRoot(): string | null {
     let v: string | null = null;
     const u = vaultStore.subscribe((s) => { v = s.currentPath; });
@@ -596,6 +602,9 @@
       style={menuPos ? `top: ${menuPos.y}px; left: ${menuPos.x}px` : undefined}
       bind:this={contextMenuRef}
     >
+      {#if !entry.is_dir}
+        <button class="vc-context-item" onclick={handleOpenInSplit}>Open in split</button>
+      {/if}
       <button class="vc-context-item" onclick={startRename}>Rename</button>
       {#if !entry.is_dir}
         <button class="vc-context-item" onclick={() => void toggleBookmark()}>
