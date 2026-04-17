@@ -10,11 +10,23 @@
   // node's handle to create an edge. Edges select on click (thick invisible
   // hit-path behind the visible stroke) and delete on Backspace/Delete.
   // Optional labels edit via double-click on the edge midpoint.
+  //
+  // Phase 3: embedded content (#126). File nodes render as an image, a
+  // markdown-preview card, or a filename card — clicking the card's "Open"
+  // control routes the file through openFileAsTab so the user can jump
+  // into the main editor. Link nodes render a click-to-open card whose
+  // target opens in the OS browser. Group nodes render as a labelled
+  // translucent container that sits visually behind other nodes.
 
-  import { onMount, onDestroy, tick } from "svelte";
+  import { onMount, onDestroy, tick, untrack } from "svelte";
+  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { get } from "svelte/store";
   import { readFile, writeFile } from "../../ipc/commands";
   import { toastStore } from "../../store/toastStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
+  import { vaultStore } from "../../store/vaultStore";
+  import { openFileAsTab } from "../../lib/openFileAsTab";
+  import { renderMarkdownToHtml } from "../Editor/reading/markdownRenderer";
   import {
     parseCanvas,
     serializeCanvas,
@@ -23,6 +35,9 @@
   import type {
     CanvasDoc,
     CanvasEdge,
+    CanvasFileNode,
+    CanvasGroupNode,
+    CanvasLinkNode,
     CanvasNode,
     CanvasSide,
     CanvasTextNode,
@@ -38,6 +53,12 @@
     bezierMidpoint,
     bezierPath,
   } from "../../lib/canvas/geometry";
+  import {
+    canvasFilePreview,
+    isImageFile,
+    isMarkdownFile,
+    resolveVaultAbs,
+  } from "../../lib/canvas/embed";
 
   interface Props {
     tabId: string;
@@ -80,6 +101,12 @@
   let lastWrittenJson = "";
   let suppressSave = true;
   let spaceHeld = $state(false);
+
+  // Rendered-markdown previews for file-nodes, keyed by vault-relative
+  // `file` field so multiple file-nodes at the same note share one read.
+  // Missing / failed reads become "" so the renderer falls back to a
+  // generic file card. `$state` keeps the template reactive to async loads.
+  let mdPreviews = $state<Record<string, string>>({});
 
   type PointerMode =
     | { kind: "pan"; startClientX: number; startClientY: number; startCamX: number; startCamY: number }
@@ -174,6 +201,64 @@
     }
     scheduleSave();
   });
+
+  // Lazily load markdown body for every file-node that points at an .md note.
+  // We resolve the file relative to the current vault root; when the vault
+  // path is missing (e.g., a stray canvas opened without a vault) we fall
+  // back to a generic card by leaving the preview unset.
+  $effect(() => {
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    for (const n of doc.nodes) {
+      if (n.type !== "file") continue;
+      const file = (n as CanvasFileNode).file;
+      if (!file || !isMarkdownFile(file)) continue;
+      if (file in untrack(() => mdPreviews)) continue;
+      // Reserve the slot synchronously so we don't re-queue the same file.
+      mdPreviews = { ...mdPreviews, [file]: "" };
+      const absPath = resolveVaultAbs(vaultPath, file);
+      void readFile(absPath).then(
+        (body) => {
+          mdPreviews = {
+            ...mdPreviews,
+            [file]: renderMarkdownToHtml(canvasFilePreview(body)),
+          };
+        },
+        () => {
+          /* preview failure stays as "" — renderer shows a generic card */
+        },
+      );
+    }
+  });
+
+  async function onOpenFileNode(node: CanvasFileNode) {
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    try {
+      await openFileAsTab(resolveVaultAbs(vaultPath, node.file));
+    } catch (e) {
+      const ve = isVaultError(e)
+        ? e
+        : { kind: "Io" as const, message: String(e), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
+  function onOpenLinkNode(node: CanvasLinkNode) {
+    try {
+      window.open(node.url, "_blank", "noopener,noreferrer");
+    } catch {
+      /* popup blocked or unsupported — silently swallow */
+    }
+  }
+
+  // Groups render first so other nodes stack visually on top of them.
+  // Two-pass sort keeps doc.nodes order stable within each band so picks
+  // based on DOM order (hit-testing) stay predictable.
+  let orderedNodes = $derived([
+    ...doc.nodes.filter((n) => n.type === "group"),
+    ...doc.nodes.filter((n) => n.type !== "group"),
+  ]);
 
   function clientToWorld(clientX: number, clientY: number): { x: number; y: number } {
     if (!viewportEl) return { x: 0, y: 0 };
@@ -645,7 +730,7 @@
         {/if}
       {/each}
 
-      {#each doc.nodes as node (node.id)}
+      {#each orderedNodes as node (node.id)}
         {#if node.type === "text"}
           <div
             class="vc-canvas-node vc-canvas-node-text"
@@ -680,6 +765,184 @@
               <div class="vc-canvas-node-content">
                 {(node as CanvasTextNode).text || "Empty card"}
               </div>
+            {/if}
+            <div
+              class="vc-canvas-resize-handle"
+              onpointerdown={(e) => onResizePointerDown(e, node)}
+              role="presentation"
+            ></div>
+            {#each SIDES as side (side)}
+              <button
+                type="button"
+                class="vc-canvas-edge-handle vc-canvas-edge-handle-{side}"
+                class:vc-canvas-edge-handle-active={draft?.targetNodeId === node.id && draft?.targetSide === side}
+                aria-label={`Create edge from ${side}`}
+                data-edge-handle={side}
+                onpointerdown={(e) => onHandlePointerDown(e, node, side)}
+              ></button>
+            {/each}
+          </div>
+        {:else if node.type === "file"}
+          {@const fileNode = node as CanvasFileNode}
+          {@const vaultPath = $vaultStore.currentPath}
+          {@const abs = vaultPath ? resolveVaultAbs(vaultPath, fileNode.file) : null}
+          <div
+            class="vc-canvas-node vc-canvas-node-file"
+            class:vc-canvas-node-selected={selectedNodeId === node.id}
+            class:vc-canvas-node-hovered={hoveredNodeId === node.id || draft?.fromNodeId === node.id}
+            style:left={`${node.x}px`}
+            style:top={`${node.y}px`}
+            style:width={`${node.width}px`}
+            style:height={`${node.height}px`}
+            data-node-id={node.id}
+            data-node-type="file"
+            onpointerdown={(e) => onNodePointerDown(e, node)}
+            onpointerenter={() => (hoveredNodeId = node.id)}
+            onpointerleave={() => {
+              if (hoveredNodeId === node.id) hoveredNodeId = null;
+            }}
+            role="button"
+            tabindex="0"
+          >
+            {#if isImageFile(fileNode.file) && abs}
+              <img
+                class="vc-canvas-node-image"
+                src={convertFileSrc(abs)}
+                alt={fileNode.file}
+                draggable="false"
+                data-canvas-image="true"
+              />
+              <button
+                type="button"
+                class="vc-canvas-node-open vc-canvas-node-open-overlay"
+                data-canvas-open="image"
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); void onOpenFileNode(fileNode); }}
+              >
+                Open
+              </button>
+            {:else if isMarkdownFile(fileNode.file)}
+              <div class="vc-canvas-node-file-header" data-canvas-file={fileNode.file}>
+                <span class="vc-canvas-node-file-name">{fileNode.file}</span>
+                <button
+                  type="button"
+                  class="vc-canvas-node-open"
+                  data-canvas-open="md"
+                  onpointerdown={(e) => e.stopPropagation()}
+                  onclick={(e) => { e.stopPropagation(); void onOpenFileNode(fileNode); }}
+                >
+                  Open
+                </button>
+              </div>
+              {#if mdPreviews[fileNode.file]}
+                <div class="vc-canvas-node-md markdown-body">{@html mdPreviews[fileNode.file]}</div>
+              {:else}
+                <div class="vc-canvas-node-md vc-canvas-node-md-loading">Loading preview…</div>
+              {/if}
+            {:else}
+              <div class="vc-canvas-node-file-header" data-canvas-file={fileNode.file}>
+                <span class="vc-canvas-node-file-name">{fileNode.file}</span>
+                <button
+                  type="button"
+                  class="vc-canvas-node-open"
+                  data-canvas-open="file"
+                  onpointerdown={(e) => e.stopPropagation()}
+                  onclick={(e) => { e.stopPropagation(); void onOpenFileNode(fileNode); }}
+                >
+                  Open
+                </button>
+              </div>
+              <div class="vc-canvas-node-file-body">
+                Attached file
+              </div>
+            {/if}
+            <div
+              class="vc-canvas-resize-handle"
+              onpointerdown={(e) => onResizePointerDown(e, node)}
+              role="presentation"
+            ></div>
+            {#each SIDES as side (side)}
+              <button
+                type="button"
+                class="vc-canvas-edge-handle vc-canvas-edge-handle-{side}"
+                class:vc-canvas-edge-handle-active={draft?.targetNodeId === node.id && draft?.targetSide === side}
+                aria-label={`Create edge from ${side}`}
+                data-edge-handle={side}
+                onpointerdown={(e) => onHandlePointerDown(e, node, side)}
+              ></button>
+            {/each}
+          </div>
+        {:else if node.type === "link"}
+          {@const linkNode = node as CanvasLinkNode}
+          <div
+            class="vc-canvas-node vc-canvas-node-link"
+            class:vc-canvas-node-selected={selectedNodeId === node.id}
+            class:vc-canvas-node-hovered={hoveredNodeId === node.id || draft?.fromNodeId === node.id}
+            style:left={`${node.x}px`}
+            style:top={`${node.y}px`}
+            style:width={`${node.width}px`}
+            style:height={`${node.height}px`}
+            data-node-id={node.id}
+            data-node-type="link"
+            onpointerdown={(e) => onNodePointerDown(e, node)}
+            onpointerenter={() => (hoveredNodeId = node.id)}
+            onpointerleave={() => {
+              if (hoveredNodeId === node.id) hoveredNodeId = null;
+            }}
+            role="button"
+            tabindex="0"
+          >
+            <div class="vc-canvas-node-file-header">
+              <span class="vc-canvas-node-link-url" title={linkNode.url}>{linkNode.url}</span>
+              <button
+                type="button"
+                class="vc-canvas-node-open"
+                data-canvas-open="link"
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); onOpenLinkNode(linkNode); }}
+              >
+                Open
+              </button>
+            </div>
+            <div class="vc-canvas-node-file-body">External link</div>
+            <div
+              class="vc-canvas-resize-handle"
+              onpointerdown={(e) => onResizePointerDown(e, node)}
+              role="presentation"
+            ></div>
+            {#each SIDES as side (side)}
+              <button
+                type="button"
+                class="vc-canvas-edge-handle vc-canvas-edge-handle-{side}"
+                class:vc-canvas-edge-handle-active={draft?.targetNodeId === node.id && draft?.targetSide === side}
+                aria-label={`Create edge from ${side}`}
+                data-edge-handle={side}
+                onpointerdown={(e) => onHandlePointerDown(e, node, side)}
+              ></button>
+            {/each}
+          </div>
+        {:else if node.type === "group"}
+          {@const groupNode = node as CanvasGroupNode}
+          <div
+            class="vc-canvas-node vc-canvas-node-group"
+            class:vc-canvas-node-selected={selectedNodeId === node.id}
+            class:vc-canvas-node-hovered={hoveredNodeId === node.id || draft?.fromNodeId === node.id}
+            style:left={`${node.x}px`}
+            style:top={`${node.y}px`}
+            style:width={`${node.width}px`}
+            style:height={`${node.height}px`}
+            data-node-id={node.id}
+            data-node-type="group"
+            onpointerdown={(e) => onNodePointerDown(e, node)}
+            onpointerenter={() => (hoveredNodeId = node.id)}
+            onpointerleave={() => {
+              if (hoveredNodeId === node.id) hoveredNodeId = null;
+            }}
+            role="group"
+            aria-label={groupNode.label ?? "Group"}
+          >
+            {#if groupNode.label}
+              <div class="vc-canvas-node-group-label">{groupNode.label}</div>
             {/if}
             <div
               class="vc-canvas-resize-handle"
@@ -865,6 +1128,113 @@
   .vc-canvas-node-placeholder .vc-canvas-node-content {
     color: var(--color-text-muted);
     font-style: italic;
+  }
+
+  .vc-canvas-node-file,
+  .vc-canvas-node-link {
+    overflow: hidden;
+  }
+
+  .vc-canvas-node-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    pointer-events: none;
+    background: #000;
+  }
+
+  .vc-canvas-node-file-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    background: var(--color-surface);
+    flex: 0 0 auto;
+  }
+
+  .vc-canvas-node-file-name,
+  .vc-canvas-node-link-url {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text);
+  }
+
+  .vc-canvas-node-open {
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .vc-canvas-node-open:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+
+  .vc-canvas-node-open-overlay {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.35);
+  }
+
+  .vc-canvas-node-open-overlay:hover {
+    background: rgba(0, 0, 0, 0.75);
+  }
+
+  .vc-canvas-node-file-body {
+    padding: 8px;
+    font-size: 13px;
+    color: var(--color-text-muted);
+    flex: 1;
+    overflow: auto;
+  }
+
+  .vc-canvas-node-md {
+    padding: 8px;
+    font-size: 13px;
+    color: var(--color-text);
+    flex: 1;
+    overflow: auto;
+    line-height: 1.45;
+  }
+
+  .vc-canvas-node-md-loading {
+    color: var(--color-text-muted);
+    font-style: italic;
+  }
+
+  .vc-canvas-node-group {
+    background: var(--color-accent-bg, rgba(64, 120, 192, 0.08));
+    border-style: dashed;
+    cursor: move;
+  }
+
+  .vc-canvas-node-group-label {
+    position: absolute;
+    top: -24px;
+    left: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    pointer-events: none;
   }
 
   .vc-canvas-node-textarea {
