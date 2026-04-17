@@ -58,7 +58,7 @@
 
   // Rename/inline edit state
   let renaming = $state(false);
-  let isNewEntry = $state(false);
+  let isNewFile = $state(false);
 
   // Context menu state. When opened via right-click we position at the mouse
   // coordinates; when opened via the three-dots button we leave `menuPos` null
@@ -239,7 +239,7 @@
   function startRename() {
     closeContextMenu();
     renaming = true;
-    isNewEntry = false;
+    isNewFile = false;
   }
 
   function handleOpenInSplit() {
@@ -562,7 +562,7 @@
       <InlineRename
         currentName={entry.name}
         oldPath={entry.path}
-        {isNewEntry}
+        {isNewFile}
         onConfirm={handleRenameConfirm}
         onCancel={handleRenameCancel}
       />
