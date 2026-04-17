@@ -68,9 +68,15 @@ describe("GFM table rendering", () => {
           const active = panes.find((el) => el.offsetParent !== null);
           const table = active?.querySelector<HTMLTableElement>("table.cm-table-rendered");
           if (!table) return null;
-          const headers = Array.from(table.querySelectorAll("th")).map((th) => th.textContent ?? "");
+          // Inline-editing scaffolding nests the user-visible text inside a
+          // .cm-table-cell span next to the hover controls. Read that span
+          // rather than the TH/TD's full textContent (which also includes the
+          // control glyphs).
+          const headers = Array.from(table.querySelectorAll("th")).map(
+            (th) => (th.querySelector(".cm-table-cell")?.textContent ?? "").trim(),
+          );
           const firstRow = Array.from(table.querySelectorAll("tbody tr:first-child td"))
-            .map((td) => (td.textContent ?? "").trim());
+            .map((td) => (td.querySelector(".cm-table-cell")?.textContent ?? "").trim());
           return { headers, firstRow };
         });
         if (!found) return false;

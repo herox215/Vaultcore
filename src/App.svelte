@@ -196,7 +196,7 @@
         await tick();
       };
       const pushToast = (variant: "error" | "conflict" | "clean-merge", message: string): void => {
-        toastStore.push({ variant, message });
+        toastStore.push({ variant: variant, message: message });
       };
       const startProgress = (total: number): void => {
         progressStore.start(total);
@@ -225,6 +225,18 @@
           userEvent: "input.type",
         });
       };
+      // Read the current CM6 document text from the visible editor. WebKit
+      // drivers can't introspect CM6 state directly, so the hook resolves the
+      // active EditorView and returns `view.state.doc.toString()`.
+      const getActiveDocText = async (): Promise<string> => {
+        const { EditorView } = await import("@codemirror/view");
+        const els = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
+        const active = els.find((el) => el.offsetParent !== null);
+        if (!active) return "";
+        const view = EditorView.findFromDOM(active);
+        if (!view) return "";
+        return view.state.doc.toString();
+      };
       (window as unknown as {
         __e2e__: {
           loadVault: (p: string) => Promise<void>;
@@ -235,6 +247,7 @@
           updateProgress: (current: number, total: number, currentFile?: string) => void;
           finishProgress: () => void;
           typeInActiveEditor: (text: string) => Promise<void>;
+          getActiveDocText: () => Promise<string>;
         };
       }).__e2e__ = {
         loadVault,
@@ -245,6 +258,7 @@
         updateProgress,
         finishProgress,
         typeInActiveEditor,
+        getActiveDocText,
       };
     }
 
