@@ -578,7 +578,7 @@
 <div
   class="vc-vault-layout"
   class:vc-vault-layout--dragging={isDragging || isSplitDragging || isRightDragging}
-  style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px; --right-sidebar-width: {backlinksOpen ? backlinksWidth : 0}px"
+  style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px; --right-sidebar-width: {backlinksOpen ? backlinksWidth : 0}px; --vc-editor-max-width: {sidebarCollapsed ? 1100 : 720}px"
 >
   <!-- Sidebar column -->
   <div
