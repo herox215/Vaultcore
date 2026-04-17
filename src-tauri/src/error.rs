@@ -22,6 +22,9 @@ pub enum VaultError {
     #[error("Index corrupt, rebuild needed")]
     IndexCorrupt,
 
+    #[error("Search index is locked by another process")]
+    IndexLocked,
+
     #[error("Vault unavailable: {path}")]
     VaultUnavailable { path: String },
 
@@ -42,6 +45,7 @@ impl VaultError {
             Self::PermissionDenied { .. } => "PermissionDenied",
             Self::DiskFull => "DiskFull",
             Self::IndexCorrupt => "IndexCorrupt",
+            Self::IndexLocked => "IndexLocked",
             Self::VaultUnavailable { .. } => "VaultUnavailable",
             Self::MergeConflict { .. } => "MergeConflict",
             Self::InvalidEncoding { .. } => "InvalidEncoding",

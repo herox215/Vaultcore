@@ -200,7 +200,7 @@ mod orphan_cleanup_tests {
 
         // ── Session 1: index both files ──
         {
-            let coord = IndexCoordinator::new(vault).expect("coordinator 1");
+            let coord = IndexCoordinator::new(vault).await.expect("coordinator 1");
             add_and_commit(&coord, &a_path, "A", "alpha body").await;
             add_and_commit(&coord, &b_path, "B", "bravo body").await;
             wait_for_drain(&coord).await;
@@ -223,13 +223,15 @@ mod orphan_cleanup_tests {
         // Simulate the vault mutation that happens between sessions.
         std::fs::remove_file(&b_path).unwrap();
 
-        // Give the previous writer task a moment to process Shutdown and drop
-        // its IndexWriter. In production, Drop + channel close already serialises
-        // this; the sleep just keeps the test deterministic across schedulers.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // The previous test sleep around Shutdown drain is now redundant —
+        // `IndexCoordinator::new` itself retries the writer acquisition for
+        // ~1.5 s (issue #108). Keeping a small sleep so the test still
+        // exercises the common path (writer acquired on first attempt) rather
+        // than the retry path.
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // ── Session 2: new coordinator, only a.md gets re-added ──
-        let coord2 = IndexCoordinator::new(vault).expect("coordinator 2");
+        let coord2 = IndexCoordinator::new(vault).await.expect("coordinator 2");
         // IndexCoordinator::new already enqueued DeleteAll. Now mirror what
         // index_vault does when b.md is missing from disk: only a.md lands.
         add_and_commit(&coord2, &a_path, "A", "alpha body").await;
@@ -254,8 +256,89 @@ mod orphan_cleanup_tests {
         // guards against any regression where DeleteAll fails on an index
         // that has zero segments.
         let tmp = TempDir::new().unwrap();
-        let coord = IndexCoordinator::new(tmp.path()).expect("coordinator");
+        let coord = IndexCoordinator::new(tmp.path()).await.expect("coordinator");
         wait_for_drain(&coord).await;
         assert_eq!(total_docs(&coord.reader), 0);
+    }
+}
+
+// ─── Writer lock acquisition retry (issue #108) ──────────────────────────────
+//
+// `IndexCoordinator::new` must surface a writer-lock acquisition failure to
+// the caller instead of letting the background task die silently. These tests
+// hold a real `tantivy::Index::writer` on the would-be vault index directory
+// to simulate the two flavours of lock contention from issue #108:
+// - releases within the retry window (vault re-open race) → coordinator wins
+// - never releases (another process holds it) → coordinator returns IndexLocked
+#[cfg(test)]
+mod writer_lock_tests {
+    use std::time::Duration;
+
+    use tantivy::Index;
+    use tempfile::TempDir;
+
+    use crate::error::VaultError;
+    use crate::indexer::tantivy_index::{build_schema, open_or_create_index, write_version};
+    use crate::indexer::IndexCoordinator;
+
+    /// 50 MB heap budget — same value `IndexCoordinator` itself uses. The
+    /// actual budget doesn't matter for these tests; only that the writer
+    /// acquires the directory lock.
+    const HEAP: usize = 50_000_000;
+
+    fn vault_index_path(vault: &std::path::Path) -> std::path::PathBuf {
+        vault.join(".vaultcore").join("index").join("tantivy")
+    }
+
+    /// Pre-open a Tantivy index at the same location `IndexCoordinator::new`
+    /// will reach for, and return a live writer that holds the directory lock.
+    ///
+    /// Writes the schema-version stamp first so `IndexCoordinator::new` skips
+    /// its schema-mismatch path, which would `remove_dir_all` the index
+    /// directory (including our lockfile) before trying to open a writer.
+    fn lock_vault_index(vault: &std::path::Path) -> tantivy::IndexWriter {
+        write_version(&vault.join(".vaultcore")).expect("seed version stamp");
+        let (schema, _, _, _) = build_schema();
+        let dir = vault_index_path(vault);
+        let index: Index = open_or_create_index(&dir, &schema).expect("pre-open index");
+        index.writer(HEAP).expect("acquire holding writer")
+    }
+
+    #[tokio::test]
+    async fn coordinator_succeeds_when_lock_releases_within_retry_window() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().to_path_buf();
+
+        // Hold the directory lock, then release it after 150 ms — well inside
+        // the 1.55 s backoff schedule, so the third retry should succeed.
+        let holder = lock_vault_index(&vault);
+        let release_at = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            drop(holder);
+        });
+
+        let coord = IndexCoordinator::new(&vault)
+            .await
+            .expect("retry must eventually acquire writer once holder drops");
+        release_at.await.unwrap();
+
+        // Sanity-check the coordinator is actually functional, not just a
+        // half-initialised shell that happened to construct.
+        coord.tx.send(crate::indexer::IndexCmd::Commit).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn coordinator_returns_index_locked_when_lock_held_persistently() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().to_path_buf();
+
+        // Holder lives for the entire test — every retry attempt sees LockBusy.
+        let _holder = lock_vault_index(&vault);
+
+        match IndexCoordinator::new(&vault).await {
+            Ok(_) => panic!("expected IndexLocked, got Ok"),
+            Err(VaultError::IndexLocked) => {}
+            Err(other) => panic!("expected IndexLocked, got {other:?}"),
+        }
     }
 }

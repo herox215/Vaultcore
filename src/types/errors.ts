@@ -8,6 +8,7 @@ export type VaultErrorKind =
   | "PermissionDenied"
   | "DiskFull"
   | "IndexCorrupt"
+  | "IndexLocked"
   | "VaultUnavailable"
   | "MergeConflict"
   | "InvalidEncoding"
@@ -51,6 +52,8 @@ export function vaultErrorCopy(err: VaultError): string {
       return "File system error. Check the folder and try again.";
     case "IndexCorrupt":
       return "Index corrupt. VaultCore will rebuild it.";
+    case "IndexLocked":
+      return "Search index is in use by another window or a stuck VaultCore process. Close other instances or restart VaultCore.";
     case "MergeConflict":
       return `Conflict in ${err.data ?? "file"} — local version kept.`;
     default: {
