@@ -296,6 +296,35 @@ describe("Inline table editing — structural", () => {
     expect(headerCells[1]).toBe("Name");
   });
 
+  it("control stays visible when the cursor moves from the wrap onto it (issue #110)", async () => {
+    // Regression for the hover-gap bug: row/col delete buttons sit at
+    // top: -22px / left: -24px, outside .cm-table-wrap's visible area. When
+    // the cursor crosses the gap from wrap to button the wrap:hover selector
+    // drops; without the fade-out grace period, visibility flips to hidden
+    // instantly and the user clicks dead air.
+    const stillVisible = await browser.execute(() => {
+      const wrap = document.querySelector<HTMLElement>(".cm-table-wrap");
+      const btn = document.querySelector<HTMLElement>(
+        '[data-testid="table-row-delete-1"]',
+      );
+      if (!wrap || !btn) return { found: false };
+
+      // 1. Hover the wrap — controls become visible.
+      wrap.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      wrap.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      // 2. Leave the wrap — without the fix, visibility flips to hidden now.
+      wrap.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+      // 3. Hover the control itself — the :hover rule should keep it visible.
+      btn.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+
+      const vis = getComputedStyle(btn).visibility;
+      return { found: true, visibility: vis };
+    });
+    expect(stillVisible.found).toBe(true);
+    expect(stillVisible.visibility).toBe("visible");
+  });
+
   it("column-header sort cycles unsorted → asc → desc → unsorted", async () => {
     // After prior drag, columns are [Age, Name]. Row order in source is
     // [Cara 25, Bob 42, <empty>]. Click sort on col 0 (Age, numeric).
@@ -332,5 +361,32 @@ describe("Inline table editing — structural", () => {
     await browser.pause(150);
     const restoredGrid = await cellTexts();
     expect(restoredGrid[1]?.[0]).toBe(beforeFirstValue);
+  });
+
+  // Must be the last test in this file — removes the table, invalidating
+  // the shared state the earlier tests rely on.
+  it("clicking 'delete table' removes the whole table from DOM and markdown (issue #110)", async () => {
+    const before = await getDocText();
+    expect(before).toContain("|"); // table still present in source
+    expect(
+      await browser.$("table.cm-table-rendered").isExisting(),
+    ).toBe(true);
+
+    await clickTestid("table-delete");
+
+    await browser.waitUntil(
+      async () => !(await browser.$("table.cm-table-rendered").isExisting()),
+      { timeout: 3000, timeoutMsg: "table widget never disappeared from DOM" },
+    );
+
+    const after = await getDocText();
+    const tableLines = after
+      .split("\n")
+      .filter((l) => l.trim().startsWith("|"));
+    expect(tableLines).toEqual([]);
+    // The heading and intro text above the table must still be there — delete
+    // is scoped to the widget range, not the whole note.
+    expect(after).toContain("# Structural");
+    expect(after).toContain("Intro.");
   });
 });

@@ -318,14 +318,32 @@ export const markdownTheme = EditorView.theme({
   // Hover controls fade in together when the wrap is hovered. They remain
   // focusable via keyboard so screen-reader / test code can reach them even
   // when not visually present.
+  //
+  // The 300ms fade-OUT delay (`opacity 120ms ease 300ms, visibility 0s 300ms`)
+  // is the fix for issue #110: row/col delete buttons sit outside the table's
+  // visible area (top: -22px, left: -24px), so moving the cursor from a cell
+  // toward the button crosses a region that is not `.cm-table-wrap`. Without
+  // the delay the wrap-hover selector drops before the cursor reaches the
+  // button, `visibility` flips to `hidden`, and the button becomes
+  // unclickable — exactly when the user tries to hit it. Using `visibility`
+  // (not just `pointer-events`) keeps the transition discrete-friendly across
+  // WebKit versions. `.cm-table-ctrl:hover` and `:focus-visible` re-arm the
+  // visible state once the cursor / focus lands on the control, so it stays
+  // reachable even if the wrap itself is no longer hovered.
   ".cm-table-wrap .cm-table-ctrl": {
     opacity: "0",
-    transition: "opacity 120ms ease",
-    pointerEvents: "none",
+    visibility: "hidden",
+    transition: "opacity 120ms ease 300ms, visibility 0s 300ms",
   },
   ".cm-table-wrap:hover .cm-table-ctrl, .cm-table-wrap:focus-within .cm-table-ctrl": {
     opacity: "1",
-    pointerEvents: "auto",
+    visibility: "visible",
+    transitionDelay: "0s",
+  },
+  ".cm-table-wrap .cm-table-ctrl:hover, .cm-table-wrap .cm-table-ctrl:focus-visible": {
+    opacity: "1",
+    visibility: "visible",
+    transitionDelay: "0s",
   },
   ".cm-table-wrap .cm-table-add-col-btn": {
     position: "absolute",
@@ -356,6 +374,30 @@ export const markdownTheme = EditorView.theme({
     lineHeight: "1",
     cursor: "pointer",
     padding: "0",
+  },
+  // Table-level delete button — sits above the top-right corner of the table
+  // in the same horizontal band as the per-column controls. The z-index keeps
+  // it above the rightmost column's controls when they visually overlap.
+  ".cm-table-wrap .cm-table-delete-btn": {
+    position: "absolute",
+    top: "-22px",
+    right: "0",
+    width: "20px",
+    height: "20px",
+    border: "1px solid var(--color-border)",
+    borderRadius: "3px",
+    background: "var(--color-surface)",
+    color: "var(--color-text-muted)",
+    fontSize: "12px",
+    lineHeight: "1",
+    cursor: "pointer",
+    padding: "0",
+    zIndex: "2",
+  },
+  ".cm-table-wrap .cm-table-delete-btn:hover": {
+    background: "var(--color-danger, var(--color-border))",
+    color: "var(--color-danger-fg, var(--color-text))",
+    borderColor: "var(--color-danger, var(--color-border))",
   },
   ".cm-table-col-ctrls": {
     position: "absolute",

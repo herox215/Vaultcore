@@ -310,6 +310,7 @@ function buildTableDom(
   wrap.appendChild(el);
   wrap.appendChild(buildAddColButton());
   wrap.appendChild(buildAddRowButton());
+  wrap.appendChild(buildDeleteTableButton());
 
   attachCellHandlers(wrap);
   attachStructuralHandlers(wrap);
@@ -335,6 +336,18 @@ function buildAddRowButton(): HTMLButtonElement {
   b.setAttribute("aria-label", "Zeile hinzufügen");
   b.setAttribute("data-testid", "table-add-row");
   b.textContent = "+";
+  return b;
+}
+
+function buildDeleteTableButton(): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "cm-table-ctrl cm-table-delete-btn";
+  b.setAttribute("aria-label", "Tabelle löschen");
+  b.setAttribute("data-testid", "table-delete");
+  // Unicode wastebasket is distinct from the per-column/-row "×" so the
+  // table-level action is not confused with a per-cell delete.
+  b.textContent = "🗑";
   return b;
 }
 
@@ -500,6 +513,11 @@ function attachStructuralHandlers(wrap: TableDomWithCtx): void {
       event.preventDefault();
       const newTable = withAppendedRow(readTableFromDom(wrap));
       commitStructuralChange(wrap, newTable);
+      return;
+    }
+    if (target.closest(".cm-table-delete-btn")) {
+      event.preventDefault();
+      deleteTable(wrap);
       return;
     }
 
@@ -689,6 +707,29 @@ function commitStructuralChange(
       if (newWrap) focusAfter(newWrap);
     });
   }
+}
+
+/**
+ * Remove the entire table block. Dispatches a single delete transaction over
+ * the widget's source range, plus the trailing newline so the surrounding
+ * paragraph flow doesn't leave a stranded blank line where the table used to
+ * sit. The StateField re-parses on the next change and the atomic widget
+ * disappears together with its source.
+ */
+function deleteTable(wrap: TableDomWithCtx): void {
+  const ctx = wrap.__tableCtx;
+  if (!ctx) return;
+  const view = ctx.view;
+  const doc = view.state.doc;
+  let to = ctx.to;
+  if (to < doc.length && doc.sliceString(to, to + 1) === "\n") {
+    to += 1;
+  }
+  view.dispatch({
+    changes: { from: ctx.from, to, insert: "" },
+    selection: { anchor: ctx.from },
+    userEvent: "delete",
+  });
 }
 
 function findTableWrapAt(view: EditorView, from: number): HTMLElement | null {
