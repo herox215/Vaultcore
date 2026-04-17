@@ -65,18 +65,25 @@ export const markdownTheme = EditorView.theme({
   // .cm-content = the centered "page". Surface-white background contrasts
   // gently with the gutter (--color-bg). Subtle border + shadow give it a
   // document-card feel without being heavy.
+  //
+  // Width is driven by `--vc-editor-max-width` (defaults to 720px for the
+  // book-like reading width when the sidebar is visible). VaultLayout raises
+  // it when the sidebar is collapsed so the freed space actually goes to
+  // the editor content (issue #112) instead of being absorbed by growing
+  // gutters — users who collapse the sidebar expect a wider writing area,
+  // not just a relocated one.
   // CSS variable defaults for each callout type. Themes may override these.
   ".cm-content": {
     padding: "32px 24px !important",
     width: "100% !important",
-    maxWidth: "720px !important",
+    maxWidth: "var(--vc-editor-max-width, 720px) !important",
     marginLeft: "auto !important",
     marginRight: "auto !important",
     marginTop: "24px !important",
     marginBottom: "24px !important",
     flexGrow: "0 !important",
     flexShrink: "1 !important",
-    flexBasis: "720px !important",
+    flexBasis: "var(--vc-editor-max-width, 720px) !important",
     backgroundColor: "var(--color-surface) !important",
     borderRadius: "8px !important",
     boxShadow: "0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06) !important",

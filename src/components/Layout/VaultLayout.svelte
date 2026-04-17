@@ -578,7 +578,7 @@
 <div
   class="vc-vault-layout"
   class:vc-vault-layout--dragging={isDragging || isSplitDragging || isRightDragging}
-  style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px; --right-sidebar-width: {backlinksOpen ? backlinksWidth : 0}px"
+  style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px; --right-sidebar-width: {backlinksOpen ? backlinksWidth : 0}px; --vc-editor-max-width: {sidebarCollapsed ? 1100 : 720}px"
 >
   <!-- Sidebar column -->
   <div
@@ -593,8 +593,14 @@
     />
   </div>
 
-  <!-- Resize divider -->
-  {#if !sidebarCollapsed}
+  <!-- Resize divider (column 2). Always rendered — a missing element would
+       let CSS grid auto-placement slide every subsequent child one column
+       left, so the editor would land in the `auto` track (col 2) instead of
+       `1fr` (col 3). When collapsed we swap to a zero-width sibling that
+       keeps the placement anchored without showing a visible handle. -->
+  {#if sidebarCollapsed}
+    <div class="vc-layout-divider-hidden" aria-hidden="true"></div>
+  {:else}
     <div
       class="vc-layout-divider"
       class:vc-layout-divider--active={isDragging}
@@ -607,52 +613,41 @@
 
   <!-- Editor area (3rd column) -->
   <div class="vc-layout-editor" style="--split-ratio: {splitRatio}">
-    <!-- Sidebar collapse toggle (shown when collapsed) -->
-    {#if sidebarCollapsed}
+    <!-- Topbar: always rendered so its buttons (sidebar toggle, backlinks,
+         settings) don't vanish together with the sidebar (issue #112). The
+         sidebar toggle morphs between collapse / expand based on state. -->
+    <div class="vc-editor-topbar">
       <button
-        class="vc-sidebar-expand-btn"
+        class="vc-sidebar-toggle-btn"
         onclick={toggleSidebar}
-        aria-label="Expand sidebar"
-        title="Expand sidebar"
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!sidebarCollapsed}
+        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
-        &#9654;
+        {#if sidebarCollapsed}&#9654;{:else}&#9664;{/if}
       </button>
-    {/if}
-
-    <!-- Topbar with collapse toggle (shown when sidebar visible) -->
-    {#if !sidebarCollapsed}
-      <div class="vc-editor-topbar">
-        <button
-          class="vc-sidebar-toggle-btn"
-          onclick={toggleSidebar}
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar"
-        >
-          &#9664;
-        </button>
-        <div class="vc-editor-topbar-spacer"></div>
-        <button
-          class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
-          class:vc-backlinks-toggle-btn--active={backlinksOpen}
-          onclick={() => backlinksStore.toggle()}
-          aria-label="Backlinks-Panel umschalten"
-          aria-pressed={backlinksOpen}
-          title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
-        >
-          <PanelRight size={16} />
-        </button>
-        <button
-          class="vc-sidebar-toggle-btn"
-          class:vc-backlinks-toggle-btn--active={settingsOpen}
-          onclick={() => { settingsOpen = true; }}
-          aria-label="Einstellungen"
-          aria-haspopup="dialog"
-          title="Einstellungen"
-        >
-          <SettingsIcon size={16} />
-        </button>
-      </div>
-    {/if}
+      <div class="vc-editor-topbar-spacer"></div>
+      <button
+        class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
+        class:vc-backlinks-toggle-btn--active={backlinksOpen}
+        onclick={() => backlinksStore.toggle()}
+        aria-label="Backlinks-Panel umschalten"
+        aria-pressed={backlinksOpen}
+        title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
+      >
+        <PanelRight size={16} />
+      </button>
+      <button
+        class="vc-sidebar-toggle-btn"
+        class:vc-backlinks-toggle-btn--active={settingsOpen}
+        onclick={() => { settingsOpen = true; }}
+        aria-label="Einstellungen"
+        aria-haspopup="dialog"
+        title="Einstellungen"
+      >
+        <SettingsIcon size={16} />
+      </button>
+    </div>
 
     <!-- Editor panes area -->
     <div class="vc-editor-panes">
@@ -782,6 +777,10 @@
     background: var(--color-accent-bg);
   }
 
+  .vc-layout-divider-hidden {
+    width: 0;
+  }
+
   .vc-layout-editor {
     flex: 1 1 0;
     display: flex;
@@ -843,8 +842,7 @@
     background: var(--color-accent-bg);
   }
 
-  .vc-sidebar-toggle-btn,
-  .vc-sidebar-expand-btn {
+  .vc-sidebar-toggle-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -858,17 +856,9 @@
     font-size: 12px;
   }
 
-  .vc-sidebar-toggle-btn:hover,
-  .vc-sidebar-expand-btn:hover {
+  .vc-sidebar-toggle-btn:hover {
     background: var(--color-accent-bg);
     color: var(--color-accent);
-  }
-
-  .vc-sidebar-expand-btn {
-    position: absolute;
-    left: 8px;
-    top: 50%;
-    transform: translateY(-50%);
   }
 
   .vc-layout-divider-right {

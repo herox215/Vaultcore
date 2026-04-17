@@ -149,7 +149,7 @@
   }
 
   .vc-reading-content {
-    max-width: 720px;
+    max-width: var(--vc-editor-max-width, 720px);
     margin: 0 auto;
   }
 
