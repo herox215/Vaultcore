@@ -278,11 +278,15 @@ export const markdownTheme = EditorView.theme({
     borderRadius: "2px",
   },
 
-  // ── GFM table rendering (#99) ────────────────────────────────────────────
+  // ── GFM table rendering (#99) + inline editing (#101) ───────────────────
+  ".cm-table-wrap": {
+    position: "relative",
+    margin: "8px 0",
+    padding: "0 14px 14px 0",
+  },
   ".cm-table-rendered": {
     width: "100%",
     borderCollapse: "collapse",
-    margin: "8px 0",
     fontSize: "inherit",
     fontFamily: "inherit",
   },
@@ -290,6 +294,7 @@ export const markdownTheme = EditorView.theme({
     border: "1px solid var(--color-border)",
     padding: "6px 12px",
     lineHeight: "1.5",
+    position: "relative",
   },
   ".cm-table-rendered th": {
     fontWeight: "600",
@@ -297,5 +302,98 @@ export const markdownTheme = EditorView.theme({
   },
   ".cm-table-rendered tbody tr:hover": {
     backgroundColor: "var(--color-accent-bg)",
+  },
+  ".cm-table-rendered .cm-table-cell": {
+    display: "block",
+    minWidth: "2ch",
+    minHeight: "1em",
+    outline: "none",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  ".cm-table-rendered .cm-table-cell:focus": {
+    outline: "1px solid var(--color-accent)",
+    outlineOffset: "-1px",
+  },
+  // Hover controls fade in together when the wrap is hovered. They remain
+  // focusable via keyboard so screen-reader / test code can reach them even
+  // when not visually present.
+  ".cm-table-wrap .cm-table-ctrl": {
+    opacity: "0",
+    transition: "opacity 120ms ease",
+    pointerEvents: "none",
+  },
+  ".cm-table-wrap:hover .cm-table-ctrl, .cm-table-wrap:focus-within .cm-table-ctrl": {
+    opacity: "1",
+    pointerEvents: "auto",
+  },
+  ".cm-table-wrap .cm-table-add-col-btn": {
+    position: "absolute",
+    top: "0",
+    bottom: "14px",
+    right: "0",
+    width: "14px",
+    border: "1px dashed var(--color-border)",
+    borderRadius: "0 3px 3px 0",
+    background: "var(--color-surface)",
+    color: "var(--color-text-muted)",
+    fontSize: "14px",
+    lineHeight: "1",
+    cursor: "pointer",
+    padding: "0",
+  },
+  ".cm-table-wrap .cm-table-add-row-btn": {
+    position: "absolute",
+    left: "0",
+    right: "14px",
+    bottom: "0",
+    height: "14px",
+    border: "1px dashed var(--color-border)",
+    borderRadius: "0 0 3px 3px",
+    background: "var(--color-surface)",
+    color: "var(--color-text-muted)",
+    fontSize: "14px",
+    lineHeight: "1",
+    cursor: "pointer",
+    padding: "0",
+  },
+  ".cm-table-col-ctrls": {
+    position: "absolute",
+    top: "-22px",
+    left: "0",
+    right: "0",
+    display: "inline-flex",
+    justifyContent: "center",
+    gap: "4px",
+    fontSize: "11px",
+    userSelect: "none",
+  },
+  ".cm-table-row-ctrls": {
+    position: "absolute",
+    left: "-24px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    display: "inline-flex",
+    flexDirection: "column",
+    gap: "2px",
+    fontSize: "11px",
+    userSelect: "none",
+  },
+  ".cm-table-col-drag, .cm-table-row-drag, .cm-table-col-sort, .cm-table-col-delete, .cm-table-row-delete": {
+    cursor: "pointer",
+    color: "var(--color-text-muted)",
+    background: "transparent",
+    border: "none",
+    padding: "1px 3px",
+    borderRadius: "2px",
+    fontSize: "11px",
+    lineHeight: "1",
+  },
+  ".cm-table-col-drag, .cm-table-row-drag": {
+    cursor: "grab",
+  },
+  ".cm-table-col-sort:hover, .cm-table-col-delete:hover, .cm-table-row-delete:hover, .cm-table-col-drag:hover, .cm-table-row-drag:hover": {
+    background: "var(--color-border)",
+    color: "var(--color-text)",
   },
 });
