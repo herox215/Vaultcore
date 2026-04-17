@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ChevronRight, Folder, FolderOpen, FileText, File, MoreHorizontal, Star } from "lucide-svelte";
-  import { listDirectory, createFile, createFolder, deleteFile, moveFile, updateLinksAfterRename, getBacklinks } from "../../ipc/commands";
+  import { listDirectory, createFile, createFolder, deleteFile, moveFile, updateLinksAfterRename, getBacklinks, writeFile } from "../../ipc/commands";
+  import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
   import { toastStore } from "../../store/toastStore";
   import type { RenameResult } from "../../types/links";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
@@ -373,6 +374,25 @@
     }
   }
 
+  async function handleNewCanvasHere() {
+    closeContextMenu();
+    try {
+      const newPath = await createFile(entry.path, "Untitled.canvas");
+      // Seed the file with an empty canvas doc so Obsidian recognizes the
+      // format immediately — an empty string would otherwise parse to a
+      // blank doc but fail Obsidian's schema validation on first open.
+      await writeFile(newPath, serializeCanvas(emptyCanvas()));
+      expanded = true;
+      persistExpanded();
+      await loadChildren();
+      expanded = true;
+      tabStore.openFileTab(newPath, "canvas");
+    } catch (e) {
+      const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
   async function handleNewFolderHere() {
     closeContextMenu();
     try {
@@ -618,6 +638,7 @@
       <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
       {#if entry.is_dir}
         <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
+        <button class="vc-context-item" onclick={handleNewCanvasHere}>New canvas here</button>
         <button class="vc-context-item" onclick={handleNewFolderHere}>New folder here</button>
       {/if}
     </div>

@@ -46,6 +46,13 @@ describe("openFileAsTab", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it("opens a `.canvas` file with the canvas viewer without probing (#71)", async () => {
+    await openFileAsTab("/vault/board.canvas");
+    const state = get(tabStore);
+    expect(state.tabs[0]!.viewer).toBe("canvas");
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
   it("opens an unknown UTF-8 file as text after probing", async () => {
     readFile.mockResolvedValueOnce("plain text content");
     await openFileAsTab("/vault/script.unknownext");
