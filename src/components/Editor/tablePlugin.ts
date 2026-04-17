@@ -207,16 +207,51 @@ function syncCellText(cell: HTMLElement, expected: string): void {
   if (inner.textContent !== expected) inner.textContent = expected;
 }
 
-function buildCellElement(tag: "th" | "td", text: string, align: Align): HTMLTableCellElement {
+function buildCellElement(
+  tag: "th" | "td",
+  text: string,
+  align: Align,
+  row: number,
+  col: number,
+): HTMLTableCellElement {
   const cell = document.createElement(tag) as HTMLTableCellElement;
   applyAlign(cell, align);
   const inner = document.createElement("span");
   inner.className = "cm-table-cell";
   inner.setAttribute("contenteditable", "true");
+  inner.setAttribute("data-cell-row", String(row));
+  inner.setAttribute("data-cell-col", String(col));
   inner.spellcheck = false;
   inner.textContent = text;
   cell.appendChild(inner);
   return cell;
+}
+
+function findCell(wrap: HTMLElement, row: number, col: number): HTMLElement | null {
+  return wrap.querySelector<HTMLElement>(
+    `.cm-table-cell[data-cell-row="${row}"][data-cell-col="${col}"]`,
+  );
+}
+
+function selectCellContent(cell: HTMLElement): void {
+  cell.focus();
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  if (!sel || typeof document === "undefined") return;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function placeCaretAtEnd(cell: HTMLElement): void {
+  cell.focus();
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  if (!sel || typeof document === "undefined") return;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 function buildTableDom(
@@ -236,18 +271,24 @@ function buildTableDom(
   const headerRow = document.createElement("tr");
   for (let i = 0; i < table.headers.length; i++) {
     headerRow.appendChild(
-      buildCellElement("th", table.headers[i] ?? "", table.alignments[i] ?? "default"),
+      buildCellElement("th", table.headers[i] ?? "", table.alignments[i] ?? "default", 0, i),
     );
   }
   thead.appendChild(headerRow);
   el.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  for (const row of table.rows) {
+  for (let r = 0; r < table.rows.length; r++) {
     const tr = document.createElement("tr");
     for (let i = 0; i < table.headers.length; i++) {
       tr.appendChild(
-        buildCellElement("td", row[i] ?? "", table.alignments[i] ?? "default"),
+        buildCellElement(
+          "td",
+          table.rows[r]![i] ?? "",
+          table.alignments[i] ?? "default",
+          r + 1,
+          i,
+        ),
       );
     }
     tbody.appendChild(tr);
@@ -299,6 +340,133 @@ function commitTableFromDom(wrap: TableDomWithCtx): void {
   ctx.table = newTable;
 }
 
+/**
+ * Dispatch a full structural replacement of the table source. Unlike cell
+ * edits, this lets the StateField rebuild the widget so the new structure
+ * (added/removed rows/columns, reordered rows, etc.) is reflected in the DOM.
+ * After CM6 finishes re-rendering, `focusAfter` fires — callers use it to
+ * restore focus/caret to the appropriate cell.
+ */
+function commitStructuralChange(
+  wrap: TableDomWithCtx,
+  newTable: ParsedTable,
+  focusAfter?: (newWrap: HTMLElement) => void,
+): void {
+  const ctx = wrap.__tableCtx;
+  if (!ctx) return;
+  const view = ctx.view;
+  const newSource = serializeTable(newTable);
+  const tableFrom = ctx.from;
+  view.dispatch({
+    changes: { from: ctx.from, to: ctx.to, insert: newSource },
+    userEvent: "input",
+  });
+  if (focusAfter) {
+    requestAnimationFrame(() => {
+      const newWrap = findTableWrapAt(view, tableFrom);
+      if (newWrap) focusAfter(newWrap);
+    });
+  }
+}
+
+function findTableWrapAt(view: EditorView, from: number): HTMLElement | null {
+  const wraps = Array.from(
+    view.contentDOM.querySelectorAll<TableDomWithCtx>(".cm-table-wrap"),
+  );
+  for (const w of wraps) {
+    if (w.__tableCtx?.from === from) return w;
+  }
+  return wraps[0] ?? null;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+/** rowIdx: 0 = header, 1..N = data rows. */
+function readCellCoords(target: HTMLElement): { row: number; col: number } | null {
+  const r = target.getAttribute("data-cell-row");
+  const c = target.getAttribute("data-cell-col");
+  if (r === null || c === null) return null;
+  return { row: parseInt(r, 10), col: parseInt(c, 10) };
+}
+
+function handleTabNavigation(wrap: TableDomWithCtx, from: HTMLElement, back: boolean): void {
+  const ctx = wrap.__tableCtx;
+  if (!ctx) return;
+  const coords = readCellCoords(from);
+  if (!coords) return;
+  const cols = ctx.table.headers.length;
+  const totalRows = 1 + ctx.table.rows.length;
+  const { row, col } = coords;
+
+  let nextRow = row;
+  let nextCol = back ? col - 1 : col + 1;
+  if (nextCol >= cols) {
+    nextCol = 0;
+    nextRow += 1;
+  } else if (nextCol < 0) {
+    nextCol = cols - 1;
+    nextRow -= 1;
+  }
+
+  if (nextRow >= totalRows) {
+    // Tab past the last cell of the last row → append a new empty row and
+    // focus its first cell.
+    const newTable = withAppendedRow(readTableFromDom(wrap));
+    commitStructuralChange(wrap, newTable, (newWrap) => {
+      const cell = findCell(newWrap, totalRows, 0);
+      if (cell) selectCellContent(cell);
+    });
+    return;
+  }
+  if (nextRow < 0) {
+    // Shift+Tab past the first header cell → stay (don't drop focus).
+    return;
+  }
+
+  const target = findCell(wrap, nextRow, nextCol);
+  if (target) selectCellContent(target);
+}
+
+function handleEnterNavigation(wrap: TableDomWithCtx, from: HTMLElement): void {
+  const ctx = wrap.__tableCtx;
+  if (!ctx) return;
+  const coords = readCellCoords(from);
+  if (!coords) return;
+  const totalRows = 1 + ctx.table.rows.length;
+  const { row, col } = coords;
+  const nextRow = row + 1;
+
+  if (nextRow >= totalRows) {
+    const newTable = withAppendedRow(readTableFromDom(wrap));
+    commitStructuralChange(wrap, newTable, (newWrap) => {
+      const cell = findCell(newWrap, totalRows, col);
+      if (cell) selectCellContent(cell);
+    });
+    return;
+  }
+
+  const target = findCell(wrap, nextRow, col);
+  if (target) selectCellContent(target);
+}
+
+function handleEscape(wrap: TableDomWithCtx): void {
+  const ctx = wrap.__tableCtx;
+  if (!ctx) return;
+  const view = ctx.view;
+  view.dispatch({ selection: { anchor: ctx.to } });
+  view.focus();
+}
+
+function withAppendedRow(table: ParsedTable): ParsedTable {
+  const cols = table.headers.length;
+  const newRow: string[] = new Array(cols).fill("");
+  return {
+    headers: table.headers.slice(),
+    alignments: table.alignments.slice(),
+    rows: [...table.rows, newRow],
+  };
+}
+
 function attachCellHandlers(wrap: TableDomWithCtx): void {
   wrap.addEventListener("input", (event) => {
     const target = event.target as HTMLElement | null;
@@ -327,11 +495,20 @@ function attachCellHandlers(wrap: TableDomWithCtx): void {
       return;
     }
 
-    // Prevent raw newlines / tabs from entering cells. Commit 2 wires Tab /
-    // Enter / Escape to navigation; until then, swallowing them keeps cell
-    // content clean.
-    if (event.key === "Enter" || event.key === "Tab") {
+    if (event.key === "Tab") {
       event.preventDefault();
+      handleTabNavigation(wrap, target, event.shiftKey);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleEnterNavigation(wrap, target);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleEscape(wrap);
+      return;
     }
   });
 
