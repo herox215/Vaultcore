@@ -415,13 +415,13 @@
       <!-- Section C — Tastaturkürzel (UI-05 / D-11 / #65) -->
       <section class="vc-settings-section" data-testid="settings-shortcuts">
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
-        <table class="vc-shortcuts-table" role="table">
+        <table class="vc-shortcuts-table">
           <tbody>
             {#each shortcuts as s (s.id)}
               {@const isRecording = recordingFor === s.id}
               {@const def = defaultHotkey(s.id)}
               {@const isCustom = def ? !s.hotkey || !hotkeysEqual(def, s.hotkey) : Boolean(s.hotkey)}
-              <tr role="row">
+              <tr>
                 <td role="cell" class="vc-shortcut-action">{s.name}</td>
                 <td role="cell" class="vc-shortcut-keys">
                   {#if isRecording}
