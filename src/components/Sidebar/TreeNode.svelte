@@ -6,6 +6,7 @@
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import type { DirEntry } from "../../types/tree";
   import InlineRename from "./InlineRename.svelte";
+  import TreeNode from "./TreeNode.svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { tabStore } from "../../store/tabStore";
@@ -686,7 +687,7 @@
   {#if entry.is_dir && expanded && childrenLoaded}
     <ul class="vc-tree-children" role="group">
       {#each children as child (child.path)}
-        <svelte:self
+        <TreeNode
           entry={child}
           depth={depth + 1}
           {selectedPath}
@@ -970,16 +971,6 @@
   }
 
   .vc-confirm-btn--danger:hover {
-    opacity: 0.9;
-  }
-
-  .vc-confirm-btn--primary {
-    background: var(--color-accent);
-    color: #fff;
-    border-color: var(--color-accent);
-  }
-
-  .vc-confirm-btn--primary:hover {
     opacity: 0.9;
   }
 

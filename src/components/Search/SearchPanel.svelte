@@ -99,7 +99,7 @@
       disabled={$searchStore.isRebuilding}
     >
       {#if $searchStore.indexStale}
-        <AlertTriangle size={16} strokeWidth={1.5} class="vc-index-stale-icon" />
+        <AlertTriangle size={16} strokeWidth={1.5} />
       {:else}
         <RefreshCw
           size={16}
@@ -184,10 +184,6 @@
   }
 
   .vc-search-rebuild-btn.index-stale {
-    color: var(--color-error, #e53e3e);
-  }
-
-  .vc-index-stale-icon {
     color: var(--color-error, #e53e3e);
   }
 
