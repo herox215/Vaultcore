@@ -199,6 +199,9 @@ function cellInner(cell: HTMLElement): HTMLElement {
 }
 
 function cellText(cell: HTMLElement): string {
+  // Read the .cm-table-cell span's text (contenteditable surface). Falls back
+  // to the cell's own textContent when the span is missing — e.g. during
+  // tests that build a bare <td>.
   return (cellInner(cell).textContent ?? "").replace(/\r?\n/g, " ").trim();
 }
 
@@ -269,10 +272,18 @@ function buildTableDom(
 
   const thead = document.createElement("thead");
   const headerRow = document.createElement("tr");
+  const sortState = getSortState(from);
   for (let i = 0; i < table.headers.length; i++) {
-    headerRow.appendChild(
-      buildCellElement("th", table.headers[i] ?? "", table.alignments[i] ?? "default", 0, i),
+    const th = buildCellElement(
+      "th",
+      table.headers[i] ?? "",
+      table.alignments[i] ?? "default",
+      0,
+      i,
     );
+    const sortDir = sortState && sortState.col === i ? sortState.dir : null;
+    th.appendChild(buildColControls(i, sortDir));
+    headerRow.appendChild(th);
   }
   thead.appendChild(headerRow);
   el.appendChild(thead);
@@ -280,24 +291,329 @@ function buildTableDom(
   const tbody = document.createElement("tbody");
   for (let r = 0; r < table.rows.length; r++) {
     const tr = document.createElement("tr");
+    tr.setAttribute("data-row-idx", String(r + 1));
     for (let i = 0; i < table.headers.length; i++) {
-      tr.appendChild(
-        buildCellElement(
-          "td",
-          table.rows[r]![i] ?? "",
-          table.alignments[i] ?? "default",
-          r + 1,
-          i,
-        ),
+      const td = buildCellElement(
+        "td",
+        table.rows[r]![i] ?? "",
+        table.alignments[i] ?? "default",
+        r + 1,
+        i,
       );
+      if (i === 0) td.appendChild(buildRowControls(r + 1));
+      tr.appendChild(td);
     }
     tbody.appendChild(tr);
   }
   el.appendChild(tbody);
 
   wrap.appendChild(el);
+  wrap.appendChild(buildAddColButton());
+  wrap.appendChild(buildAddRowButton());
+
   attachCellHandlers(wrap);
+  attachStructuralHandlers(wrap);
   return wrap;
+}
+
+// ── Hover / structural controls ──────────────────────────────────────────────
+
+function buildAddColButton(): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "cm-table-ctrl cm-table-add-col-btn";
+  b.setAttribute("aria-label", "Spalte hinzufügen");
+  b.setAttribute("data-testid", "table-add-col");
+  b.textContent = "+";
+  return b;
+}
+
+function buildAddRowButton(): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "cm-table-ctrl cm-table-add-row-btn";
+  b.setAttribute("aria-label", "Zeile hinzufügen");
+  b.setAttribute("data-testid", "table-add-row");
+  b.textContent = "+";
+  return b;
+}
+
+function buildColControls(col: number, sortDir: "asc" | "desc" | null): HTMLElement {
+  const box = document.createElement("span");
+  box.className = "cm-table-col-ctrls cm-table-ctrl";
+  box.setAttribute("contenteditable", "false");
+
+  const drag = document.createElement("span");
+  drag.className = "cm-table-col-drag";
+  drag.setAttribute("draggable", "true");
+  drag.setAttribute("aria-label", "Spalte verschieben");
+  drag.setAttribute("data-col-drag", String(col));
+  drag.setAttribute("data-testid", `table-col-drag-${col}`);
+  drag.textContent = "⋮⋮";
+  box.appendChild(drag);
+
+  const sort = document.createElement("button");
+  sort.type = "button";
+  sort.className = "cm-table-col-sort";
+  sort.setAttribute("data-col-sort", String(col));
+  sort.setAttribute("data-testid", `table-col-sort-${col}`);
+  sort.setAttribute("aria-label", "Spalte sortieren");
+  sort.textContent = sortDir === "asc" ? "↑" : sortDir === "desc" ? "↓" : "↕";
+  box.appendChild(sort);
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "cm-table-col-delete";
+  del.setAttribute("data-col-delete", String(col));
+  del.setAttribute("data-testid", `table-col-delete-${col}`);
+  del.setAttribute("aria-label", "Spalte löschen");
+  del.textContent = "×";
+  box.appendChild(del);
+
+  return box;
+}
+
+function buildRowControls(row: number): HTMLElement {
+  const box = document.createElement("span");
+  box.className = "cm-table-row-ctrls cm-table-ctrl";
+  box.setAttribute("contenteditable", "false");
+
+  const drag = document.createElement("span");
+  drag.className = "cm-table-row-drag";
+  drag.setAttribute("draggable", "true");
+  drag.setAttribute("aria-label", "Zeile verschieben");
+  drag.setAttribute("data-row-drag", String(row));
+  drag.setAttribute("data-testid", `table-row-drag-${row}`);
+  drag.textContent = "⋮⋮";
+  box.appendChild(drag);
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "cm-table-row-delete";
+  del.setAttribute("data-row-delete", String(row));
+  del.setAttribute("data-testid", `table-row-delete-${row}`);
+  del.setAttribute("aria-label", "Zeile löschen");
+  del.textContent = "×";
+  box.appendChild(del);
+
+  return box;
+}
+
+// ── Sort state (module-level, keyed by table-start position) ─────────────────
+
+interface SortState {
+  col: number;
+  dir: "asc" | "desc";
+  originalOrder: string[][];
+}
+
+const sortStates: Map<number, SortState> = new Map();
+
+function getSortState(from: number): SortState | undefined {
+  return sortStates.get(from);
+}
+
+function applySort(table: ParsedTable, state: SortState): ParsedTable {
+  const sorted = table.rows.map((r) => r.slice());
+  const col = state.col;
+  sorted.sort((a, b) => {
+    const av = (a[col] ?? "").toLowerCase();
+    const bv = (b[col] ?? "").toLowerCase();
+    const an = Number(a[col]);
+    const bn = Number(b[col]);
+    const numeric = !Number.isNaN(an) && !Number.isNaN(bn);
+    const cmp = numeric ? an - bn : av < bv ? -1 : av > bv ? 1 : 0;
+    return state.dir === "asc" ? cmp : -cmp;
+  });
+  return { ...table, rows: sorted };
+}
+
+// ── Structural mutations ─────────────────────────────────────────────────────
+
+function withAppendedColumn(table: ParsedTable): ParsedTable {
+  return {
+    headers: [...table.headers, ""],
+    alignments: [...table.alignments, "default"],
+    rows: table.rows.map((r) => [...r, ""]),
+  };
+}
+
+function withRemovedColumn(table: ParsedTable, col: number): ParsedTable {
+  if (table.headers.length <= 1) return table;
+  const removeAt = (arr: string[]): string[] => arr.filter((_, i) => i !== col);
+  return {
+    headers: removeAt(table.headers),
+    alignments: table.alignments.filter((_, i) => i !== col),
+    rows: table.rows.map(removeAt),
+  };
+}
+
+function withRemovedRow(table: ParsedTable, row: number): ParsedTable {
+  // row: 1..N (header cannot be removed via row delete).
+  if (row <= 0 || row > table.rows.length) return table;
+  const rows = table.rows.slice();
+  rows.splice(row - 1, 1);
+  return { ...table, rows };
+}
+
+function withReorderedRows(table: ParsedTable, from: number, to: number): ParsedTable {
+  if (from <= 0 || to <= 0) return table;
+  if (from > table.rows.length || to > table.rows.length) return table;
+  if (from === to) return table;
+  const rows = table.rows.slice();
+  const [moved] = rows.splice(from - 1, 1);
+  rows.splice(to - 1, 0, moved!);
+  return { ...table, rows };
+}
+
+function withReorderedColumns(table: ParsedTable, from: number, to: number): ParsedTable {
+  if (from === to) return table;
+  const move = <T>(arr: T[]): T[] => {
+    const copy = arr.slice();
+    const [m] = copy.splice(from, 1);
+    copy.splice(to, 0, m!);
+    return copy;
+  };
+  return {
+    headers: move(table.headers),
+    alignments: move(table.alignments),
+    rows: table.rows.map((r) => move(r)),
+  };
+}
+
+// ── Structural event handlers ────────────────────────────────────────────────
+
+function attachStructuralHandlers(wrap: TableDomWithCtx): void {
+  wrap.addEventListener("click", (event) => {
+    const ctx = wrap.__tableCtx;
+    if (!ctx) return;
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+
+    if (target.closest(".cm-table-add-col-btn")) {
+      event.preventDefault();
+      const newTable = withAppendedColumn(readTableFromDom(wrap));
+      commitStructuralChange(wrap, newTable);
+      return;
+    }
+    if (target.closest(".cm-table-add-row-btn")) {
+      event.preventDefault();
+      const newTable = withAppendedRow(readTableFromDom(wrap));
+      commitStructuralChange(wrap, newTable);
+      return;
+    }
+
+    const colDelete = target.closest<HTMLElement>("[data-col-delete]");
+    if (colDelete) {
+      event.preventDefault();
+      const col = parseInt(colDelete.getAttribute("data-col-delete") ?? "-1", 10);
+      const newTable = withRemovedColumn(readTableFromDom(wrap), col);
+      commitStructuralChange(wrap, newTable);
+      return;
+    }
+    const rowDelete = target.closest<HTMLElement>("[data-row-delete]");
+    if (rowDelete) {
+      event.preventDefault();
+      const row = parseInt(rowDelete.getAttribute("data-row-delete") ?? "-1", 10);
+      const newTable = withRemovedRow(readTableFromDom(wrap), row);
+      commitStructuralChange(wrap, newTable);
+      return;
+    }
+    const sortBtn = target.closest<HTMLElement>("[data-col-sort]");
+    if (sortBtn) {
+      event.preventDefault();
+      const col = parseInt(sortBtn.getAttribute("data-col-sort") ?? "-1", 10);
+      cycleSort(wrap, col);
+      return;
+    }
+  });
+
+  // Drag-and-drop row / column reordering. We store the source index in
+  // dataTransfer and listen on the table for drop. Over-drop target is the
+  // cell currently under the pointer — we compute the row/col from its
+  // data attrs.
+  wrap.addEventListener("dragstart", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const rowDrag = target.closest<HTMLElement>("[data-row-drag]");
+    if (rowDrag) {
+      event.dataTransfer?.setData("application/vc-table-row", rowDrag.getAttribute("data-row-drag") ?? "");
+      event.dataTransfer!.effectAllowed = "move";
+      return;
+    }
+    const colDrag = target.closest<HTMLElement>("[data-col-drag]");
+    if (colDrag) {
+      event.dataTransfer?.setData("application/vc-table-col", colDrag.getAttribute("data-col-drag") ?? "");
+      event.dataTransfer!.effectAllowed = "move";
+      return;
+    }
+  });
+  wrap.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer) return;
+    const types = event.dataTransfer.types;
+    if (
+      types.includes("application/vc-table-row") ||
+      types.includes("application/vc-table-col")
+    ) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    }
+  });
+  wrap.addEventListener("drop", (event) => {
+    if (!event.dataTransfer) return;
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const cell = target.closest<HTMLElement>(".cm-table-cell");
+    if (!cell) return;
+    const toRow = parseInt(cell.getAttribute("data-cell-row") ?? "-1", 10);
+    const toCol = parseInt(cell.getAttribute("data-cell-col") ?? "-1", 10);
+
+    const rowPayload = event.dataTransfer.getData("application/vc-table-row");
+    if (rowPayload !== "") {
+      event.preventDefault();
+      const fromRow = parseInt(rowPayload, 10);
+      const newTable = withReorderedRows(readTableFromDom(wrap), fromRow, toRow);
+      commitStructuralChange(wrap, newTable);
+      return;
+    }
+    const colPayload = event.dataTransfer.getData("application/vc-table-col");
+    if (colPayload !== "") {
+      event.preventDefault();
+      const fromCol = parseInt(colPayload, 10);
+      const newTable = withReorderedColumns(readTableFromDom(wrap), fromCol, toCol);
+      commitStructuralChange(wrap, newTable);
+      return;
+    }
+  });
+}
+
+function cycleSort(wrap: TableDomWithCtx, col: number): void {
+  const ctx = wrap.__tableCtx;
+  if (!ctx) return;
+  const tableFrom = ctx.from;
+  const current = sortStates.get(tableFrom);
+  const currentTable = readTableFromDom(wrap);
+
+  if (!current || current.col !== col) {
+    const state: SortState = {
+      col,
+      dir: "asc",
+      originalOrder: currentTable.rows.map((r) => r.slice()),
+    };
+    sortStates.set(tableFrom, state);
+    commitStructuralChange(wrap, applySort(currentTable, state));
+    return;
+  }
+  if (current.dir === "asc") {
+    const state: SortState = { ...current, dir: "desc" };
+    sortStates.set(tableFrom, state);
+    commitStructuralChange(wrap, applySort(currentTable, state));
+    return;
+  }
+  // desc → unsorted: restore the original row order captured on the first click.
+  const restored: ParsedTable = { ...currentTable, rows: current.originalOrder };
+  sortStates.delete(tableFrom);
+  commitStructuralChange(wrap, restored);
 }
 
 function readTableFromDom(wrap: TableDomWithCtx): ParsedTable {
