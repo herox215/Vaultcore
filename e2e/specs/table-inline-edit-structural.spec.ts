@@ -224,78 +224,6 @@ describe("Inline table editing — structural", () => {
     expect(pipes).toBe(before.cols); // cols-1 columns → cols pipes
   });
 
-  it("drag-reorders a row in both DOM and markdown", async () => {
-    // State: columns = Name + Age (2). Body rows = Bob, Cara, (empty row).
-    // Reorder: drop row 1 (Bob) onto row 2 (Cara) — Bob goes to row 2 position.
-    const beforeDoc = await getDocText();
-    const beforeBobIdx = beforeDoc.indexOf("Bob");
-    const beforeCaraIdx = beforeDoc.indexOf("Cara");
-    expect(beforeBobIdx).toBeLessThan(beforeCaraIdx);
-
-    await browser.execute(() => {
-      const src = document.querySelector<HTMLElement>(
-        '[data-testid="table-row-drag-1"]',
-      );
-      const targetCell = document.querySelector<HTMLElement>(
-        '.cm-table-cell[data-cell-row="2"][data-cell-col="0"]',
-      );
-      if (!src || !targetCell) throw new Error("drag handles missing");
-      const dt = new DataTransfer();
-      src.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
-      targetCell.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
-      targetCell.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
-      src.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: dt }));
-    });
-
-    await browser.waitUntil(
-      async () => {
-        const doc = await getDocText();
-        return doc.indexOf("Cara") < doc.indexOf("Bob");
-      },
-      { timeout: 3000, timeoutMsg: "row order never flipped in source" },
-    );
-    const afterDoc = await getDocText();
-    expect(afterDoc.indexOf("Cara")).toBeLessThan(afterDoc.indexOf("Bob"));
-  });
-
-  it("drag-reorders a column in both DOM and markdown", async () => {
-    // Columns currently: [Name, Age]. Move col 0 after col 1 by dropping
-    // the col-0 drag handle onto a cell at col 1.
-    await browser.execute(() => {
-      const src = document.querySelector<HTMLElement>(
-        '[data-testid="table-col-drag-0"]',
-      );
-      const targetCell = document.querySelector<HTMLElement>(
-        '.cm-table-cell[data-cell-row="1"][data-cell-col="1"]',
-      );
-      if (!src || !targetCell) throw new Error("col drag handles missing");
-      const dt = new DataTransfer();
-      src.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
-      targetCell.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
-      targetCell.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
-      src.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: dt }));
-    });
-
-    await browser.waitUntil(
-      async () => {
-        const grid = await cellTexts();
-        return grid[0]?.[0] === "Age" && grid[0]?.[1] === "Name";
-      },
-      { timeout: 3000, timeoutMsg: "columns never swapped in DOM" },
-    );
-    const doc = await getDocText();
-    const header = doc
-      .split("\n")
-      .find((l) => l.trim().startsWith("|") && !l.match(/^\|\s*:?-/));
-    expect(header).toBeDefined();
-    const headerCells = (header as string)
-      .replace(/^\||\|$/g, "")
-      .split("|")
-      .map((s) => s.trim());
-    expect(headerCells[0]).toBe("Age");
-    expect(headerCells[1]).toBe("Name");
-  });
-
   it("control stays visible when the cursor moves from the wrap onto it (issue #110)", async () => {
     // Regression for the hover-gap bug: row/col delete buttons sit at
     // top: -22px / left: -24px, outside .cm-table-wrap's visible area. When
@@ -326,14 +254,11 @@ describe("Inline table editing — structural", () => {
   });
 
   it("column-header sort cycles unsorted → asc → desc → unsorted", async () => {
-    // After prior drag, columns are [Age, Name]. Row order in source is
-    // [Cara 25, Bob 42, <empty>]. Click sort on col 0 (Age, numeric).
-    // Expected asc order: 25, 42, "". But the empty row's value is "" which
-    // sorts numerically as NaN — in the serializer's comparator mixing
-    // numeric/string NaN returns 0. To avoid flakiness from the empty row
-    // left over, we seed a fresh note just for sorting.
-    // Actually: let's skip the legacy wrangle and test sort on the current
-    // layout directly.
+    // Content-agnostic: read the current first body value, cycle sort three
+    // times on column 0, and assert the final restore lands back on that
+    // same value. The earlier column/row deletes in this suite leave the
+    // table in a non-deterministic row order; snapshotting before the first
+    // click avoids coupling to the exact residue.
     const beforeGrid = await cellTexts();
     const beforeFirstValue = beforeGrid[1]?.[0];
 

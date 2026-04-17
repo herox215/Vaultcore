@@ -421,7 +421,7 @@ export const markdownTheme = EditorView.theme({
     fontSize: "11px",
     userSelect: "none",
   },
-  ".cm-table-col-drag, .cm-table-row-drag, .cm-table-col-sort, .cm-table-col-delete, .cm-table-row-delete": {
+  ".cm-table-col-sort, .cm-table-col-delete, .cm-table-row-delete": {
     cursor: "pointer",
     color: "var(--color-text-muted)",
     background: "transparent",
@@ -431,10 +431,7 @@ export const markdownTheme = EditorView.theme({
     fontSize: "11px",
     lineHeight: "1",
   },
-  ".cm-table-col-drag, .cm-table-row-drag": {
-    cursor: "grab",
-  },
-  ".cm-table-col-sort:hover, .cm-table-col-delete:hover, .cm-table-row-delete:hover, .cm-table-col-drag:hover, .cm-table-row-drag:hover": {
+  ".cm-table-col-sort:hover, .cm-table-col-delete:hover, .cm-table-row-delete:hover": {
     background: "var(--color-border)",
     color: "var(--color-text)",
   },

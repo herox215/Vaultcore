@@ -356,15 +356,6 @@ function buildColControls(col: number, sortDir: "asc" | "desc" | null): HTMLElem
   box.className = "cm-table-col-ctrls cm-table-ctrl";
   box.setAttribute("contenteditable", "false");
 
-  const drag = document.createElement("span");
-  drag.className = "cm-table-col-drag";
-  drag.setAttribute("draggable", "true");
-  drag.setAttribute("aria-label", "Spalte verschieben");
-  drag.setAttribute("data-col-drag", String(col));
-  drag.setAttribute("data-testid", `table-col-drag-${col}`);
-  drag.textContent = "⋮⋮";
-  box.appendChild(drag);
-
   const sort = document.createElement("button");
   sort.type = "button";
   sort.className = "cm-table-col-sort";
@@ -390,15 +381,6 @@ function buildRowControls(row: number): HTMLElement {
   const box = document.createElement("span");
   box.className = "cm-table-row-ctrls cm-table-ctrl";
   box.setAttribute("contenteditable", "false");
-
-  const drag = document.createElement("span");
-  drag.className = "cm-table-row-drag";
-  drag.setAttribute("draggable", "true");
-  drag.setAttribute("aria-label", "Zeile verschieben");
-  drag.setAttribute("data-row-drag", String(row));
-  drag.setAttribute("data-testid", `table-row-drag-${row}`);
-  drag.textContent = "⋮⋮";
-  box.appendChild(drag);
 
   const del = document.createElement("button");
   del.type = "button";
@@ -469,31 +451,6 @@ function withRemovedRow(table: ParsedTable, row: number): ParsedTable {
   return { ...table, rows };
 }
 
-function withReorderedRows(table: ParsedTable, from: number, to: number): ParsedTable {
-  if (from <= 0 || to <= 0) return table;
-  if (from > table.rows.length || to > table.rows.length) return table;
-  if (from === to) return table;
-  const rows = table.rows.slice();
-  const [moved] = rows.splice(from - 1, 1);
-  rows.splice(to - 1, 0, moved!);
-  return { ...table, rows };
-}
-
-function withReorderedColumns(table: ParsedTable, from: number, to: number): ParsedTable {
-  if (from === to) return table;
-  const move = <T>(arr: T[]): T[] => {
-    const copy = arr.slice();
-    const [m] = copy.splice(from, 1);
-    copy.splice(to, 0, m!);
-    return copy;
-  };
-  return {
-    headers: move(table.headers),
-    alignments: move(table.alignments),
-    rows: table.rows.map((r) => move(r)),
-  };
-}
-
 // ── Structural event handlers ────────────────────────────────────────────────
 
 function attachStructuralHandlers(wrap: TableDomWithCtx): void {
@@ -544,70 +501,6 @@ function attachStructuralHandlers(wrap: TableDomWithCtx): void {
       cycleSort(wrap, col);
       return;
     }
-  });
-
-  // Drag-and-drop row / column reordering. We stash the source index in a
-  // closure-local variable (and mirror it into dataTransfer for normal UX) so
-  // the drop handler can act without reading back a DataTransfer payload —
-  // synthetic DragEvents dispatched by the E2E driver don't carry one.
-  let pendingDrag: { type: "row" | "col"; index: number } | null = null;
-
-  wrap.addEventListener("dragstart", (event) => {
-    const target = event.target as HTMLElement | null;
-    if (!target) return;
-    const rowDrag = target.closest<HTMLElement>("[data-row-drag]");
-    if (rowDrag) {
-      pendingDrag = {
-        type: "row",
-        index: parseInt(rowDrag.getAttribute("data-row-drag") ?? "-1", 10),
-      };
-      if (event.dataTransfer) {
-        event.dataTransfer.setData("text/plain", `row:${pendingDrag.index}`);
-        event.dataTransfer.effectAllowed = "move";
-      }
-      return;
-    }
-    const colDrag = target.closest<HTMLElement>("[data-col-drag]");
-    if (colDrag) {
-      pendingDrag = {
-        type: "col",
-        index: parseInt(colDrag.getAttribute("data-col-drag") ?? "-1", 10),
-      };
-      if (event.dataTransfer) {
-        event.dataTransfer.setData("text/plain", `col:${pendingDrag.index}`);
-        event.dataTransfer.effectAllowed = "move";
-      }
-      return;
-    }
-  });
-
-  wrap.addEventListener("dragover", (event) => {
-    if (pendingDrag) event.preventDefault();
-  });
-
-  wrap.addEventListener("drop", (event) => {
-    if (!pendingDrag) return;
-    event.preventDefault();
-    const target = event.target as HTMLElement | null;
-    const cell = target?.closest<HTMLElement>(".cm-table-cell");
-    if (!cell) {
-      pendingDrag = null;
-      return;
-    }
-    const toRow = parseInt(cell.getAttribute("data-cell-row") ?? "-1", 10);
-    const toCol = parseInt(cell.getAttribute("data-cell-col") ?? "-1", 10);
-    if (pendingDrag.type === "row") {
-      const newTable = withReorderedRows(readTableFromDom(wrap), pendingDrag.index, toRow);
-      commitStructuralChange(wrap, newTable);
-    } else {
-      const newTable = withReorderedColumns(readTableFromDom(wrap), pendingDrag.index, toCol);
-      commitStructuralChange(wrap, newTable);
-    }
-    pendingDrag = null;
-  });
-
-  wrap.addEventListener("dragend", () => {
-    pendingDrag = null;
   });
 }
 
