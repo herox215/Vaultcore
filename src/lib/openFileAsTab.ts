@@ -25,6 +25,9 @@ export async function openFileAsTab(absPath: string): Promise<string | null> {
   if (ext === "md" || ext === "markdown") {
     return tabStore.openTab(absPath);
   }
+  if (ext === "canvas") {
+    return tabStore.openFileTab(absPath, "canvas");
+  }
   if (IMAGE_EXTS.has(ext)) {
     return tabStore.openFileTab(absPath, "image");
   }

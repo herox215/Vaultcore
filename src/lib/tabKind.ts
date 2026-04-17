@@ -29,7 +29,7 @@ export const TEXT_EXTS = new Set([
 ]);
 
 /** Tab viewer — what UI branch EditorPane should render for a tab. */
-export type TabKind = "markdown" | "image" | "text" | "unsupported";
+export type TabKind = "markdown" | "image" | "text" | "unsupported" | "canvas";
 
 /**
  * Extract the lowercase extension from a path (without the leading dot).
@@ -50,6 +50,7 @@ export function getExtension(path: string): string {
 export function getTabKind(path: string): TabKind {
   const ext = getExtension(path);
   if (ext === "md" || ext === "markdown") return "markdown";
+  if (ext === "canvas") return "canvas";
   if (IMAGE_EXTS.has(ext)) return "image";
   if (TEXT_EXTS.has(ext)) return "text";
   // Unknown extension — caller should try UTF-8 read and fall back

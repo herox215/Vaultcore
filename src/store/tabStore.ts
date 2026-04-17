@@ -18,7 +18,7 @@ export type TabType = "file" | "graph";
  * EditorPane renders. Omitted on markdown tabs for backwards compatibility
  * with existing callers that never set this field.
  */
-export type TabViewer = "markdown" | "image" | "text" | "unsupported";
+export type TabViewer = "markdown" | "image" | "text" | "unsupported" | "canvas";
 
 /**
  * Reading Mode vs Edit Mode (#63). Persisted per-tab; only meaningful for

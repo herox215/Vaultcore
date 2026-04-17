@@ -40,6 +40,11 @@ describe("getTabKind", () => {
     expect(getTabKind("doc.markdown")).toBe("markdown");
   });
 
+  it("classifies `.canvas` files as canvas (#71)", () => {
+    expect(getTabKind("board.canvas")).toBe("canvas");
+    expect(getTabKind("/abs/Notes/board.CANVAS")).toBe("canvas");
+  });
+
   it("classifies all known image extensions as image", () => {
     for (const ext of IMAGE_EXTS) {
       expect(getTabKind(`asset.${ext}`)).toBe("image");
