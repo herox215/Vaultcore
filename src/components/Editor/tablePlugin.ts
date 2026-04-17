@@ -528,62 +528,68 @@ function attachStructuralHandlers(wrap: TableDomWithCtx): void {
     }
   });
 
-  // Drag-and-drop row / column reordering. We store the source index in
-  // dataTransfer and listen on the table for drop. Over-drop target is the
-  // cell currently under the pointer — we compute the row/col from its
-  // data attrs.
+  // Drag-and-drop row / column reordering. We stash the source index in a
+  // closure-local variable (and mirror it into dataTransfer for normal UX) so
+  // the drop handler can act without reading back a DataTransfer payload —
+  // synthetic DragEvents dispatched by the E2E driver don't carry one.
+  let pendingDrag: { type: "row" | "col"; index: number } | null = null;
+
   wrap.addEventListener("dragstart", (event) => {
     const target = event.target as HTMLElement | null;
     if (!target) return;
     const rowDrag = target.closest<HTMLElement>("[data-row-drag]");
     if (rowDrag) {
-      event.dataTransfer?.setData("application/vc-table-row", rowDrag.getAttribute("data-row-drag") ?? "");
-      event.dataTransfer!.effectAllowed = "move";
+      pendingDrag = {
+        type: "row",
+        index: parseInt(rowDrag.getAttribute("data-row-drag") ?? "-1", 10),
+      };
+      if (event.dataTransfer) {
+        event.dataTransfer.setData("text/plain", `row:${pendingDrag.index}`);
+        event.dataTransfer.effectAllowed = "move";
+      }
       return;
     }
     const colDrag = target.closest<HTMLElement>("[data-col-drag]");
     if (colDrag) {
-      event.dataTransfer?.setData("application/vc-table-col", colDrag.getAttribute("data-col-drag") ?? "");
-      event.dataTransfer!.effectAllowed = "move";
+      pendingDrag = {
+        type: "col",
+        index: parseInt(colDrag.getAttribute("data-col-drag") ?? "-1", 10),
+      };
+      if (event.dataTransfer) {
+        event.dataTransfer.setData("text/plain", `col:${pendingDrag.index}`);
+        event.dataTransfer.effectAllowed = "move";
+      }
       return;
     }
   });
+
   wrap.addEventListener("dragover", (event) => {
-    if (!event.dataTransfer) return;
-    const types = event.dataTransfer.types;
-    if (
-      types.includes("application/vc-table-row") ||
-      types.includes("application/vc-table-col")
-    ) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-    }
+    if (pendingDrag) event.preventDefault();
   });
+
   wrap.addEventListener("drop", (event) => {
-    if (!event.dataTransfer) return;
+    if (!pendingDrag) return;
+    event.preventDefault();
     const target = event.target as HTMLElement | null;
-    if (!target) return;
-    const cell = target.closest<HTMLElement>(".cm-table-cell");
-    if (!cell) return;
+    const cell = target?.closest<HTMLElement>(".cm-table-cell");
+    if (!cell) {
+      pendingDrag = null;
+      return;
+    }
     const toRow = parseInt(cell.getAttribute("data-cell-row") ?? "-1", 10);
     const toCol = parseInt(cell.getAttribute("data-cell-col") ?? "-1", 10);
+    if (pendingDrag.type === "row") {
+      const newTable = withReorderedRows(readTableFromDom(wrap), pendingDrag.index, toRow);
+      commitStructuralChange(wrap, newTable);
+    } else {
+      const newTable = withReorderedColumns(readTableFromDom(wrap), pendingDrag.index, toCol);
+      commitStructuralChange(wrap, newTable);
+    }
+    pendingDrag = null;
+  });
 
-    const rowPayload = event.dataTransfer.getData("application/vc-table-row");
-    if (rowPayload !== "") {
-      event.preventDefault();
-      const fromRow = parseInt(rowPayload, 10);
-      const newTable = withReorderedRows(readTableFromDom(wrap), fromRow, toRow);
-      commitStructuralChange(wrap, newTable);
-      return;
-    }
-    const colPayload = event.dataTransfer.getData("application/vc-table-col");
-    if (colPayload !== "") {
-      event.preventDefault();
-      const fromCol = parseInt(colPayload, 10);
-      const newTable = withReorderedColumns(readTableFromDom(wrap), fromCol, toCol);
-      commitStructuralChange(wrap, newTable);
-      return;
-    }
+  wrap.addEventListener("dragend", () => {
+    pendingDrag = null;
   });
 }
 
