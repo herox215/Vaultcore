@@ -278,11 +278,14 @@ export const markdownTheme = EditorView.theme({
     borderRadius: "2px",
   },
 
-  // ── GFM table rendering (#99) ────────────────────────────────────────────
+  // ── GFM table rendering (#99) + inline editing (#101) ───────────────────
+  ".cm-table-wrap": {
+    position: "relative",
+    margin: "8px 0",
+  },
   ".cm-table-rendered": {
     width: "100%",
     borderCollapse: "collapse",
-    margin: "8px 0",
     fontSize: "inherit",
     fontFamily: "inherit",
   },
@@ -297,5 +300,17 @@ export const markdownTheme = EditorView.theme({
   },
   ".cm-table-rendered tbody tr:hover": {
     backgroundColor: "var(--color-accent-bg)",
+  },
+  ".cm-table-rendered .cm-table-cell": {
+    display: "block",
+    minWidth: "2ch",
+    minHeight: "1em",
+    outline: "none",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  ".cm-table-rendered .cm-table-cell:focus": {
+    outline: "1px solid var(--color-accent)",
+    outlineOffset: "-1px",
   },
 });
