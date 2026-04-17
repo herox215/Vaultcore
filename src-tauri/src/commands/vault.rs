@@ -174,16 +174,21 @@ pub async fn open_vault(
         *handle = None; // drops old debouncer, stops previous watch
     }
 
-    let coordinator = {
+    // Drop the previous coordinator before the lock guard goes out of scope so
+    // its `Drop`-time Shutdown is sent before we try to acquire a new writer
+    // on the same vault directory. The `acquire_writer_with_retry` inside the
+    // new `IndexCoordinator::new` will retry through the brief window where
+    // the old writer is still draining, but releasing earlier shortens it.
+    {
         let mut guard = state.index_coordinator.lock().map_err(|_| VaultError::Io(
             std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
         ))?;
         *guard = None;
-        crate::indexer::IndexCoordinator::new(&canonical).map_err(|e| {
-            log::error!("Failed to create IndexCoordinator: {e:?}");
-            e
-        })?
-    };
+    }
+    let coordinator = crate::indexer::IndexCoordinator::new(&canonical).await.map_err(|e| {
+        log::error!("Failed to create IndexCoordinator: {e:?}");
+        e
+    })?;
 
     let vault_info = coordinator.index_vault(&canonical, &app).await.map_err(|e| {
         log::error!("index_vault failed: {e:?}");

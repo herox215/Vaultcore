@@ -28,8 +28,9 @@ use link_graph::{LinkGraph, extract_links};
 use tag_index::TagIndex;
 use frontmatter::parse_frontmatter;
 
+use tantivy::directory::error::LockError;
 use tantivy::schema::Schema;
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
+use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyError, Term};
 use tokio::sync::mpsc;
 
 use crate::error::VaultError;
@@ -135,7 +136,12 @@ impl Drop for IndexCoordinator {
 
 impl IndexCoordinator {
     /// Create a new coordinator and spawn the background write-queue consumer.
-    pub fn new(vault_path: &Path) -> Result<Self, VaultError> {
+    ///
+    /// The Tantivy `IndexWriter` is acquired *eagerly* (with retry) before the
+    /// task is spawned. This is what surfaces `IndexLocked` / `IndexCorrupt`
+    /// errors back to the caller instead of letting the writer task die
+    /// silently after `new` already returned `Ok` (issue #108).
+    pub async fn new(vault_path: &Path) -> Result<Self, VaultError> {
         let (schema, path_field, title_field, body_field) = tantivy_index::build_schema();
 
         let vaultcore_dir = vault_path.join(".vaultcore");
@@ -159,6 +165,11 @@ impl IndexCoordinator {
             .try_into()
             .map_err(|_| VaultError::IndexCorrupt)?;
 
+        // Acquire the writer here so a `LockBusy` failure (issue #108) is
+        // visible to `open_vault` — and to the user — instead of being
+        // logged once and then silently swallowed by an exiting task.
+        let writer = acquire_writer_with_retry(&index).await?;
+
         let index = Arc::new(index);
         let reader = Arc::new(reader);
         let file_index = Arc::new(Mutex::new(FileIndex::new()));
@@ -171,15 +182,14 @@ impl IndexCoordinator {
         let (tx, rx) = mpsc::channel::<IndexCmd>(CHANNEL_CAPACITY);
 
         // Spawn the single writer task.
-        let index_clone = Arc::clone(&index);
         let reader_clone = Arc::clone(&reader);
         let file_index_clone = Arc::clone(&file_index);
         let link_graph_clone = Arc::clone(&link_graph);
         let tag_index_clone = Arc::clone(&tag_index);
         tokio::spawn(async move {
             run_queue_consumer(
+                writer,
                 rx,
-                index_clone,
                 reader_clone,
                 file_index_clone,
                 link_graph_clone,
@@ -369,8 +379,8 @@ impl IndexCoordinator {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_queue_consumer(
+    mut writer: IndexWriter,
     mut rx: mpsc::Receiver<IndexCmd>,
-    index: Arc<Index>,
     reader: Arc<IndexReader>,
     file_index: Arc<Mutex<FileIndex>>,
     link_graph: Arc<Mutex<LinkGraph>>,
@@ -380,14 +390,6 @@ async fn run_queue_consumer(
     title_field: tantivy::schema::Field,
     body_field: tantivy::schema::Field,
 ) {
-    let mut writer: IndexWriter = match index.writer(WRITER_HEAP_BYTES) {
-        Ok(w) => w,
-        Err(e) => {
-            log::error!("Failed to create IndexWriter: {e}");
-            return;
-        }
-    };
-
     while let Some(cmd) = rx.recv().await {
         match cmd {
             IndexCmd::AddFile { path, title, body, .. } => {
@@ -513,6 +515,51 @@ async fn run_queue_consumer(
     }
     // `writer` drops here, releasing the write lock on the index directory.
     log::info!("IndexCoordinator write queue shut down");
+}
+
+// ── Writer acquisition with retry ────────────────────────────────────────────
+
+/// Backoff schedule for `acquire_writer_with_retry`. Total ≈ 1.55 s — long
+/// enough to outlast the previous coordinator's `Drop`-then-Shutdown drain on
+/// vault re-open, short enough that a real "another instance is running"
+/// failure surfaces to the user quickly.
+const ACQUIRE_BACKOFF_MS: &[u64] = &[50, 100, 200, 400, 800];
+
+/// Try to acquire the Tantivy `IndexWriter`, retrying on transient
+/// `LockBusy` failures.
+///
+/// On `LockBusy` after the full backoff is exhausted, returns
+/// `VaultError::IndexLocked` so `open_vault` can show a dedicated toast
+/// instead of degrading silently. Any other Tantivy error maps to
+/// `VaultError::IndexCorrupt`, matching the existing rebuild-recovery flow.
+async fn acquire_writer_with_retry(index: &Index) -> Result<IndexWriter, VaultError> {
+    let total = ACQUIRE_BACKOFF_MS.len() + 1;
+    for attempt in 0..total {
+        match index.writer(WRITER_HEAP_BYTES) {
+            Ok(w) => {
+                if attempt > 0 {
+                    log::info!("IndexWriter acquired on retry {attempt}");
+                }
+                return Ok(w);
+            }
+            Err(TantivyError::LockFailure(LockError::LockBusy, _)) => {
+                if let Some(&delay) = ACQUIRE_BACKOFF_MS.get(attempt) {
+                    log::warn!(
+                        "IndexWriter LockBusy (attempt {attempt}), retrying in {delay}ms"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                } else {
+                    log::error!("IndexWriter LockBusy after {total} attempts — giving up");
+                    return Err(VaultError::IndexLocked);
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to create IndexWriter: {e}");
+                return Err(VaultError::IndexCorrupt);
+            }
+        }
+    }
+    unreachable!("loop body always either returns or sleeps before exiting");
 }
 
 // ── Walk helper ───────────────────────────────────────────────────────────────
