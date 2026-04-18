@@ -255,4 +255,70 @@ describe("OmniSearch (#174)", () => {
     await fireEvent.keyDown(input, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // ── Backdrop click closes the modal ───────────────────────────────────
+  // Regression: clicking outside the modal box used to leave the dialog open.
+
+  it("clicking the backdrop calls onClose", async () => {
+    const onClose = vi.fn();
+    const { container } = mountOpen({ onClose });
+    await tick();
+    const backdrop = container.querySelector<HTMLElement>(
+      ".vc-quick-switcher-backdrop",
+    )!;
+    expect(backdrop).toBeTruthy();
+    await fireEvent.mouseDown(backdrop);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking inside the modal box does NOT call onClose", async () => {
+    const onClose = vi.fn();
+    const { container } = mountOpen({ onClose });
+    await tick();
+    const modal = container.querySelector<HTMLElement>(
+      ".vc-quick-switcher-modal",
+    )!;
+    await fireEvent.mouseDown(modal);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // ── Cursor position preservation while typing (regression) ────────────
+  // The content-mode debounce + async search used to re-sync bind:value while
+  // the search was in-flight, occasionally resetting the caret to position 0.
+  // This test caret-positions into the middle of the value, then lets the
+  // debounce fire — the caret must stay where the user left it.
+
+  it("preserves the caret position across a debounced content-mode search", async () => {
+    let resolveFulltext!: (v: SearchResult[]) => void;
+    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<SearchResult[]>((r) => { resolveFulltext = r; }),
+    );
+    const { container } = mountOpen({ initialMode: "content" });
+    await tick();
+
+    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+    input.focus();
+    // Simulate the user having typed "hello" and positioned the caret in the
+    // middle of the word.
+    await fireEvent.input(input, { target: { value: "hello" } });
+    input.setSelectionRange(3, 3);
+    expect(input.selectionStart).toBe(3);
+
+    // Wait past the 200ms debounce so the search actually fires, then resolve
+    // the IPC promise. This is exactly the window where storeState updates
+    // used to cascade into a bind:value re-sync that moved the caret.
+    await new Promise((r) => setTimeout(r, 260));
+    expect(searchFulltext).toHaveBeenCalled();
+    resolveFulltext([]);
+    await Promise.resolve();
+    await tick();
+    await Promise.resolve();
+
+    expect(input.value).toBe("hello");
+    expect(input.selectionStart).toBe(3);
+    expect(input.selectionEnd).toBe(3);
+  });
 });
+
+// Type re-import so the mock type cast above compiles.
+import type { SearchResult } from "../../../types/search";

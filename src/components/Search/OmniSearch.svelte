@@ -220,9 +220,13 @@
     }
   }
 
-  function handleInput() {
+  function handleInput(e: Event) {
+    // Use explicit value read instead of `bind:value`. Bind paired with a
+    // store subscription that reassigns $state objects caused the caret to
+    // snap back to position 0 on every re-render because Svelte's bind
+    // writes `input.value = query` again after each update. See #174 UAT.
+    query = (e.currentTarget as HTMLInputElement).value;
     selectedIndex = 0;
-    searchStore.setQuery(query);
     if (mode === "filename") {
       void runFilenameSearch(query);
     } else {
@@ -346,7 +350,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="vc-quick-switcher-backdrop"
-    onclick={backdropClick}
+    onmousedown={backdropClick}
   >
     <div
       class="vc-quick-switcher-modal"
@@ -376,7 +380,7 @@
 
       <input
         bind:this={inputEl}
-        bind:value={query}
+        value={query}
         oninput={handleInput}
         onkeydown={handleKey}
         type="text"
