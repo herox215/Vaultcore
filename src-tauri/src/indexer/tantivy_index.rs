@@ -93,7 +93,7 @@ pub fn write_version(vaultcore_dir: &Path) -> Result<(), VaultError> {
         "created_at": created_at,
     });
     let content = serde_json::to_string_pretty(&json).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
     let version_file = vaultcore_dir.join("index_version.json");

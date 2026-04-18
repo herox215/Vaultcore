@@ -78,10 +78,7 @@ describe("Inline table editing — structural", () => {
 
   async function getDocText(): Promise<string> {
     return browser.executeAsync((done: (s: string) => void) => {
-      const hook = (
-        window as unknown as { __e2e__: { getActiveDocText: () => Promise<string> } }
-      ).__e2e__;
-      void hook.getActiveDocText().then((t) => done(t));
+      void window.__e2e__!.getActiveDocText().then((t) => done(t));
     });
   }
 
@@ -224,33 +221,60 @@ describe("Inline table editing — structural", () => {
     expect(pipes).toBe(before.cols); // cols-1 columns → cols pipes
   });
 
-  it("control stays visible when the cursor moves from the wrap onto it (issue #110)", async () => {
+  it("control has the hover-gap grace period CSS applied (issue #110, #142)", async () => {
     // Regression for the hover-gap bug: row/col delete buttons sit at
     // top: -22px / left: -24px, outside .cm-table-wrap's visible area. When
     // the cursor crosses the gap from wrap to button the wrap:hover selector
     // drops; without the fade-out grace period, visibility flips to hidden
     // instantly and the user clicks dead air.
-    const stillVisible = await browser.execute(() => {
+    //
+    // Previous implementation of this test dispatched synthetic
+    // MouseEvent("mouseenter"/"mouseleave") and read getComputedStyle()
+    // to verify visibility. Issue #142: that approach is flaky because
+    // CSS :hover is driven by the browser's real pointer position, not
+    // by JS-dispatched MouseEvent objects. WebKit's webdriver host
+    // sometimes updated :hover after a dispatched event and sometimes
+    // didn't — so the test passed in isolation and failed in full-suite
+    // runs where driver timing differed. We now verify the grace-period
+    // CSS structurally: the fix in theme.ts applies a 300ms transition
+    // delay to the .cm-table-ctrl fade-out. If that delay is present,
+    // the hover gap is survivable; if it's missing, #110 regresses. This
+    // check is pointer-agnostic and therefore deterministic.
+    const result = await browser.execute(() => {
       const wrap = document.querySelector<HTMLElement>(".cm-table-wrap");
       const btn = document.querySelector<HTMLElement>(
         '[data-testid="table-row-delete-1"]',
       );
       if (!wrap || !btn) return { found: false };
-
-      // 1. Hover the wrap — controls become visible.
-      wrap.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-      wrap.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-      // 2. Leave the wrap — without the fix, visibility flips to hidden now.
-      wrap.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
-      // 3. Hover the control itself — the :hover rule should keep it visible.
-      btn.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-      btn.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-
-      const vis = getComputedStyle(btn).visibility;
-      return { found: true, visibility: vis };
+      // The fade-out grace lives on the `.cm-table-ctrl` wrapper, not the
+      // inner delete button. The wrapper is the row-ctrls box that holds
+      // the delete + drag affordances; the button itself just inherits its
+      // parent's visibility. Climb to that wrapper before reading styles.
+      const ctrl = btn.closest<HTMLElement>(".cm-table-ctrl");
+      if (!ctrl) return { found: false };
+      const inWrap = wrap.contains(ctrl);
+      const style = getComputedStyle(ctrl);
+      return {
+        found: true,
+        inWrap,
+        transitionDelay: style.transitionDelay,
+        transitionProperty: style.transitionProperty,
+        transitionDuration: style.transitionDuration,
+      };
     });
-    expect(stillVisible.found).toBe(true);
-    expect(stillVisible.visibility).toBe("visible");
+    expect(result.found).toBe(true);
+    expect(result.inWrap).toBe(true);
+    // The fix sets `transition: opacity 120ms ease 300ms, visibility 0s 300ms`.
+    // Both axes must carry the 300ms fade-out delay. Browsers normalise the
+    // computed value, so check the comma-separated list includes "0.3s".
+    const delays = (result.transitionDelay ?? "")
+      .split(",")
+      .map((d) => d.trim());
+    expect(delays).toContain("0.3s");
+    // Two properties (opacity, visibility) — both must be present in the
+    // transition, otherwise the visibility axis would snap immediately.
+    expect(result.transitionProperty).toContain("opacity");
+    expect(result.transitionProperty).toContain("visibility");
   });
 
   it("column-header sort cycles unsorted → asc → desc → unsorted", async () => {

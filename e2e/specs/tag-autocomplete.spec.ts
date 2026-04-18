@@ -32,10 +32,7 @@ describe("Tag autocomplete", () => {
    */
   async function typeInEditor(text: string): Promise<void> {
     await browser.executeAsync((t: string, done: () => void) => {
-      const hook = (window as unknown as {
-        __e2e__: { typeInActiveEditor: (t: string) => Promise<void> };
-      }).__e2e__;
-      hook.typeInActiveEditor(t).then(() => done());
+      window.__e2e__!.typeInActiveEditor(t).then(() => done());
     }, text);
   }
 

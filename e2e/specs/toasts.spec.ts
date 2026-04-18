@@ -14,17 +14,17 @@ describe("Toast notifications", () => {
     vault.cleanup();
   });
 
-  async function pushToast(message: string, variant = "error"): Promise<void> {
+  async function pushToast(
+    message: string,
+    variant: "error" | "conflict" | "clean-merge" = "error",
+  ): Promise<void> {
     // Toasts surface from a variety of async failure paths (IPC errors,
     // broken link resolution, etc.) that are hard to provoke deterministically
     // from the driver. The __e2e__ hook exposes `pushToast` so we can exercise
     // the rendering pipeline directly, which is what this spec verifies.
     await browser.execute(
-      (variantArg: string, msg: string) => {
-        const hook = (window as unknown as {
-          __e2e__: { pushToast: (v: string, m: string) => void };
-        }).__e2e__;
-        hook.pushToast(variantArg, msg);
+      (variantArg, msg) => {
+        window.__e2e__!.pushToast(variantArg, msg);
       },
       variant,
       message,

@@ -12,6 +12,7 @@ export type VaultErrorKind =
   | "VaultUnavailable"
   | "MergeConflict"
   | "InvalidEncoding"
+  | "LockPoisoned"
   | "Io";
 
 export interface VaultError {
@@ -54,6 +55,8 @@ export function vaultErrorCopy(err: VaultError): string {
       return "Index corrupt. VaultCore will rebuild it.";
     case "IndexLocked":
       return "Search index is in use by another window or a stuck VaultCore process. Close other instances or restart VaultCore.";
+    case "LockPoisoned":
+      return "Internal error — please restart VaultCore.";
     case "MergeConflict":
       return `Conflict in ${err.data ?? "file"} — local version kept.`;
     default: {

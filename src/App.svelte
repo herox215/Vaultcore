@@ -16,6 +16,7 @@
   import { listenIndexProgress } from "./ipc/events";
   import { isVaultError, vaultErrorCopy } from "./types/errors";
   import type { RecentVault } from "./types/vault";
+  import "./types/e2e-hook";
   import WelcomeScreen from "./components/Welcome/WelcomeScreen.svelte";
   import VaultLayout from "./components/Layout/VaultLayout.svelte";
   import ToastContainer from "./components/Toast/ToastContainer.svelte";
@@ -237,19 +238,7 @@
         if (!view) return "";
         return view.state.doc.toString();
       };
-      (window as unknown as {
-        __e2e__: {
-          loadVault: (p: string) => Promise<void>;
-          switchVault: (p: string) => Promise<void>;
-          closeVault: () => Promise<void>;
-          pushToast: (variant: "error" | "conflict" | "clean-merge", message: string) => void;
-          startProgress: (total: number) => void;
-          updateProgress: (current: number, total: number, currentFile?: string) => void;
-          finishProgress: () => void;
-          typeInActiveEditor: (text: string) => Promise<void>;
-          getActiveDocText: () => Promise<string>;
-        };
-      }).__e2e__ = {
+      window.__e2e__ = {
         loadVault,
         switchVault,
         closeVault,

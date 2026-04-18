@@ -34,6 +34,13 @@ pub enum VaultError {
     #[error("File is not UTF-8: {path}")]
     InvalidEncoding { path: String },
 
+    /// A `Mutex`/`RwLock` was poisoned because a previous panic unwound
+    /// while holding the guard. Never user-caused — always a programming
+    /// error. Kept data-less because the cause is always the same and the
+    /// only useful user action is "restart the app, then report the bug".
+    #[error("Internal state lock poisoned — please restart VaultCore")]
+    LockPoisoned,
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -49,6 +56,7 @@ impl VaultError {
             Self::VaultUnavailable { .. } => "VaultUnavailable",
             Self::MergeConflict { .. } => "MergeConflict",
             Self::InvalidEncoding { .. } => "InvalidEncoding",
+            Self::LockPoisoned => "LockPoisoned",
             Self::Io(_) => "Io",
         }
     }

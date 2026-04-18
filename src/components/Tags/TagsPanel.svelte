@@ -14,11 +14,11 @@
     const nodes = tags.map((t) => ({ full: t.tag, display: t.tag.split("/").pop() ?? t.tag, count: t.count, children: [] as TagTreeNode[] }));
     for (const n of nodes) {
       const parts = n.full.split("/");
-      if (parts.length === 1) {
+      const parentName = parts[0];
+      if (parts.length === 1 || parentName === undefined) {
         byParent.set(n.full, n);
         flat.push(n);
       } else {
-        const parentName = parts[0];
         let parentNode = byParent.get(parentName);
         if (!parentNode) {
           parentNode = { full: parentName, display: parentName, count: 0, children: [] };

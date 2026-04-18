@@ -267,12 +267,60 @@ fn process_events(
     }
 }
 
+/// Describe an `IndexCmd` briefly for overflow logs without including
+/// file content (watchers see raw document bodies — keep them out of logs).
+fn cmd_kind(cmd: &IndexCmd) -> &'static str {
+    match cmd {
+        IndexCmd::AddFile { .. } => "AddFile",
+        IndexCmd::DeleteFile { .. } => "DeleteFile",
+        IndexCmd::DeleteAll => "DeleteAll",
+        IndexCmd::Commit => "Commit",
+        IndexCmd::Rebuild { .. } => "Rebuild",
+        IndexCmd::UpdateLinks { .. } => "UpdateLinks",
+        IndexCmd::RemoveLinks { .. } => "RemoveLinks",
+        IndexCmd::UpdateTags { .. } => "UpdateTags",
+        IndexCmd::RemoveTags { .. } => "RemoveTags",
+        IndexCmd::Shutdown => "Shutdown",
+    }
+}
+
+/// Try to enqueue `cmd`, logging a warning on overflow or closure.
+///
+/// Issue #139: the previous `let _ = tx.try_send(...)` lines silently
+/// dropped commands when the 1024-slot channel filled up during bulk
+/// events. The symptom (stale link-graph / tag-index) only surfaced on
+/// the next full rebuild. This helper makes the overflow observable so a
+/// user report like "backlinks panel lost entries after I ran git pull"
+/// becomes grep-able in the log.
+pub(crate) fn try_send_or_warn(tx: &tokio::sync::mpsc::Sender<IndexCmd>, cmd: IndexCmd) {
+    let kind = cmd_kind(&cmd);
+    match tx.try_send(cmd) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            log::warn!(
+                "IndexCmd channel full (capacity {}) — dropping {} event. \
+                A bulk operation is outrunning the indexer; \
+                link/tag state may be stale until the next edit or rebuild.",
+                crate::indexer::CHANNEL_CAPACITY,
+                kind,
+            );
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            log::debug!(
+                "IndexCmd channel closed when dispatching {} — \
+                coordinator was dropped (probably vault switch in progress).",
+                kind,
+            );
+        }
+    }
+}
+
 /// Dispatch `IndexCmd::UpdateLinks` or `IndexCmd::RemoveLinks` based on the
 /// event kind.  Only `.md` files are dispatched — non-Markdown file changes
 /// don't affect the link graph.
 ///
-/// Uses `try_send` so a full channel (bounded at 1024) drops the command
-/// rather than blocking the watcher callback thread.
+/// Uses `try_send_or_warn` so a full channel drops the command rather than
+/// blocking the watcher callback thread, but logs the drop (#139).
 fn dispatch_link_graph_cmd(
     tx: &tokio::sync::mpsc::Sender<IndexCmd>,
     vault_path: &Path,
@@ -300,7 +348,7 @@ fn dispatch_link_graph_cmd(
             // old (RemoveLinks) and new (UpdateLinks).
             if let EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Name(_)) = &ev.kind {
                 // Old path → RemoveLinks
-                let _ = tx.try_send(IndexCmd::RemoveLinks { rel_path: rel_path.clone() });
+                try_send_or_warn(tx, IndexCmd::RemoveLinks { rel_path: rel_path.clone() });
                 // New path → UpdateLinks (if paths[1] exists and is .md)
                 if let Some(new_path) = ev.paths.get(1) {
                     if new_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md")) {
@@ -309,7 +357,7 @@ fn dispatch_link_graph_cmd(
                             Err(_) => return,
                         };
                         if let Ok(content) = std::fs::read_to_string(new_path) {
-                            let _ = tx.try_send(IndexCmd::UpdateLinks {
+                            try_send_or_warn(tx, IndexCmd::UpdateLinks {
                                 rel_path: new_rel,
                                 content,
                             });
@@ -319,12 +367,12 @@ fn dispatch_link_graph_cmd(
             } else {
                 // create or modify — read content and dispatch UpdateLinks
                 if let Ok(content) = std::fs::read_to_string(primary_path) {
-                    let _ = tx.try_send(IndexCmd::UpdateLinks { rel_path, content });
+                    try_send_or_warn(tx, IndexCmd::UpdateLinks { rel_path, content });
                 }
             }
         }
         EventKind::Remove(_) => {
-            let _ = tx.try_send(IndexCmd::RemoveLinks { rel_path });
+            try_send_or_warn(tx, IndexCmd::RemoveLinks { rel_path });
         }
         _ => {}
     }
@@ -334,8 +382,8 @@ fn dispatch_link_graph_cmd(
 /// event kind. Only `.md` files are dispatched — non-Markdown file changes
 /// don't affect the tag index.
 ///
-/// Uses `try_send` so a full channel (bounded at 1024) drops the command
-/// rather than blocking the watcher callback thread.
+/// Uses `try_send_or_warn` so a full channel drops the command rather than
+/// blocking the watcher callback thread, but logs the drop (#139).
 pub(crate) fn dispatch_tag_index_cmd(
     tx: &tokio::sync::mpsc::Sender<IndexCmd>,
     vault_path: &Path,
@@ -367,7 +415,7 @@ pub(crate) fn dispatch_tag_index_cmd(
             ) = &ev.kind
             {
                 // Old path → RemoveTags
-                let _ = tx.try_send(IndexCmd::RemoveTags {
+                try_send_or_warn(tx, IndexCmd::RemoveTags {
                     rel_path: rel_path.clone(),
                 });
                 // New path → UpdateTags (if paths[1] exists and is .md)
@@ -381,7 +429,7 @@ pub(crate) fn dispatch_tag_index_cmd(
                             Err(_) => return,
                         };
                         if let Ok(content) = std::fs::read_to_string(new_path) {
-                            let _ = tx.try_send(IndexCmd::UpdateTags {
+                            try_send_or_warn(tx, IndexCmd::UpdateTags {
                                 rel_path: new_rel,
                                 content,
                             });
@@ -391,12 +439,12 @@ pub(crate) fn dispatch_tag_index_cmd(
             } else {
                 // create or modify — read content and dispatch UpdateTags
                 if let Ok(content) = std::fs::read_to_string(primary_path) {
-                    let _ = tx.try_send(IndexCmd::UpdateTags { rel_path, content });
+                    try_send_or_warn(tx, IndexCmd::UpdateTags { rel_path, content });
                 }
             }
         }
         EventKind::Remove(_) => {
-            let _ = tx.try_send(IndexCmd::RemoveTags { rel_path });
+            try_send_or_warn(tx, IndexCmd::RemoveTags { rel_path });
         }
         _ => {}
     }
