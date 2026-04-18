@@ -8,10 +8,6 @@ use crate::error::VaultError;
 use crate::indexer::tag_index::{TagOccurrence, TagUsage};
 use crate::VaultState;
 
-fn io_err(msg: &str) -> VaultError {
-    VaultError::Io(std::io::Error::other(msg))
-}
-
 /// TAG-03: return all tags in the vault sorted alphabetically with usage counts.
 #[tauri::command]
 pub async fn list_tags(
@@ -21,13 +17,13 @@ pub async fn list_tags(
         let coord_guard = state
             .index_coordinator
             .lock()
-            .map_err(|_| io_err("coordinator lock poisoned"))?;
+            .map_err(|_| VaultError::LockPoisoned)?;
         let Some(coord) = coord_guard.as_ref() else {
             return Ok(Vec::new());
         };
         coord.tag_index()
     };
-    let guard = ti.lock().map_err(|_| io_err("tag_index lock poisoned"))?;
+    let guard = ti.lock().map_err(|_| VaultError::LockPoisoned)?;
     Ok(guard.list_tags())
 }
 
@@ -41,12 +37,12 @@ pub async fn get_tag_occurrences(
         let coord_guard = state
             .index_coordinator
             .lock()
-            .map_err(|_| io_err("coordinator lock poisoned"))?;
+            .map_err(|_| VaultError::LockPoisoned)?;
         let Some(coord) = coord_guard.as_ref() else {
             return Ok(Vec::new());
         };
         coord.tag_index()
     };
-    let guard = ti.lock().map_err(|_| io_err("tag_index lock poisoned"))?;
+    let guard = ti.lock().map_err(|_| VaultError::LockPoisoned)?;
     Ok(guard.get_occurrences(&tag))
 }

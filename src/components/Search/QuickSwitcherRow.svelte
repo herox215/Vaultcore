@@ -9,7 +9,7 @@
     /** Issue #60: matched frontmatter alias (when the row surfaced because of
      *  an `aliases:` hit rather than a filename hit). Rendered as
      *  `alias → filename` in front of the filename. */
-    matchedAlias?: string;
+    matchedAlias?: string | undefined;
   }
 
   let { filename, relativePath, matchIndices, selected, onclick, onhover, matchedAlias }: Props = $props();

@@ -11,18 +11,12 @@ export async function openVaultInApp(vaultPath: string): Promise<void> {
   // webview finishes booting).
   await browser.waitUntil(
     async () =>
-      browser.execute(
-        () =>
-          typeof (window as unknown as { __e2e__?: unknown }).__e2e__ === "object",
-      ),
+      browser.execute(() => typeof window.__e2e__ === "object"),
     { timeout: 10_000, timeoutMsg: "window.__e2e__ hook never appeared — was the app built with VITE_E2E=1?" },
   );
 
   await browser.executeAsync((path: string, done: () => void) => {
-    const hook = (window as unknown as {
-      __e2e__: { loadVault: (p: string) => Promise<void> };
-    }).__e2e__;
-    void hook.loadVault(path).then(() => done());
+    void window.__e2e__!.loadVault(path).then(() => done());
   }, vaultPath);
 
   // Sidebar becomes visible once vaultStore.status === "ready".

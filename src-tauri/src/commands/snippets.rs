@@ -26,9 +26,7 @@ fn snippets_dir_for(state: &VaultState, vault_path: &str) -> Result<PathBuf, Vau
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: vault_path.to_string() },
         _ => VaultError::Io(e),
     })?;
-    let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
-    ))?;
+    let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: vault_path.to_string(),
     })?;

@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": ["@wdio/mocha-framework", "@wdio/globals/types", "node"]
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts", "../src/types/e2e-hook.ts"]
 }

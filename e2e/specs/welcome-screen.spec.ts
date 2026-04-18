@@ -17,10 +17,7 @@ describe("Welcome screen", () => {
 
   async function closeCurrentVault(): Promise<void> {
     await browser.execute(() => {
-      const hook = (window as unknown as {
-        __e2e__: { closeVault: () => Promise<void> };
-      }).__e2e__;
-      void hook.closeVault();
+      void window.__e2e__!.closeVault();
     });
   }
 

@@ -200,7 +200,7 @@ pub async fn search_filename(
     // Gather paths + per-file aliases in a single lock hold.
     let (paths, file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
         let fi = file_index_arc
-            .lock()
+            .read()
             .map_err(|_| VaultError::IndexCorrupt)?;
         let paths = fi.all_relative_paths();
         let aliases: Vec<(String, Vec<String>)> = fi
@@ -227,7 +227,7 @@ pub async fn search_filename(
                 buf.clear();
                 let haystack = Utf32Str::new(path, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
-                let score = pattern.indices(haystack, &mut *matcher, &mut indices)?;
+                let score = pattern.indices(haystack, &mut matcher, &mut indices)?;
                 // Sort + dedup per nucleo docs — multiple atoms append independently.
                 indices.sort_unstable();
                 indices.dedup();
@@ -245,7 +245,7 @@ pub async fn search_filename(
                 buf.clear();
                 let haystack = Utf32Str::new(alias, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
-                if let Some(score) = pattern.indices(haystack, &mut *matcher, &mut indices) {
+                if let Some(score) = pattern.indices(haystack, &mut matcher, &mut indices) {
                     out.push(FileMatch {
                         path: rel_path.clone(),
                         score,

@@ -97,6 +97,71 @@ fn test_dot_prefix_filtering() {
     assert!(!is_hidden_path(&vault, &PathBuf::from("/vault/Archive/2024-01.md")));
 }
 
+// ─── try_send_or_warn overflow behavior (#139) ───────────────────────────────
+
+#[test]
+fn test_try_send_or_warn_drops_when_full_without_blocking() {
+    // Issue #139: watcher callbacks use try_send_or_warn so a full channel
+    // drops the command rather than blocking (which would freeze the
+    // notify-debouncer callback thread). Verify:
+    //   1. First send on a cap-1 channel succeeds.
+    //   2. Second send returns synchronously despite the channel being full —
+    //      no blocking, no panic.
+    //   3. Receiver still only sees the first command (second was dropped).
+    use crate::indexer::IndexCmd;
+    use crate::watcher::try_send_or_warn;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+
+    rt.block_on(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<IndexCmd>(1);
+
+        try_send_or_warn(&tx, IndexCmd::RemoveLinks {
+            rel_path: "a.md".into(),
+        });
+        try_send_or_warn(&tx, IndexCmd::RemoveLinks {
+            rel_path: "b.md".into(),
+        });
+
+        // Only the first one is in the channel.
+        let first = rx.try_recv().expect("first message should be present");
+        match first {
+            IndexCmd::RemoveLinks { rel_path } => assert_eq!(rel_path, "a.md"),
+            _ => panic!("expected RemoveLinks"),
+        }
+        // Second is dropped — no further messages.
+        assert!(rx.try_recv().is_err(), "second message should have been dropped");
+    });
+}
+
+#[test]
+fn test_try_send_or_warn_returns_quickly_when_receiver_closed() {
+    // If the coordinator was dropped between the watcher snapshot and the
+    // dispatch (e.g. mid-vault-switch), the channel is closed rather than
+    // full. try_send_or_warn must still return synchronously (not panic,
+    // not block).
+    use crate::indexer::IndexCmd;
+    use crate::watcher::try_send_or_warn;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+
+    rt.block_on(async move {
+        let (tx, rx) = tokio::sync::mpsc::channel::<IndexCmd>(4);
+        drop(rx); // channel closed
+
+        try_send_or_warn(&tx, IndexCmd::RemoveLinks {
+            rel_path: "x.md".into(),
+        });
+        // No panic = contract upheld.
+    });
+}
+
 #[test]
 fn test_write_ignore_multiple_paths() {
     // Record multiple paths — each should be individually ignorable

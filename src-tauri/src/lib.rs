@@ -18,15 +18,11 @@ use notify_debouncer_full::notify::RecommendedWatcher;
 /// Write-ignore-list: records own-write events so the file watcher can
 /// suppress spurious self-triggered events (D-12).
 /// Tokens auto-expire after 500ms to prevent memory leaks.
+#[derive(Default)]
 pub struct WriteIgnoreList {
     entries: HashMap<PathBuf, Instant>,
 }
 
-impl Default for WriteIgnoreList {
-    fn default() -> Self {
-        Self { entries: HashMap::new() }
-    }
-}
 
 impl WriteIgnoreList {
     /// Record that we are about to write `path` so the watcher can ignore

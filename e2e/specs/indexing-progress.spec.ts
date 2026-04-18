@@ -23,20 +23,14 @@ describe("Indexing progress overlay", () => {
 
   async function startProgress(total: number): Promise<void> {
     await browser.execute((t: number) => {
-      const hook = (window as unknown as {
-        __e2e__: { startProgress: (n: number) => void };
-      }).__e2e__;
-      hook.startProgress(t);
+      window.__e2e__!.startProgress(t);
     }, total);
   }
 
   async function updateProgress(current: number, total: number, file: string): Promise<void> {
     await browser.execute(
       (c: number, t: number, f: string) => {
-        const hook = (window as unknown as {
-          __e2e__: { updateProgress: (c: number, t: number, f?: string) => void };
-        }).__e2e__;
-        hook.updateProgress(c, t, f);
+        window.__e2e__!.updateProgress(c, t, f);
       },
       current,
       total,
@@ -46,10 +40,7 @@ describe("Indexing progress overlay", () => {
 
   async function finishProgress(): Promise<void> {
     await browser.execute(() => {
-      const hook = (window as unknown as {
-        __e2e__: { finishProgress: () => void };
-      }).__e2e__;
-      hook.finishProgress();
+      window.__e2e__!.finishProgress();
     });
   }
 

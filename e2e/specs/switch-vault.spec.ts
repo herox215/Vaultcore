@@ -52,10 +52,7 @@ describe("Vault switching", () => {
     expect(before).not.toContain(MARKER_FILE);
 
     await browser.executeAsync((targetPath: string, done: () => void) => {
-      const hook = (window as unknown as {
-        __e2e__: { switchVault: (p: string) => Promise<void> };
-      }).__e2e__;
-      void hook.switchVault(targetPath).then(() => done());
+      void window.__e2e__!.switchVault(targetPath).then(() => done());
     }, vaultB.path);
 
     // Wait for the marker file to appear — reliably proves the new fileList

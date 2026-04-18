@@ -24,7 +24,7 @@
     onOpenFile: (path: string) => void;
     onRefreshParent: () => void;
     onPathChanged: (oldPath: string, newPath: string) => void;
-    onExpandToggle?: (relPath: string, isExpanded: boolean) => void;
+    onExpandToggle?: ((relPath: string, isExpanded: boolean) => void) | undefined;
     initiallyExpanded?: boolean;
     /** Vault-relative folder paths persisted as expanded — propagated through
      *  the recursive tree so deeply nested descendants can restore their
