@@ -6,11 +6,13 @@ import { textOf } from "../helpers/text.js";
 
 /**
  * E2E coverage for #147 — wiki-links and embeds must resolve `.canvas` the
- * same way they resolve `.md`. We seed a small canvas and a note that both
- * links to it (`[[Board]]`) and embeds it (`![[Board]]`), then:
+ * same way they resolve `.md`. After #156 the embed uses CanvasRenderer
+ * (HTML nodes + SVG edge overlay), so we assert `.vc-canvas-node` DIVs
+ * inside `.cm-embed-canvas`, not raw `<rect>`s. We seed a small canvas
+ * and a note that both links to it (`[[Board]]`) and embeds it
+ * (`![[Board]]`), then:
  *   - click the wiki-link → a CanvasView opens in a tab.
- *   - assert the embed widget paints an SVG preview (rect per node) in the
- *     active `.cm-content`.
+ *   - assert the embed renders at least one node DIV per canvas node.
  */
 
 const BOARD_CANVAS = {
@@ -63,7 +65,7 @@ describe("Canvas wiki-links & embeds (#147)", () => {
     throw new Error(`"${name}" not in tree`);
   }
 
-  it("renders a canvas embed SVG preview inside the active editor", async () => {
+  it("renders an HTML canvas embed preview inside the active editor", async () => {
     await openTreeFile("Linker.md");
 
     await browser.waitUntil(
@@ -81,13 +83,35 @@ describe("Canvas wiki-links & embeds (#147)", () => {
           const panes = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
           const active = panes.find((el) => el.offsetParent !== null);
           if (!active) return false;
-          const svg = active.querySelector(".cm-embed-canvas svg");
-          if (!svg) return false;
-          return svg.querySelectorAll("rect").length >= 2;
+          const embed = active.querySelector(".cm-embed-canvas");
+          if (!embed) return false;
+          return embed.querySelectorAll(".vc-canvas-node").length >= 2;
         });
         return found;
       },
-      { timeout: 8000, timeoutMsg: "Canvas embed SVG with >=2 rects never rendered" },
+      { timeout: 8000, timeoutMsg: "Canvas embed with >=2 .vc-canvas-node divs never rendered" },
+    );
+  });
+
+  it("embed renders the node text verbatim (not an SVG-label truncation)", async () => {
+    // Wait for the embed DOM to settle. Prior test guarantees at least two
+    // nodes; we now assert the node *content* contains the full text, not
+    // the first-40-character truncation the old SVG renderer produced.
+    await browser.waitUntil(
+      async () => {
+        const texts = await browser.execute(() => {
+          const panes = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
+          const active = panes.find((el) => el.offsetParent !== null);
+          if (!active) return [];
+          const embed = active.querySelector(".cm-embed-canvas");
+          if (!embed) return [];
+          return Array.from(embed.querySelectorAll<HTMLElement>(".vc-canvas-node-content")).map(
+            (el) => (el.textContent ?? "").trim(),
+          );
+        });
+        return texts.includes("Alpha") && texts.includes("Beta");
+      },
+      { timeout: 5000, timeoutMsg: "Embed node content did not contain both 'Alpha' and 'Beta'" },
     );
   });
 
