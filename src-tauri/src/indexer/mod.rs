@@ -83,6 +83,10 @@ pub enum IndexCmd {
     Commit,
     Rebuild {
         vault_path: PathBuf,
+        /// Signaled after the writer commits and the reader reloads so the
+        /// IPC caller can `.await` completion (#148 — the Search panel must
+        /// re-run its query only once the fresh index is readable).
+        done_tx: Option<tokio::sync::oneshot::Sender<()>>,
     },
     Shutdown,
     /// Incrementally update link-graph entries for a file (LINK-08).
@@ -448,10 +452,11 @@ fn run_queue_consumer(
                     log::error!("Tantivy reader reload failed: {e}");
                 }
             }
-            IndexCmd::Rebuild { vault_path } => {
+            IndexCmd::Rebuild { vault_path, done_tx } => {
                 // Clear writer and re-walk — simplified rebuild within the task.
                 if let Err(e) = writer.delete_all_documents() {
                     log::error!("Tantivy delete_all failed during rebuild: {e}");
+                    if let Some(tx) = done_tx { let _ = tx.send(()); }
                     continue;
                 }
                 let paths = collect_md_paths(&vault_path);
@@ -481,6 +486,7 @@ fn run_queue_consumer(
                 } else if let Err(e) = reader.reload() {
                     log::error!("Tantivy rebuild reader reload failed: {e}");
                 }
+                if let Some(tx) = done_tx { let _ = tx.send(()); }
             }
             IndexCmd::UpdateLinks { rel_path, content } => {
                 // Incremental link-graph update (LINK-08).

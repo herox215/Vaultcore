@@ -67,6 +67,7 @@
       await rebuildIndex();
       searchStore.setIndexStale(false);
       toastStore.push({ variant: "clean-merge", message: "Index aktualisiert" });
+      await searchStore.refetchIfQueryNonEmpty();
     } catch (e) {
       toastStore.push({ variant: "error", message: "Index-Neuaufbau fehlgeschlagen" });
     } finally {

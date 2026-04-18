@@ -337,20 +337,23 @@ pub async fn rebuild_index(
         }),
     );
 
+    // #148: block until the writer commits and the reader reloads. Without
+    // this, the frontend kicks off a refetch against the *stale* reader and
+    // newly-indexed files don't appear in the results list.
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+
     // Send rebuild command to the background write-queue consumer.
     // No Mutex guard is held at this await point.
-    tx.send(IndexCmd::Rebuild { vault_path })
-        .await
-        .map_err(|_| VaultError::IndexCorrupt)?;
+    tx.send(IndexCmd::Rebuild {
+        vault_path,
+        done_tx: Some(done_tx),
+    })
+    .await
+    .map_err(|_| VaultError::IndexCorrupt)?;
 
-    // Emit "in progress" toast (rebuild completes asynchronously in the queue).
-    let _ = app.emit(
-        "vault://index_toast",
-        serde_json::json!({
-            "message": "Index wird neu aufgebaut — läuft im Hintergrund",
-            "variant": "clean-merge"
-        }),
-    );
+    // Wait for the consumer to signal reload. A dropped sender (consumer
+    // exited) surfaces as IndexCorrupt — same treatment as a send failure.
+    done_rx.await.map_err(|_| VaultError::IndexCorrupt)?;
 
     Ok(())
 }
