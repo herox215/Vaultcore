@@ -57,6 +57,12 @@ A second file in the subfolder.
 
   "attachments/placeholder.txt": `This directory holds attachments for the test vault.
 `,
+
+  "Tagged.md": `---
+tags: [alpha, beta]
+---
+# Tagged
+`,
 };
 
 export function createTestVault(): TestVault {
