@@ -15,10 +15,10 @@
   --color-success:   #059669;
   --color-code-bg:   #F3F4F6;
 
-  /* #176 — frosted-glass modal surface tokens. Light alpha 0.72 lets the
-     blurred background show through; dark mode uses 0.85 because the lower
+  /* #176 — frosted-glass modal surface tokens. Light alpha 0.55 lets the
+     blurred background show through; dark mode uses 0.72 because the lower
      surface luminance otherwise loses text contrast. Blur radius is shared. */
-  --color-modal-surface: rgba(255, 255, 255, 0.72);
+  --color-modal-surface: rgba(255, 255, 255, 0.55);
   --color-modal-scrim:   rgba(0, 0, 0, 0.35);
   --modal-blur-radius:   16px;
 
@@ -43,7 +43,7 @@
   --color-warning: #D97706;
   --color-success: #059669;
   --color-code-bg: #F3F4F6;
-  --color-modal-surface: rgba(255, 255, 255, 0.72);
+  --color-modal-surface: rgba(255, 255, 255, 0.55);
   --color-modal-scrim: rgba(0, 0, 0, 0.35);
 }
 
@@ -62,7 +62,7 @@
   --color-warning: #FCD34D;
   --color-success: #34D399;
   --color-code-bg: #252523;
-  --color-modal-surface: rgba(42, 42, 40, 0.85);
+  --color-modal-surface: rgba(42, 42, 40, 0.72);
   --color-modal-scrim: rgba(0, 0, 0, 0.45);
 }
 
@@ -82,7 +82,7 @@
     --color-warning: #FCD34D;
     --color-success: #34D399;
     --color-code-bg: #252523;
-    --color-modal-surface: rgba(42, 42, 40, 0.85);
+    --color-modal-surface: rgba(42, 42, 40, 0.72);
     --color-modal-scrim: rgba(0, 0, 0, 0.45);
   }
 }
