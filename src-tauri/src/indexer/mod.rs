@@ -267,9 +267,7 @@ impl IndexCoordinator {
             // Incremental skip: if hash unchanged, still add to file_list but
             // don't re-index (IDX-03).
             let already_current = {
-                let guard = self.file_index.lock().map_err(|_| VaultError::Io(
-                    std::io::Error::other("file_index lock poisoned"),
-                ))?;
+                let guard = self.file_index.lock().map_err(|_| VaultError::LockPoisoned)?;
                 guard.get(abs_path).map(|m| m.hash == hash).unwrap_or(false)
             };
 
@@ -295,9 +293,7 @@ impl IndexCoordinator {
 
                 // Update in-memory index before sending to queue.
                 {
-                    let mut guard = self.file_index.lock().map_err(|_| VaultError::Io(
-                        std::io::Error::other("file_index lock poisoned"),
-                    ))?;
+                    let mut guard = self.file_index.lock().map_err(|_| VaultError::LockPoisoned)?;
                     guard.insert(
                         abs_path.clone(),
                         FileMeta {

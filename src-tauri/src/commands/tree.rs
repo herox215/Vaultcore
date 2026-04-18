@@ -44,9 +44,7 @@ pub struct DirEntry {
 /// that hasn't been created, but for `list_directory` the path must already
 /// exist, so full canonicalization works.
 fn check_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
-    let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::other("internal state lock poisoned"),
-    ))?;
+    let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),
     })?;

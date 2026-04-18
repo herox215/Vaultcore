@@ -69,6 +69,20 @@ fn vault_error_serialize_invalid_encoding() {
 }
 
 #[test]
+fn vault_error_serialize_lock_poisoned() {
+    // Issue #136: LockPoisoned is a distinct variant so the frontend can
+    // render "Internal error — please restart VaultCore" instead of the
+    // generic "File system error" used for Io.
+    let v = to_json(VaultError::LockPoisoned);
+    assert_eq!(v["kind"], "LockPoisoned");
+    assert_eq!(
+        v["message"],
+        "Internal state lock poisoned — please restart VaultCore",
+    );
+    assert_eq!(v["data"], Value::Null);
+}
+
+#[test]
 fn vault_error_serialize_io() {
     let io_err = std::io::Error::other("boom");
     let v = to_json(VaultError::from(io_err));

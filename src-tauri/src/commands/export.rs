@@ -27,11 +27,7 @@ const SKIP_DIRS: &[&str] = &[".obsidian", ".git", ".vaultcore", ".trash"];
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
-    let guard = state.current_vault.lock().map_err(|_| {
-        VaultError::Io(std::io::Error::other(
-            "vault lock poisoned",
-        ))
-    })?;
+    let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     guard
         .as_ref()
         .cloned()

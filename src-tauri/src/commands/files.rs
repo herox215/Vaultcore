@@ -30,9 +30,7 @@ use walkdir::WalkDir;
 /// T-02 mitigation: canonicalize `target` and confirm it sits inside the
 /// currently-open vault.
 fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
-    let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::other("internal state lock poisoned"),
-    ))?;
+    let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),
     })?;
@@ -88,9 +86,7 @@ pub async fn write_file(
         _ => VaultError::Io(e),
     })?;
     {
-        let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-            std::io::Error::other("internal state lock poisoned"),
-        ))?;
+        let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
         let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
             path: path.clone(),
         })?;
@@ -190,9 +186,7 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: parent.display().to_string() },
         _ => VaultError::Io(e),
     })?;
-    let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::other("internal state lock poisoned"),
-    ))?;
+    let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),
     })?.clone();
@@ -204,9 +198,7 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
 
 /// Helper: get the current vault root.
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
-    let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::other("internal state lock poisoned"),
-    ))?;
+    let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     guard.as_ref().cloned().ok_or_else(|| VaultError::VaultUnavailable {
         path: String::from("<no vault>"),
     })
