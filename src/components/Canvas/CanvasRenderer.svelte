@@ -165,17 +165,22 @@
     aria-hidden="true"
   >
     <defs>
-      <marker
-        id="vc-canvas-arrow"
-        viewBox="0 0 10 10"
-        refX="9"
-        refY="5"
-        markerWidth="6"
-        markerHeight="6"
-        orient="auto-start-reverse"
-      >
-        <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
-      </marker>
+      {#each resolvedEdges as re (`marker-${re.edge.id}`)}
+        {@const markerColor = selectedEdgeId === re.edge.id
+          ? "var(--color-accent)"
+          : (re.edge.color ?? "var(--color-border-strong, #9ca3af)")}
+        <marker
+          id={`vc-canvas-arrow-${re.edge.id}`}
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto-start-reverse"
+        >
+          <path d="M 0 0 L 10 5 L 0 10 z" style:fill={markerColor} />
+        </marker>
+      {/each}
     </defs>
     {#each resolvedEdges as re (re.edge.id)}
       {@const arrowEnd = re.edge.toEnd !== "none"}
@@ -196,8 +201,8 @@
         class:vc-canvas-edge-selected={selectedEdgeId === re.edge.id}
         d={re.path}
         style:color={re.edge.color ?? "var(--color-border-strong, #9ca3af)"}
-        marker-end={arrowEnd ? "url(#vc-canvas-arrow)" : null}
-        marker-start={arrowStart ? "url(#vc-canvas-arrow)" : null}
+        marker-end={arrowEnd ? `url(#vc-canvas-arrow-${re.edge.id})` : null}
+        marker-start={arrowStart ? `url(#vc-canvas-arrow-${re.edge.id})` : null}
         data-edge-id={re.edge.id}
       />
     {/each}
