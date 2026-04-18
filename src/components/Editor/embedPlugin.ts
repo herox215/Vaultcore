@@ -19,7 +19,7 @@
 
 import { ViewPlugin, Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -70,6 +70,45 @@ const noteContentCache: Map<string, string> = new Map();
 const noteFetchInFlight: Set<string> = new Set();
 
 /**
+ * Canvas embeds (#147) share the same caching contract as note embeds (#27):
+ * we fetch the raw .canvas JSON once, cache by vault-relative path, and
+ * invalidate selectively from the same two subscriptions. #154 added the
+ * canvas side to both invalidation hooks so changes to an embedded canvas
+ * — whether from CanvasView autosave (internal) or an external editor —
+ * refresh the inline SVG preview without reopening the host note.
+ */
+const canvasContentCache: Map<string, string> = new Map();
+const canvasFetchInFlight: Set<string> = new Set();
+
+/**
+ * Every `embedPlugin` instance registers its view here on construction and
+ * deregisters on destroy. External cache invalidators (file-change watcher,
+ * tabStore subscribe) call `kickAllEmbedViews()` to force a fresh
+ * `buildDecorations` pass on every mounted editor — otherwise the widget
+ * never re-renders until the user types, and the new content stays invisible.
+ */
+const activeEmbedViews: Set<EditorView> = new Set();
+
+/**
+ * Tag transaction used to force an embed decoration rebuild without touching
+ * the document or selection. Dispatching one `effects: [embedRefreshEffect.of()]`
+ * still flows through `update()` like any other transaction — but a bare
+ * `effects: []` would set none of the `docChanged`/`viewportChanged`/
+ * `selectionSet` flags and our update guard would skip the rebuild.
+ */
+const embedRefreshEffect = StateEffect.define<void>();
+
+function kickAllEmbedViews(): void {
+  for (const v of Array.from(activeEmbedViews)) {
+    if (v.dom.isConnected) {
+      v.dispatch({ effects: embedRefreshEffect.of(undefined) });
+    } else {
+      activeEmbedViews.delete(v);
+    }
+  }
+}
+
+/**
  * Convert an absolute path to a vault-relative forward-slash path, or return
  * null when the path is outside the vault (or no vault is open).
  */
@@ -94,12 +133,22 @@ function toVaultRel(absPath: string): string | null {
 // environment has no Tauri IPC — a synchronous throw here would break imports.
 try {
   void listenFileChange((payload) => {
+    let changed = false;
     const rel = toVaultRel(payload.path);
-    if (rel !== null) noteContentCache.delete(rel);
+    if (rel !== null) {
+      if (noteContentCache.delete(rel)) changed = true;
+      if (canvasContentCache.delete(rel)) changed = true;
+    }
     if (payload.new_path) {
       const newRel = toVaultRel(payload.new_path);
-      if (newRel !== null) noteContentCache.delete(newRel);
+      if (newRel !== null) {
+        if (noteContentCache.delete(newRel)) changed = true;
+        if (canvasContentCache.delete(newRel)) changed = true;
+      }
     }
+    // #154: refresh inline canvas previews (and note embeds) in every open
+    // editor without waiting for the next keystroke.
+    if (changed) kickAllEmbedViews();
   }).catch(() => {
     /* Tauri not initialized — tests run without the IPC backend. */
   });
@@ -116,12 +165,20 @@ try {
 // entry. This lets the next embed rebuild re-fetch the fresh content.
 const lastSavedByTabId: Map<string, string> = new Map();
 tabStore.subscribe((state) => {
+  let changed = false;
   for (const tab of state.tabs) {
     const prev = lastSavedByTabId.get(tab.id);
     if (prev !== tab.lastSavedContent) {
       lastSavedByTabId.set(tab.id, tab.lastSavedContent);
       const rel = toVaultRel(tab.filePath);
-      if (rel !== null) noteContentCache.delete(rel);
+      if (rel !== null) {
+        if (noteContentCache.delete(rel)) changed = true;
+        // #154: CanvasView calls setLastSavedContent after every autosave, so
+        // the same diff-on-snapshot path that catches note writes now catches
+        // canvas writes too — the watcher's write_ignore would otherwise hide
+        // our own saves from the file-change listener.
+        if (canvasContentCache.delete(rel)) changed = true;
+      }
     }
   }
   // Clean up snapshots for tabs that have closed so the map doesn't grow.
@@ -129,6 +186,7 @@ tabStore.subscribe((state) => {
   for (const id of Array.from(lastSavedByTabId.keys())) {
     if (!liveIds.has(id)) lastSavedByTabId.delete(id);
   }
+  if (changed) kickAllEmbedViews();
 });
 
 function scheduleNoteFetch(view: EditorView, relPath: string): void {
@@ -149,6 +207,34 @@ function scheduleNoteFetch(view: EditorView, relPath: string): void {
       // Kick the plugin to re-render now that we have content.
       if (!view.dom.isConnected) return;
       view.dispatch({ effects: [] });
+    });
+}
+
+/**
+ * #154 — mirror of scheduleNoteFetch for `.canvas` embeds. Runs when
+ * buildDecorations sees a cache miss; on completion we kick every mounted
+ * editor so the SVG preview swaps in, not just the one that triggered the
+ * fetch (a note can be open in both panes simultaneously).
+ */
+function scheduleCanvasFetch(view: EditorView, relPath: string): void {
+  if (canvasContentCache.has(relPath) || canvasFetchInFlight.has(relPath)) return;
+  const vault = get(vaultStore).currentPath;
+  if (!vault) return;
+  const abs = `${vault}/${relPath}`;
+  canvasFetchInFlight.add(relPath);
+  void readFile(abs)
+    .then((content) => {
+      canvasContentCache.set(relPath, content);
+    })
+    .catch(() => {
+      canvasContentCache.set(relPath, "");
+    })
+    .finally(() => {
+      canvasFetchInFlight.delete(relPath);
+      // Refresh every mounted editor (the same embed may be open in both
+      // panes). kickAllEmbedViews dispatches the refresh-effect transaction
+      // that the ViewPlugin update() recognises.
+      kickAllEmbedViews();
     });
 }
 
@@ -230,12 +316,26 @@ class NoteEmbedWidget extends WidgetType {
  * standard tabStore path.
  */
 class CanvasEmbedWidget extends WidgetType {
-  constructor(readonly relPath: string, readonly widthPx: number | null) {
+  /**
+   * `content` is the raw canvas JSON or `null` while the fetch is still
+   * in flight. Bundling content into the widget (instead of reading it at
+   * toDOM time) lets `eq()` compare-by-value so CM6 replaces the widget
+   * when the source canvas changes — the root-cause of #154.
+   */
+  constructor(
+    readonly relPath: string,
+    readonly widthPx: number | null,
+    readonly content: string | null,
+  ) {
     super();
   }
 
   eq(other: CanvasEmbedWidget): boolean {
-    return this.relPath === other.relPath && this.widthPx === other.widthPx;
+    return (
+      this.relPath === other.relPath &&
+      this.widthPx === other.widthPx &&
+      this.content === other.content
+    );
   }
 
   toDOM(): HTMLElement {
@@ -249,10 +349,14 @@ class CanvasEmbedWidget extends WidgetType {
       wrap.style.width = `${this.widthPx}px`;
     }
 
-    const content = document.createElement("div");
-    content.className = "cm-embed-canvas-body";
-    content.textContent = "…";
-    wrap.appendChild(content);
+    const body = document.createElement("div");
+    body.className = "cm-embed-canvas-body";
+    if (this.content === null) {
+      body.textContent = "…";
+    } else {
+      renderCanvasPreviewInto(body, this.content);
+    }
+    wrap.appendChild(body);
 
     const abs = absFromRel(this.relPath);
     const openCanvas = (): void => {
@@ -271,20 +375,6 @@ class CanvasEmbedWidget extends WidgetType {
       }
     });
 
-    const cached = canvasContentCache.get(this.relPath);
-    if (cached !== undefined) {
-      renderCanvasPreviewInto(content, cached);
-    } else if (abs) {
-      readFile(abs)
-        .then((src) => {
-          canvasContentCache.set(this.relPath, src);
-          renderCanvasPreviewInto(content, src);
-        })
-        .catch(() => {
-          content.textContent = `\u26A0 cannot read: ${this.relPath}`;
-        });
-    }
-
     return wrap;
   }
 
@@ -294,9 +384,6 @@ class CanvasEmbedWidget extends WidgetType {
     return !(event.type === "click" || event.type === "keydown");
   }
 }
-
-/** Cache the raw canvas JSON so re-renders don't re-hit readFile. */
-const canvasContentCache: Map<string, string> = new Map();
 
 function renderCanvasPreviewInto(el: HTMLElement, rawJson: string): void {
   el.textContent = "";
@@ -514,7 +601,16 @@ function buildDecorations(view: EditorView): DecorationSet {
       if (rel !== null) {
         if (rel.endsWith(".canvas")) {
           // #147 — route canvas targets through the SVG preview widget.
-          deco = Decoration.replace({ widget: new CanvasEmbedWidget(rel, sizePx) });
+          // #154 — bundle the cached JSON into the widget so edits to the
+          // source canvas produce a value-different widget and CM6 swaps
+          // the DOM; a miss schedules a fetch with a null-content placeholder.
+          const cachedCanvas = canvasContentCache.get(rel);
+          if (cachedCanvas === undefined) {
+            scheduleCanvasFetch(view, rel);
+            deco = Decoration.replace({ widget: new CanvasEmbedWidget(rel, sizePx, null) });
+          } else {
+            deco = Decoration.replace({ widget: new CanvasEmbedWidget(rel, sizePx, cachedCanvas) });
+          }
         } else {
           const cached = noteContentCache.get(rel);
           if (cached === undefined) {
@@ -591,18 +687,30 @@ function buildDecorations(view: EditorView): DecorationSet {
 export const embedPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    private view: EditorView;
 
     constructor(view: EditorView) {
       // Clear caches so stale content from a previous vault does not leak into
       // the freshly-mounted view. Cheap because the caches are module-level.
       noteContentCache.clear();
+      canvasContentCache.clear();
+      this.view = view;
+      // #154: register so module-level invalidation hooks can kick a rebuild.
+      activeEmbedViews.add(view);
       this.decorations = buildDecorations(view);
     }
 
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+      const refreshRequested = u.transactions.some((tr) =>
+        tr.effects.some((e) => e.is(embedRefreshEffect)),
+      );
+      if (u.docChanged || u.viewportChanged || u.selectionSet || refreshRequested) {
         this.decorations = buildDecorations(u.view);
       }
+    }
+
+    destroy() {
+      activeEmbedViews.delete(this.view);
     }
   },
   {
@@ -623,4 +731,23 @@ export function __resetEmbedCachesForTests(): void {
 /** Test-only: render an SVG preview for a raw canvas JSON string into `el`. */
 export function __renderCanvasPreviewForTests(el: HTMLElement, rawJson: string): void {
   renderCanvasPreviewInto(el, rawJson);
+}
+
+/** Test-only: expose the canvas-content cache for cache-invalidation tests (#154). */
+export const __canvasCacheForTests = {
+  get: (rel: string): string | undefined => canvasContentCache.get(rel),
+  set: (rel: string, content: string): void => {
+    canvasContentCache.set(rel, content);
+  },
+  has: (rel: string): boolean => canvasContentCache.has(rel),
+};
+
+/** Test-only: value-compare two CanvasEmbedWidget instances through eq(). */
+export function __canvasWidgetEqForTests(
+  a: { relPath: string; widthPx: number | null; content: string | null },
+  b: { relPath: string; widthPx: number | null; content: string | null },
+): boolean {
+  const wa = new CanvasEmbedWidget(a.relPath, a.widthPx, a.content);
+  const wb = new CanvasEmbedWidget(b.relPath, b.widthPx, b.content);
+  return wa.eq(wb);
 }
