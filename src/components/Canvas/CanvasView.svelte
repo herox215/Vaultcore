@@ -62,6 +62,7 @@
   import {
     type PointerMode,
     type DraftEdge,
+    type MoveMember,
     LONGPRESS_HOLD_MS,
     beginPan,
     beginMove,
@@ -73,10 +74,12 @@
     longpressFallback,
     panPosition,
     movePosition,
+    memberPositions,
     resizeSize,
     updateDraftOnMove,
     resolvePointerUp,
   } from "../../lib/canvas/pointerMode";
+  import { nodesInsideGroup } from "../../lib/canvas/group";
 
   interface Props {
     tabId: string;
@@ -327,7 +330,15 @@
 
   function startLongpress(
     e: PointerEvent,
-    fallback: { kind: "none" } | { kind: "move"; nodeId: string; nodeStartX: number; nodeStartY: number },
+    fallback:
+      | { kind: "none" }
+      | {
+          kind: "move";
+          nodeId: string;
+          nodeStartX: number;
+          nodeStartY: number;
+          members: MoveMember[];
+        },
   ) {
     pointerMode = beginPendingLongpress(e, fallback);
     const el = e.currentTarget as HTMLElement;
@@ -377,6 +388,18 @@
       if (node) {
         node.x = p.x;
         node.y = p.y;
+      }
+      // Group drags (#168): translate each snapshotted member by the same
+      // zoom-scaled delta so the contained nodes move with the group.
+      if (mode.members.length > 0) {
+        const positions = memberPositions(mode, e, zoom);
+        for (const mp of positions) {
+          const m = doc.nodes.find((n) => n.id === mp.nodeId);
+          if (m) {
+            m.x = mp.x;
+            m.y = mp.y;
+          }
+        }
       }
     } else if (mode.kind === "resize") {
       const s = resizeSize(mode, e, zoom);
@@ -460,6 +483,18 @@
     e.stopPropagation();
     selectedNodeId = node.id;
     selectedEdgeId = null;
+    // For group nodes, snapshot every node fully inside the group at this
+    // instant so a subsequent drag translates them together (#168).
+    // Containment is evaluated here (pointer-down) — not on every mousemove —
+    // so the set is stable even if the doc is reordered mid-drag.
+    const members: MoveMember[] =
+      node.type === "group"
+        ? nodesInsideGroup(doc, node).map((m) => ({
+            nodeId: m.id,
+            startX: m.x,
+            startY: m.y,
+          }))
+        : [];
     // Enter pending-longpress — if the user keeps the pointer still for
     // LONGPRESS_HOLD_MS we flip to pan; if they move past the threshold
     // first, we fall through to beginMove (the original gesture).
@@ -468,6 +503,7 @@
       nodeId: node.id,
       nodeStartX: node.x,
       nodeStartY: node.y,
+      members,
     });
   }
 

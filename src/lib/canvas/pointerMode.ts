@@ -31,14 +31,30 @@ export const MIN_NODE_HEIGHT = 40;
 export const LONGPRESS_HOLD_MS = 300;
 export const LONGPRESS_MOVE_THRESHOLD = 4;
 
+/**
+ * Snapshot of another node that should translate with the leader during a
+ * move (#168). Populated at `beginMove` for group nodes and left empty for
+ * regular node drags. Capturing start positions here — rather than walking
+ * the doc on every mousemove — keeps the drag math stable if the doc array
+ * is re-ordered mid-drag and avoids re-running containment each frame.
+ */
+export interface MoveMember {
+  nodeId: string;
+  startX: number;
+  startY: number;
+}
+
 // Snapshot of where a node started so pending-longpress can fall through to
 // beginMove without losing the pointer-down origin (otherwise the first
-// `threshold` pixels of drag would be dropped).
+// `threshold` pixels of drag would be dropped). For group drags (#168) the
+// members array is also captured at pointer-down so containment is evaluated
+// against the doc as it existed *before* any drift.
 export interface PendingLongpressFallback {
   kind: "none" | "move";
   nodeId?: string;
   nodeStartX?: number;
   nodeStartY?: number;
+  members?: MoveMember[];
 }
 
 export type PointerMode =
@@ -56,6 +72,7 @@ export type PointerMode =
       startClientY: number;
       startX: number;
       startY: number;
+      members: MoveMember[];
     }
   | {
       kind: "resize";
@@ -107,7 +124,11 @@ export function beginPan(e: ClientPoint, cam: { x: number; y: number }): Pointer
   };
 }
 
-export function beginMove(node: CanvasNode, e: ClientPoint): PointerMode {
+export function beginMove(
+  node: CanvasNode,
+  e: ClientPoint,
+  members: MoveMember[] = [],
+): PointerMode {
   return {
     kind: "move",
     nodeId: node.id,
@@ -115,6 +136,7 @@ export function beginMove(node: CanvasNode, e: ClientPoint): PointerMode {
     startClientY: e.clientY,
     startX: node.x,
     startY: node.y,
+    members,
   };
 }
 
@@ -195,6 +217,7 @@ export function longpressFallback(
     startClientY: mode.startClientY,
     startX: mode.fallback.nodeStartX,
     startY: mode.fallback.nodeStartY,
+    members: mode.fallback.members ?? [],
   };
 }
 
@@ -219,6 +242,26 @@ export function movePosition(
     x: mode.startX + (e.clientX - mode.startClientX) / zoom,
     y: mode.startY + (e.clientY - mode.startClientY) / zoom,
   };
+}
+
+/**
+ * Compute new positions for each member node using the same zoom-scaled
+ * client delta as the leader. Members move as a rigid translation — their
+ * relative offset to the leader is frozen at beginMove — so a group drag
+ * preserves the internal layout inside the group. (#168)
+ */
+export function memberPositions(
+  mode: Extract<PointerMode, { kind: "move" }>,
+  e: ClientPoint,
+  zoom: number,
+): Array<{ nodeId: string; x: number; y: number }> {
+  const dx = (e.clientX - mode.startClientX) / zoom;
+  const dy = (e.clientY - mode.startClientY) / zoom;
+  return mode.members.map((m) => ({
+    nodeId: m.nodeId,
+    x: m.startX + dx,
+    y: m.startY + dy,
+  }));
 }
 
 export function resizeSize(
