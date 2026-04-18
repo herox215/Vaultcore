@@ -33,6 +33,9 @@
   import { renderMarkdownToHtml } from "../Editor/reading/markdownRenderer";
   import CanvasRenderer from "./CanvasRenderer.svelte";
   import ContextMenu from "../common/ContextMenu.svelte";
+  import ColorPicker from "../common/ColorPicker.svelte";
+  import UrlInputModal from "../common/UrlInputModal.svelte";
+  import QuickSwitcher from "../Search/QuickSwitcher.svelte";
   import {
     parseCanvas,
     serializeCanvas,
@@ -218,6 +221,11 @@
     for (const n of doc.nodes) {
       void n.x; void n.y; void n.width; void n.height;
       if (n.type === "text") void (n as CanvasTextNode).text;
+      if (n.type === "link") void (n as CanvasLinkNode).url;
+      if (n.type === "group") {
+        void (n as CanvasGroupNode).label;
+        void (n as CanvasGroupNode).background;
+      }
     }
     for (const e of doc.edges) {
       void e.fromNode; void e.toNode; void e.fromSide; void e.toSide;
@@ -790,24 +798,10 @@
     }
     // File-nodes render a header + (for markdown) a preview body, so the
     // 60 px default used for text cards is too small to show anything
-    // useful. We pick a 400×400 card that matches Obsidian's drag-default
-    // size and gives the markdown preview room to render.
-    const FILE_DROP_WIDTH = 400;
-    const FILE_DROP_HEIGHT = 400;
+    // useful. `addFileNodeAt` uses a 400×400 card that matches Obsidian's
+    // drag-default size and gives the markdown preview room to render.
     const { x, y } = clientToWorld(e.clientX, e.clientY);
-    const node: CanvasFileNode = {
-      id: crypto.randomUUID(),
-      type: "file",
-      x: x - FILE_DROP_WIDTH / 2,
-      y: y - FILE_DROP_HEIGHT / 2,
-      width: FILE_DROP_WIDTH,
-      height: FILE_DROP_HEIGHT,
-      file: rel,
-    };
-    doc.nodes = [...doc.nodes, node];
-    selectedNodeId = node.id;
-    selectedEdgeId = null;
-    editingNodeId = null;
+    addFileNodeAt(x, y, rel);
   }
 
   // True while a long-press-to-pan pan is actively driving the camera. Used
@@ -848,6 +842,10 @@
     cancelLongpressTimer();
     longpressCaptureEl = null;
     pointerMode = null;
+    // Commit any in-progress inline edit so the new context menu's entries
+    // operate on saved state, not on a half-typed URL / label.
+    editingNodeId = null;
+    editingEdgeId = null;
   }
 
   function onViewportContextMenu(e: MouseEvent) {
@@ -918,6 +916,44 @@
       y: worldY - GROUP_H / 2,
       width: GROUP_W,
       height: GROUP_H,
+    };
+    doc.nodes = [...doc.nodes, node];
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+  }
+
+  // File + link node creation helpers — extracted so the context-menu
+  // entries (#166) and the sidebar drag-drop path share one sizing.
+  const FILE_NODE_DEFAULT_W = 400;
+  const FILE_NODE_DEFAULT_H = 400;
+  const LINK_NODE_DEFAULT_W = 400;
+  const LINK_NODE_DEFAULT_H = 100;
+
+  function addFileNodeAt(worldX: number, worldY: number, rel: string) {
+    const node: CanvasFileNode = {
+      id: crypto.randomUUID(),
+      type: "file",
+      x: worldX - FILE_NODE_DEFAULT_W / 2,
+      y: worldY - FILE_NODE_DEFAULT_H / 2,
+      width: FILE_NODE_DEFAULT_W,
+      height: FILE_NODE_DEFAULT_H,
+      file: rel,
+    };
+    doc.nodes = [...doc.nodes, node];
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+    editingNodeId = null;
+  }
+
+  function addLinkNodeAt(worldX: number, worldY: number, url: string) {
+    const node: CanvasLinkNode = {
+      id: crypto.randomUUID(),
+      type: "link",
+      x: worldX - LINK_NODE_DEFAULT_W / 2,
+      y: worldY - LINK_NODE_DEFAULT_H / 2,
+      width: LINK_NODE_DEFAULT_W,
+      height: LINK_NODE_DEFAULT_H,
+      url,
     };
     doc.nodes = [...doc.nodes, node];
     selectedNodeId = node.id;
@@ -1018,6 +1054,134 @@
     tabStore.openTab(absPath);
     tabStore.moveToPane("right");
   }
+
+  // ─── #166: deferred context-menu actions ──────────────────────────────
+  // Anchor the insertion point for the modal flows (Add file / Add link)
+  // so the user gets a node at the right-clicked world coords, not wherever
+  // the camera happens to sit when they confirm the modal.
+  let pendingFileNodeAt = $state<{ worldX: number; worldY: number } | null>(null);
+  let pendingLinkNodeAt = $state<{ worldX: number; worldY: number } | null>(null);
+
+  // Single open picker at a time. `target` discriminates what to mutate
+  // on colour change; `value` is passed to the picker for active-swatch
+  // highlighting. `null` on change = delete the field so CSS fallbacks
+  // re-apply (group) or the default stroke colour kicks in (edge).
+  let colorPicker = $state<
+    | {
+        target: { kind: "group"; id: string } | { kind: "edge"; id: string };
+        x: number;
+        y: number;
+        value: string | null;
+      }
+    | null
+  >(null);
+
+  function openAddFileNode(worldX: number, worldY: number) {
+    pendingFileNodeAt = { worldX, worldY };
+  }
+
+  function onAddFileNodeConfirm(absPath: string) {
+    const anchor = pendingFileNodeAt;
+    pendingFileNodeAt = null;
+    if (!anchor) return;
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    const rel = toVaultRel(vaultPath, absPath);
+    if (!rel) {
+      toastStore.push({
+        variant: "error",
+        message: "Datei liegt außerhalb des aktuellen Vaults",
+      });
+      return;
+    }
+    addFileNodeAt(anchor.worldX, anchor.worldY, rel);
+  }
+
+  function openAddLinkNode(worldX: number, worldY: number) {
+    pendingLinkNodeAt = { worldX, worldY };
+  }
+
+  function onAddLinkNodeConfirm(url: string) {
+    const anchor = pendingLinkNodeAt;
+    pendingLinkNodeAt = null;
+    if (!anchor) return;
+    addLinkNodeAt(anchor.worldX, anchor.worldY, url);
+  }
+
+  function startEditLinkUrl(node: CanvasLinkNode) {
+    editingNodeId = node.id;
+    editingEdgeId = null;
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+  }
+
+  function startEditGroupLabel(node: CanvasGroupNode) {
+    editingNodeId = node.id;
+    editingEdgeId = null;
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+  }
+
+  function onLinkUrlInput(e: Event, node: CanvasLinkNode) {
+    const target = doc.nodes.find((n) => n.id === node.id);
+    if (target && target.type === "link") {
+      (target as CanvasLinkNode).url = (e.target as HTMLInputElement).value;
+    }
+  }
+
+  function onGroupLabelInput(e: Event, node: CanvasGroupNode) {
+    const target = doc.nodes.find((n) => n.id === node.id);
+    if (!target || target.type !== "group") return;
+    const v = (e.target as HTMLInputElement).value;
+    if (v === "") {
+      delete (target as CanvasGroupNode).label;
+    } else {
+      (target as CanvasGroupNode).label = v;
+    }
+  }
+
+  function openColorPickerForGroup(x: number, y: number, node: CanvasGroupNode) {
+    colorPicker = {
+      target: { kind: "group", id: node.id },
+      x,
+      y,
+      value: node.background ?? null,
+    };
+  }
+
+  function openColorPickerForEdge(x: number, y: number, edge: CanvasEdge) {
+    colorPicker = {
+      target: { kind: "edge", id: edge.id },
+      x,
+      y,
+      value: edge.color ?? null,
+    };
+  }
+
+  function onColorChange(value: string | null) {
+    const picker = colorPicker;
+    if (!picker) return;
+    if (picker.target.kind === "group") {
+      const node = doc.nodes.find((n) => n.id === picker.target.id);
+      if (node && node.type === "group") {
+        if (value === null) delete (node as CanvasGroupNode).background;
+        else (node as CanvasGroupNode).background = value;
+      }
+    } else {
+      const edge = doc.edges.find((ed) => ed.id === picker.target.id);
+      if (edge) {
+        if (value === null) delete edge.color;
+        else edge.color = value;
+      }
+    }
+    // Keep the picker open for live drags of the native input; swatch +
+    // Clear paths call onClose from inside the picker itself.
+    colorPicker = { ...picker, value };
+  }
+
+  function closeColorPicker() {
+    colorPicker = null;
+  }
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
@@ -1085,6 +1249,9 @@
       onStopEditingEdge={() => (editingEdgeId = null)}
       onNodeContextMenu={onNodeContextMenu}
       onEdgeContextMenu={onEdgeContextMenu}
+      onLinkUrlInput={onLinkUrlInput}
+      onGroupLabelInput={onGroupLabelInput}
+      onStopEditingNode={() => (editingNodeId = null)}
     />
   {/if}
 </div>
@@ -1102,6 +1269,14 @@
       class="vc-context-item"
       onclick={() => { addTextNodeAt(worldX, worldY); closeContextMenu(); }}
     >Add text node</button>
+    <button
+      class="vc-context-item"
+      onclick={() => { openAddFileNode(worldX, worldY); closeContextMenu(); }}
+    >Add file node…</button>
+    <button
+      class="vc-context-item"
+      onclick={() => { openAddLinkNode(worldX, worldY); closeContextMenu(); }}
+    >Add link node…</button>
     <button
       class="vc-context-item"
       onclick={() => { addGroupAt(worldX, worldY); closeContextMenu(); }}
@@ -1180,6 +1355,10 @@
       >Copy URL</button>
       <button
         class="vc-context-item"
+        onclick={() => { startEditLinkUrl(node as CanvasLinkNode); closeContextMenu(); }}
+      >Edit URL…</button>
+      <button
+        class="vc-context-item"
         onclick={() => { duplicateNode(nodeId); closeContextMenu(); }}
       >Duplicate</button>
       <button
@@ -1196,6 +1375,19 @@
         onclick={() => { deleteNode(nodeId); closeContextMenu(); }}
       >Delete</button>
     {:else if node.type === "group"}
+      {@const mx = contextMenu?.x ?? 0}
+      {@const my = contextMenu?.y ?? 0}
+      <button
+        class="vc-context-item"
+        onclick={() => { startEditGroupLabel(node as CanvasGroupNode); closeContextMenu(); }}
+      >Edit label…</button>
+      <button
+        class="vc-context-item"
+        onclick={() => {
+          openColorPickerForGroup(mx, my, node as CanvasGroupNode);
+          closeContextMenu();
+        }}
+      >Change color…</button>
       <button
         class="vc-context-item"
         onclick={() => { duplicateNode(nodeId); closeContextMenu(); }}
@@ -1209,10 +1401,16 @@
   {:else if contextMenu?.target.kind === "edge" && contextEdge}
     {@const edge = contextEdge}
     {@const edgeId = edge.id}
+    {@const mx = contextMenu?.x ?? 0}
+    {@const my = contextMenu?.y ?? 0}
     <button
       class="vc-context-item"
       onclick={() => { startEditEdgeLabel(edge); closeContextMenu(); }}
     >Edit label</button>
+    <button
+      class="vc-context-item"
+      onclick={() => { openColorPickerForEdge(mx, my, edge); closeContextMenu(); }}
+    >Change color…</button>
     <button
       class="vc-context-item"
       onclick={() => { flipEdge(edgeId); closeContextMenu(); }}
@@ -1224,6 +1422,28 @@
     >Delete</button>
   {/if}
 </ContextMenu>
+
+<!-- #166: modal + picker surfaces driven by the context menu -->
+<QuickSwitcher
+  open={pendingFileNodeAt !== null}
+  onClose={() => (pendingFileNodeAt = null)}
+  onOpenFile={onAddFileNodeConfirm}
+/>
+
+<UrlInputModal
+  open={pendingLinkNodeAt !== null}
+  onConfirm={onAddLinkNodeConfirm}
+  onCancel={() => (pendingLinkNodeAt = null)}
+/>
+
+<ColorPicker
+  open={colorPicker !== null}
+  x={colorPicker?.x ?? 0}
+  y={colorPicker?.y ?? 0}
+  value={colorPicker?.value ?? null}
+  onChange={onColorChange}
+  onClose={closeColorPicker}
+/>
 
 
 <style>

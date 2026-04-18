@@ -85,6 +85,28 @@ describe("CanvasRenderer (#156)", () => {
     expect(container.querySelectorAll("path.vc-canvas-edge")).toHaveLength(1);
   });
 
+  it("arrow marker is rendered per-edge with the edge's color baked in (#171)", () => {
+    // A single shared marker in <defs> can't pick up each referencing path's
+    // color (SVG currentColor resolves inside the defs scope, and context-stroke
+    // isn't supported by every webview). So each edge gets its own marker with
+    // the color applied directly on the marker path.
+    const doc = docOf(
+      [
+        { id: "a", type: "text", text: "a", x: 0, y: 0, width: 100, height: 40 },
+        { id: "b", type: "text", text: "b", x: 200, y: 0, width: 100, height: 40 },
+      ],
+      [{ id: "e1", fromNode: "a", toNode: "b", color: "#ef4444" }],
+    );
+    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    const markerPath = container.querySelector<SVGPathElement>(
+      "marker#vc-canvas-arrow-e1 path",
+    );
+    expect(markerPath).toBeTruthy();
+    expect(markerPath!.style.fill).toBe("rgb(239, 68, 68)");
+    const edgePath = container.querySelector<SVGPathElement>("path.vc-canvas-edge");
+    expect(edgePath?.getAttribute("marker-end")).toBe("url(#vc-canvas-arrow-e1)");
+  });
+
   it("applies the camera transform to the world container", () => {
     const doc = docOf([
       { id: "t", type: "text", text: "x", x: 0, y: 0, width: 100, height: 40 },

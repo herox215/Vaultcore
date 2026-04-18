@@ -98,10 +98,15 @@ describe("CanvasView context menus (#164)", () => {
 
   // ─── Empty canvas ────────────────────────────────────────────────────
 
-  it("empty-canvas menu shows Add text node + Add group", async () => {
+  it("empty-canvas menu shows Add text / file / link / group (#166)", async () => {
     const { container } = await mountWithDoc({ nodes: [], edges: [] });
     await openMenuOnViewport(container);
-    expect(menuItems(container)).toEqual(["Add text node", "Add group"]);
+    expect(menuItems(container)).toEqual([
+      "Add text node",
+      "Add file node…",
+      "Add link node…",
+      "Add group",
+    ]);
   });
 
   it("Add text node creates a text node in the doc", async () => {
@@ -178,7 +183,7 @@ describe("CanvasView context menus (#164)", () => {
 
   // ─── Link node ───────────────────────────────────────────────────────
 
-  it("link-node menu lists the expected entries", async () => {
+  it("link-node menu lists the expected entries (#166 adds Edit URL…)", async () => {
     const { container } = await mountWithDoc({
       nodes: [{ id: "l", type: "link", url: "https://example.com", x: 0, y: 0, width: 200, height: 60 }],
       edges: [],
@@ -187,6 +192,7 @@ describe("CanvasView context menus (#164)", () => {
     expect(menuItems(container)).toEqual([
       "Open link",
       "Copy URL",
+      "Edit URL…",
       "Duplicate",
       "Bring to front",
       "Send to back",
@@ -196,13 +202,18 @@ describe("CanvasView context menus (#164)", () => {
 
   // ─── Group node ──────────────────────────────────────────────────────
 
-  it("group-node menu lists the expected entries", async () => {
+  it("group-node menu lists the expected entries (#166 adds Edit label + colour)", async () => {
     const { container } = await mountWithDoc({
       nodes: [{ id: "g", type: "group", label: "G", x: 0, y: 0, width: 300, height: 200 }],
       edges: [],
     });
     await openMenuOnNode(container, "g");
-    expect(menuItems(container)).toEqual(["Duplicate", "Delete"]);
+    expect(menuItems(container)).toEqual([
+      "Edit label…",
+      "Change color…",
+      "Duplicate",
+      "Delete",
+    ]);
   });
 
   // ─── Edge ────────────────────────────────────────────────────────────
@@ -216,7 +227,12 @@ describe("CanvasView context menus (#164)", () => {
       edges: [{ id: "e1", fromNode: "a", toNode: "b", fromSide: "right", toSide: "left" }],
     });
     await openMenuOnEdge(container);
-    expect(menuItems(container)).toEqual(["Edit label", "Flip direction", "Delete"]);
+    expect(menuItems(container)).toEqual([
+      "Edit label",
+      "Change color…",
+      "Flip direction",
+      "Delete",
+    ]);
   });
 
   it("Flip direction swaps the edge endpoints + sides", async () => {
@@ -256,5 +272,135 @@ describe("CanvasView context menus (#164)", () => {
     await openMenuOnEdge(container);
     await clickMenuItem(container, "Delete");
     expect(container.querySelectorAll(".vc-canvas-edge-hit")).toHaveLength(0);
+  });
+
+  // ─── #166: deferred entries ───────────────────────────────────────────
+
+  async function waitForWrite(n = 1, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (writeFileMock.mock.calls.length >= n) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(`write never happened (waited for ${n})`);
+  }
+
+  it("Add link node… opens a URL modal and persists a link node (#166)", async () => {
+    const { container } = await mountWithDoc({ nodes: [], edges: [] });
+    await openMenuOnViewport(container);
+    await clickMenuItem(container, "Add link node…");
+
+    const input = container.querySelector(".vc-url-modal-input") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    await fireEvent.input(input, { target: { value: "https://example.org" } });
+    const ok = container.querySelector(".vc-url-modal-ok") as HTMLButtonElement;
+    await fireEvent.click(ok);
+    await tick();
+
+    expect(container.querySelectorAll(".vc-canvas-node-link")).toHaveLength(1);
+    await waitForWrite();
+    const doc = nodesFromLastWrite();
+    const link = doc.nodes.find((n) => n.type === "link");
+    expect(link).toMatchObject({ type: "link", url: "https://example.org" });
+  });
+
+  it("Edit URL… on a link node replaces URL inline and persists (#166)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [{ id: "l", type: "link", url: "https://old.example", x: 0, y: 0, width: 200, height: 60 }],
+      edges: [],
+    });
+    await openMenuOnNode(container, "l");
+    await clickMenuItem(container, "Edit URL…");
+
+    const input = container.querySelector(".vc-canvas-node-link-url-input") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    await fireEvent.input(input, { target: { value: "https://new.example" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+    await tick();
+
+    await waitForWrite();
+    const doc = nodesFromLastWrite();
+    expect(doc.nodes[0]).toMatchObject({ type: "link", url: "https://new.example" });
+  });
+
+  it("Edit label… on a group inserts/replaces the label inline and persists (#166)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [{ id: "g", type: "group", x: 0, y: 0, width: 300, height: 200 }],
+      edges: [],
+    });
+    await openMenuOnNode(container, "g");
+    await clickMenuItem(container, "Edit label…");
+
+    const input = container.querySelector(".vc-canvas-node-group-label-input") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    await fireEvent.input(input, { target: { value: "My cluster" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+    await tick();
+
+    await waitForWrite();
+    const doc = nodesFromLastWrite();
+    expect(doc.nodes[0]).toMatchObject({ type: "group", label: "My cluster" });
+  });
+
+  it("Change color… on a group writes groupNode.background + renders it (#166)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [{ id: "g", type: "group", x: 0, y: 0, width: 300, height: 200 }],
+      edges: [],
+    });
+    await openMenuOnNode(container, "g");
+    await clickMenuItem(container, "Change color…");
+
+    const swatch = container.querySelector('.vc-color-swatch[data-color="#22c55e"]') as HTMLButtonElement;
+    expect(swatch).toBeTruthy();
+    await fireEvent.click(swatch);
+    await tick();
+
+    await waitForWrite();
+    const doc = nodesFromLastWrite();
+    expect(doc.nodes[0]).toMatchObject({ type: "group", background: "#22c55e" });
+
+    // Renderer must apply inline background-color so the new colour is visible.
+    const groupEl = container.querySelector(".vc-canvas-node-group") as HTMLElement;
+    expect(groupEl.style.backgroundColor).toBeTruthy();
+  });
+
+  it("Change color… Clear on a group deletes the background field (#166)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [{ id: "g", type: "group", background: "#3b82f6", x: 0, y: 0, width: 300, height: 200 }],
+      edges: [],
+    });
+    await openMenuOnNode(container, "g");
+    await clickMenuItem(container, "Change color…");
+
+    const clear = container.querySelector(".vc-color-clear") as HTMLButtonElement;
+    expect(clear).toBeTruthy();
+    await fireEvent.click(clear);
+    await tick();
+
+    await waitForWrite();
+    const doc = nodesFromLastWrite();
+    const group = doc.nodes[0] as unknown as Record<string, unknown>;
+    expect(group.background).toBeUndefined();
+  });
+
+  it("Change color… on an edge writes edge.color (#166)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [
+        { id: "a", type: "text", text: "a", x: 0, y: 0, width: 100, height: 40 },
+        { id: "b", type: "text", text: "b", x: 200, y: 0, width: 100, height: 40 },
+      ],
+      edges: [{ id: "e1", fromNode: "a", toNode: "b" }],
+    });
+    await openMenuOnEdge(container);
+    await clickMenuItem(container, "Change color…");
+
+    const swatch = container.querySelector('.vc-color-swatch[data-color="#ef4444"]') as HTMLButtonElement;
+    expect(swatch).toBeTruthy();
+    await fireEvent.click(swatch);
+    await tick();
+
+    await waitForWrite();
+    const doc = nodesFromLastWrite();
+    expect(doc.edges[0]).toMatchObject({ id: "e1", color: "#ef4444" });
   });
 });

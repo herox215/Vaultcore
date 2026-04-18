@@ -32,6 +32,13 @@ describe("Canvas context menus (#164)", () => {
       JSON.stringify({ nodes: [], edges: [] }, null, "\t"),
       "utf-8",
     );
+    // #166: a reachable vault file so the "Add file node…" QuickSwitcher
+    // has something to return on the first Enter keystroke.
+    fs.writeFileSync(
+      path.join(vault.path, "Target.md"),
+      "# Target\n\nA file to embed.\n",
+      "utf-8",
+    );
     await openVaultInApp(vault.path);
   });
 
@@ -170,5 +177,98 @@ describe("Canvas context menus (#164)", () => {
 
     // Silence the unused capture warning.
     void clickPoint;
+  });
+
+  it("right-click empty canvas → Add file node… → picks a file and persists (#166)", async () => {
+    // Re-seed the canvas so this test is independent of the first one's
+    // mutation — the previous test left a text node on the canvas.
+    fs.writeFileSync(
+      path.join(vault.path, "Menu.canvas"),
+      JSON.stringify({ nodes: [], edges: [] }, null, "\t"),
+      "utf-8",
+    );
+    // Close and re-open the canvas tab by clicking the file in the tree.
+    await openTreeFile("Menu.canvas");
+    await waitForActiveTab("Menu.canvas");
+
+    await browser.waitUntil(
+      async () => {
+        const vps = await browser.$$(".vc-canvas-viewport");
+        for (const vp of vps) if (await vp.isDisplayed()) return true;
+        return false;
+      },
+      { timeout: 5000, timeoutMsg: "Canvas viewport never displayed" },
+    );
+
+    // Dispatch a contextmenu event at the centre of the canvas viewport.
+    await browser.execute(() => {
+      const vps = Array.from(
+        document.querySelectorAll<HTMLElement>(".vc-canvas-viewport"),
+      );
+      const vp = vps.find((v) => v.offsetParent !== null);
+      if (!vp) throw new Error("no visible canvas viewport");
+      const rect = vp.getBoundingClientRect();
+      vp.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+          button: 2,
+        }),
+      );
+    });
+
+    // Menu → click "Add file node…".
+    const menu = await browser.$(".vc-context-menu");
+    await menu.waitForDisplayed({ timeout: 3000 });
+    const items = await browser.$$(".vc-context-menu .vc-context-item");
+    let clicked = false;
+    for (const it of items) {
+      const label = (await textOf(it)).trim();
+      if (label === "Add file node…") {
+        await it.click();
+        clicked = true;
+        break;
+      }
+    }
+    expect(clicked).toBe(true);
+
+    // QuickSwitcher opens — type the target file name and press Enter.
+    const qsInput = await browser.$(".vc-qs-input");
+    await qsInput.waitForDisplayed({ timeout: 3000 });
+    await qsInput.setValue("Target");
+    await browser.waitUntil(
+      async () => {
+        const rows = await browser.$$(".vc-qs-results > *");
+        return rows.length > 0;
+      },
+      { timeout: 3000, timeoutMsg: "quick switcher returned no results" },
+    );
+    await browser.keys("Enter");
+
+    // A file node materialises in the canvas.
+    await browser.waitUntil(
+      async () => {
+        const n = await browser.execute(() => {
+          const vps = Array.from(
+            document.querySelectorAll<HTMLElement>(".vc-canvas-viewport"),
+          );
+          const vp = vps.find((v) => v.offsetParent !== null);
+          return vp?.querySelectorAll(".vc-canvas-node-file").length ?? 0;
+        });
+        return (n as number) >= 1;
+      },
+      { timeout: 5000, timeoutMsg: "no file node appeared after Add file node" },
+    );
+
+    // Persist to disk as a file node pointing at Target.md.
+    const doc = await waitForDiskDoc(
+      "Menu.canvas",
+      (d) => d.nodes.some((n) => n.type === "file" && typeof n.file === "string"),
+    );
+    const fileNode = doc.nodes.find((n) => n.type === "file");
+    expect(fileNode).toBeDefined();
+    expect((fileNode as Record<string, unknown>).file).toMatch(/Target\.md$/);
   });
 });
