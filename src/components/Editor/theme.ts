@@ -247,6 +247,33 @@ export const markdownTheme = EditorView.theme({
     color: "var(--color-text-muted)",
     fontStyle: "italic",
   },
+  ".cm-embed-canvas": {
+    display: "block",
+    width: "100%",
+    aspectRatio: "16 / 9",
+    margin: "8px 0",
+    border: "1px solid var(--color-border)",
+    borderRadius: "6px",
+    backgroundColor: "var(--color-surface-2, var(--color-bg))",
+    cursor: "pointer",
+    overflow: "hidden",
+    color: "var(--color-text)",
+  },
+  ".cm-embed-canvas-body": {
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ".cm-embed-canvas-svg": {
+    width: "100%",
+    height: "100%",
+  },
+  ".cm-embed-canvas-empty": {
+    color: "var(--color-text-muted)",
+    fontStyle: "italic",
+  },
 
   // ── Inline HTML rendering (#70) ──────────────────────────────────────────
   ".cm-html-rendered": {

@@ -44,13 +44,20 @@ export function setResolvedLinks(map: Map<string, string>): void {
  * Synchronous lookup used by both the ViewPlugin (decoration) and the
  * EditorPane click handler.
  *
- * @param target - Raw link target from `[[target]]` (may include `.md` suffix;
- *   alias is already stripped by the caller via the regex group 1 capture).
+ * @param target - Raw link target from `[[target]]` (may include a `.md` or
+ *   `.canvas` suffix — #147; alias is already stripped by the caller via
+ *   the regex group 1 capture).
  * @returns Vault-relative path, or `null` if the target is not resolved.
  */
 export function resolveTarget(target: string): string | null {
-  const stem = (target.endsWith(".md") ? target.slice(0, -3) : target).toLowerCase();
+  const stem = stripKnownExt(target).toLowerCase();
   return resolvedLinks.get(stem) ?? null;
+}
+
+function stripKnownExt(target: string): string {
+  if (target.endsWith(".md")) return target.slice(0, -3);
+  if (target.endsWith(".canvas")) return target.slice(0, -7);
+  return target;
 }
 
 // ── Code block detection ───────────────────────────────────────────────────────
@@ -116,7 +123,7 @@ function buildDecorations(view: EditorView): DecorationSet {
 
     if (isInsideCodeBlock(view.state, from)) continue;
 
-    const stem: string = rawTarget.endsWith(".md") ? rawTarget.slice(0, -3) : rawTarget;
+    const stem: string = stripKnownExt(rawTarget);
     const resolved = resolvedLinks.has(stem.toLowerCase());
 
     const aliasText = m[2];
