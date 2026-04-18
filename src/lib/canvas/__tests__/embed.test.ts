@@ -6,6 +6,7 @@ import {
   isImageFile,
   isMarkdownFile,
   resolveVaultAbs,
+  toVaultRel,
 } from "../embed";
 
 describe("isImageFile", () => {
@@ -49,6 +50,28 @@ describe("resolveVaultAbs", () => {
   it("converts backslashes to forward slashes so the result is portable", () => {
     expect(resolveVaultAbs("C:\\vault", "sub\\file.md")).toBe(
       "C:/vault/sub/file.md",
+    );
+  });
+});
+
+describe("toVaultRel", () => {
+  it("strips the vault root and returns the relative path", () => {
+    expect(toVaultRel("/vault", "/vault/notes/a.md")).toBe("notes/a.md");
+    expect(toVaultRel("/vault/", "/vault/a.md")).toBe("a.md");
+  });
+
+  it("returns null when the abs path is outside the vault", () => {
+    expect(toVaultRel("/vault", "/other/a.md")).toBeNull();
+    expect(toVaultRel("/vault", "/vaultX/a.md")).toBeNull();
+  });
+
+  it("returns null for the vault root itself (no file)", () => {
+    expect(toVaultRel("/vault", "/vault")).toBeNull();
+  });
+
+  it("normalises Windows-style backslash separators", () => {
+    expect(toVaultRel("C:\\vault", "C:\\vault\\sub\\note.md")).toBe(
+      "sub/note.md",
     );
   });
 });
