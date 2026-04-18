@@ -6,13 +6,15 @@ import { textOf } from "../helpers/text.js";
 
 /**
  * E2E coverage for #154 — an inline `![[board]]` embed must re-render
- * when the underlying `.canvas` file changes. Scenario:
+ * when the underlying `.canvas` file changes. After #156 the embed
+ * mounts the shared CanvasRenderer, so we count `.vc-canvas-node` DIVs
+ * instead of raw <rect> elements. Scenario:
  *   1. Seed Board.canvas with one node and Host.md that embeds it.
- *   2. Open Host.md — assert one <rect> in the embed SVG.
+ *   2. Open Host.md — assert one .vc-canvas-node in the embed.
  *   3. Overwrite Board.canvas on disk with two nodes (simulates external
  *      edit; the watcher fires listenFileChange on the frontend, the
  *      embedPlugin drops the cache and kicks a rebuild).
- *   4. Assert the embed now paints two <rect>s — no user interaction.
+ *   4. Assert the embed now paints two .vc-canvas-nodes — no user interaction.
  */
 
 const ONE_NODE = {
@@ -61,24 +63,34 @@ describe("Canvas embed live-refresh (#154)", () => {
     throw new Error(`"${name}" not in tree`);
   }
 
-  async function countRectsInActiveEmbed(): Promise<number> {
+  async function countNodesInActiveEmbed(): Promise<number> {
     return browser.execute(() => {
       const panes = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
       const active = panes.find((el) => el.offsetParent !== null);
       if (!active) return -1;
-      const svg = active.querySelector(".cm-embed-canvas svg");
-      if (!svg) return 0;
-      return svg.querySelectorAll("rect").length;
+      const embed = active.querySelector(".cm-embed-canvas");
+      if (!embed) return 0;
+      return embed.querySelectorAll(".vc-canvas-node").length;
     });
   }
 
   it("repaints the embed when the source .canvas is rewritten on disk", async () => {
     await openTreeFile("Host.md");
 
-    // Initial paint — 1 rect.
-    await browser.waitUntil(async () => (await countRectsInActiveEmbed()) === 1, {
+    // Initial paint — 1 node.
+    await browser.waitUntil(async () => (await countNodesInActiveEmbed()) === 1, {
       timeout: 8000,
-      timeoutMsg: "Initial embed never showed exactly 1 rect",
+      timeoutMsg: "Initial embed never showed exactly 1 node",
+    }).catch(async (err) => {
+      const debug = await browser.execute(() => {
+        const panes = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
+        const active = panes.find((el) => el.offsetParent !== null);
+        return {
+          hasPane: !!active,
+          embedOuter: active?.querySelector(".cm-embed-canvas")?.outerHTML?.slice(0, 800) ?? null,
+        };
+      });
+      throw new Error(`${err}; debug: ${JSON.stringify(debug)}`);
     });
 
     // Overwrite Board.canvas with a two-node version. The fs.watcher sees
@@ -91,9 +103,9 @@ describe("Canvas embed live-refresh (#154)", () => {
       "utf-8",
     );
 
-    await browser.waitUntil(async () => (await countRectsInActiveEmbed()) === 2, {
+    await browser.waitUntil(async () => (await countNodesInActiveEmbed()) === 2, {
       timeout: 8000,
-      timeoutMsg: "Embed did not refresh to 2 rects after Board.canvas was rewritten",
+      timeoutMsg: "Embed did not refresh to 2 nodes after Board.canvas was rewritten",
     });
   });
 });

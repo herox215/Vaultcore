@@ -24,6 +24,7 @@ import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { get } from "svelte/store";
+import { mount, unmount } from "svelte";
 
 import { resolveAttachment } from "./embeds";
 import { resolveTarget } from "./wikiLink";
@@ -34,6 +35,7 @@ import { listenFileChange } from "../../ipc/events";
 import { parseCanvas } from "../../lib/canvas/parse";
 import type { CanvasNode } from "../../lib/canvas/types";
 import { DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from "../../lib/canvas/types";
+import CanvasRenderer from "../Canvas/CanvasRenderer.svelte";
 
 // ── Regex ──────────────────────────────────────────────────────────────────────
 
@@ -310,9 +312,11 @@ class NoteEmbedWidget extends WidgetType {
 }
 
 /**
- * #147 — inline read-only mini-canvas for `![[mycanvas]]`. Renders node
- * rectangles and edges as a single SVG that auto-fits all nodes into the
- * widget's box. Clicking anywhere opens the full canvas viewer via the
+ * #147 / #156 — inline read-only mini-canvas for `![[mycanvas]]`. Mounts
+ * the shared `CanvasRenderer` with `interactive={false}` so nodes render
+ * with full HTML (markdown, file previews, link cards, group labels) and
+ * edges keep their SVG bezier/arrowhead styling — pixel-identical to the
+ * main CanvasView. Clicking anywhere opens the full canvas viewer via the
  * standard tabStore path.
  */
 class CanvasEmbedWidget extends WidgetType {
@@ -345,18 +349,18 @@ class CanvasEmbedWidget extends WidgetType {
     wrap.setAttribute("role", "button");
     wrap.setAttribute("tabindex", "0");
     wrap.title = `Open ${this.relPath}`;
-    if (this.widthPx !== null) {
-      wrap.style.width = `${this.widthPx}px`;
-    }
+    const widthPx = this.widthPx ?? CANVAS_EMBED_DEFAULT_WIDTH;
+    wrap.style.width = `${widthPx}px`;
 
     const body = document.createElement("div");
     body.className = "cm-embed-canvas-body";
+    wrap.appendChild(body);
+
     if (this.content === null) {
       body.textContent = "…";
     } else {
-      renderCanvasPreviewInto(body, this.content);
+      renderCanvasEmbedBody(body, this.content, widthPx, wrap);
     }
-    wrap.appendChild(body);
 
     const abs = absFromRel(this.relPath);
     const openCanvas = (): void => {
@@ -378,6 +382,20 @@ class CanvasEmbedWidget extends WidgetType {
     return wrap;
   }
 
+  destroy(dom: HTMLElement): void {
+    // Tear down the Svelte renderer instance — without this, every embed
+    // replacement would leak reactive state until the view is destroyed.
+    const component = (dom as unknown as { _vcRenderer?: unknown })._vcRenderer;
+    if (component) {
+      try {
+        unmount(component);
+      } catch {
+        /* already unmounted */
+      }
+      (dom as unknown as { _vcRenderer?: unknown })._vcRenderer = undefined;
+    }
+  }
+
   ignoreEvent(event: Event): boolean {
     // Let click + keydown through to our own listener so the embed is
     // actionable even though CM6 otherwise swallows widget events.
@@ -385,25 +403,76 @@ class CanvasEmbedWidget extends WidgetType {
   }
 }
 
-function renderCanvasPreviewInto(el: HTMLElement, rawJson: string): void {
-  el.textContent = "";
+const CANVAS_EMBED_DEFAULT_WIDTH = 600;
+const CANVAS_EMBED_MAX_HEIGHT = 420;
+const CANVAS_EMBED_MIN_HEIGHT = 80;
+const CANVAS_EMBED_PADDING = 24;
+
+/**
+ * Populate the embed body by mounting CanvasRenderer in read-only mode.
+ * The bounding box of all nodes drives a fit-to-width camera so the whole
+ * canvas is visible. Height is capped so ridiculously tall canvases don't
+ * push the host note off the screen.
+ */
+function renderCanvasEmbedBody(
+  body: HTMLElement,
+  rawJson: string,
+  widthPx: number,
+  wrap: HTMLElement,
+): void {
   let doc;
   try {
     doc = parseCanvas(rawJson);
   } catch {
-    el.textContent = "\u26A0 invalid canvas file";
+    body.textContent = "\u26A0 invalid canvas file";
     return;
   }
-  const nodes = doc.nodes;
-  if (nodes.length === 0) {
+  if (doc.nodes.length === 0) {
     const empty = document.createElement("div");
     empty.className = "cm-embed-canvas-empty";
     empty.textContent = "(empty canvas)";
-    el.appendChild(empty);
+    body.appendChild(empty);
     return;
   }
 
-  // Compute bounding box including default sizes for nodes missing width/height.
+  const bbox = computeCanvasBBox(doc.nodes);
+  const pad = CANVAS_EMBED_PADDING;
+  const bboxW = bbox.maxX - bbox.minX + pad * 2;
+  const bboxH = bbox.maxY - bbox.minY + pad * 2;
+  const zoom = widthPx / bboxW;
+  const camX = -(bbox.minX - pad) * zoom;
+  const camY = -(bbox.minY - pad) * zoom;
+  const heightPx = Math.max(
+    CANVAS_EMBED_MIN_HEIGHT,
+    Math.min(CANVAS_EMBED_MAX_HEIGHT, bboxH * zoom),
+  );
+  body.style.position = "relative";
+  body.style.overflow = "hidden";
+  body.style.height = `${heightPx}px`;
+
+  const vaultPath = get(vaultStore).currentPath ?? null;
+  const component = mount(CanvasRenderer, {
+    target: body,
+    props: {
+      doc,
+      camX,
+      camY,
+      zoom,
+      vaultPath,
+      interactive: false,
+    },
+  });
+  // Stash the handle on the wrapper so CanvasEmbedWidget.destroy() can
+  // unmount the component when CM6 tears the widget down.
+  (wrap as unknown as { _vcRenderer?: unknown })._vcRenderer = component;
+}
+
+function computeCanvasBBox(nodes: CanvasNode[]): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -416,85 +485,7 @@ function renderCanvasPreviewInto(el: HTMLElement, rawJson: string): void {
     if (n.x + w > maxX) maxX = n.x + w;
     if (n.y + h > maxY) maxY = n.y + h;
   }
-  const pad = 20;
-  const vbX = minX - pad;
-  const vbY = minY - pad;
-  const vbW = maxX - minX + pad * 2;
-  const vbH = maxY - minY + pad * 2;
-
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `${vbX} ${vbY} ${vbW} ${vbH}`);
-  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-  svg.setAttribute("class", "cm-embed-canvas-svg");
-
-  // Edges first, so nodes paint over.
-  const nodeMap = new Map<string, CanvasNode>(nodes.map((n) => [n.id, n]));
-  for (const edge of doc.edges) {
-    const a = nodeMap.get(edge.fromNode);
-    const b = nodeMap.get(edge.toNode);
-    if (!a || !b) continue;
-    const ax = a.x + (a.width || DEFAULT_NODE_WIDTH) / 2;
-    const ay = a.y + (a.height || DEFAULT_NODE_HEIGHT) / 2;
-    const bx = b.x + (b.width || DEFAULT_NODE_WIDTH) / 2;
-    const by = b.y + (b.height || DEFAULT_NODE_HEIGHT) / 2;
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    line.setAttribute("x1", String(ax));
-    line.setAttribute("y1", String(ay));
-    line.setAttribute("x2", String(bx));
-    line.setAttribute("y2", String(by));
-    line.setAttribute("stroke", "currentColor");
-    line.setAttribute("stroke-width", "2");
-    line.setAttribute("opacity", "0.5");
-    svg.appendChild(line);
-  }
-
-  for (const n of nodes) {
-    const w = n.width || DEFAULT_NODE_WIDTH;
-    const h = n.height || DEFAULT_NODE_HEIGHT;
-    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    rect.setAttribute("x", String(n.x));
-    rect.setAttribute("y", String(n.y));
-    rect.setAttribute("width", String(w));
-    rect.setAttribute("height", String(h));
-    rect.setAttribute("rx", "6");
-    rect.setAttribute("ry", "6");
-    rect.setAttribute("fill", "var(--vc-bg-secondary, #f5f5f5)");
-    rect.setAttribute("stroke", "currentColor");
-    rect.setAttribute("stroke-width", "1.5");
-    svg.appendChild(rect);
-    // Lightweight label: for text nodes we preview the first line; for other
-    // nodes we show the type so the reader sees the structure at a glance.
-    const label = nodeLabel(n);
-    if (label) {
-      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      text.setAttribute("x", String(n.x + 8));
-      text.setAttribute("y", String(n.y + 20));
-      text.setAttribute("font-size", "14");
-      text.setAttribute("fill", "currentColor");
-      text.textContent = label;
-      svg.appendChild(text);
-    }
-  }
-
-  el.appendChild(svg);
-}
-
-function nodeLabel(n: CanvasNode): string {
-  // `CanvasUnknownNode` overlaps every other variant on the `type` discriminant,
-  // so read optional fields through a loose record to keep the union-narrowing
-  // from collapsing into the fallback branch.
-  const any = n as unknown as Record<string, unknown>;
-  if (n.type === "text") {
-    const raw = typeof any["text"] === "string" ? (any["text"] as string) : "";
-    const firstLine = raw.split("\n", 1)[0] ?? "";
-    return firstLine.length > 40 ? `${firstLine.slice(0, 37)}…` : firstLine;
-  }
-  if (n.type === "file") return typeof any["file"] === "string" ? (any["file"] as string) : "(file)";
-  if (n.type === "link") return typeof any["url"] === "string" ? (any["url"] as string) : "(link)";
-  if (n.type === "group") {
-    return typeof any["label"] === "string" ? (any["label"] as string) : "(group)";
-  }
-  return n.type;
+  return { minX, minY, maxX, maxY };
 }
 
 class BrokenEmbedWidget extends WidgetType {
@@ -728,9 +719,25 @@ export function __resetEmbedCachesForTests(): void {
   canvasContentCache.clear();
 }
 
-/** Test-only: render an SVG preview for a raw canvas JSON string into `el`. */
-export function __renderCanvasPreviewForTests(el: HTMLElement, rawJson: string): void {
-  renderCanvasPreviewInto(el, rawJson);
+/** Test-only: compute a fit-to-width camera for a raw canvas JSON (#156). */
+export function __computeEmbedCameraForTests(
+  rawJson: string,
+  widthPx: number,
+): { camX: number; camY: number; zoom: number; heightPx: number } | null {
+  const doc = parseCanvas(rawJson);
+  if (doc.nodes.length === 0) return null;
+  const bbox = computeCanvasBBox(doc.nodes);
+  const pad = CANVAS_EMBED_PADDING;
+  const bboxW = bbox.maxX - bbox.minX + pad * 2;
+  const bboxH = bbox.maxY - bbox.minY + pad * 2;
+  const zoom = widthPx / bboxW;
+  const camX = -(bbox.minX - pad) * zoom;
+  const camY = -(bbox.minY - pad) * zoom;
+  const heightPx = Math.max(
+    CANVAS_EMBED_MIN_HEIGHT,
+    Math.min(CANVAS_EMBED_MAX_HEIGHT, bboxH * zoom),
+  );
+  return { camX, camY, zoom, heightPx };
 }
 
 /** Test-only: expose the canvas-content cache for cache-invalidation tests (#154). */
