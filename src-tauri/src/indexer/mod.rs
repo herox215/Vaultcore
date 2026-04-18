@@ -186,12 +186,22 @@ impl IndexCoordinator {
 
         let (tx, rx) = mpsc::channel::<IndexCmd>(CHANNEL_CAPACITY);
 
-        // Spawn the single writer task.
+        // Spawn the single writer task on the blocking thread pool (#138).
+        // Tantivy's IndexWriter ops (add_document, commit, delete_term,
+        // delete_all_documents) are synchronous and can run for hundreds of
+        // milliseconds on a large vault. If the consumer ran on the async
+        // runtime, every other future sharing the executor (progress events,
+        // vault status, IPC polling) would stall during a bulk commit. Moving
+        // the loop onto `spawn_blocking` keeps the Tantivy call-chain off
+        // the async executor entirely. Senders still use
+        // `tokio::sync::mpsc::Sender::{send,try_send}` untouched; the
+        // consumer drains via `Receiver::blocking_recv()`, which is
+        // explicitly designed for this bridging pattern.
         let reader_clone = Arc::clone(&reader);
         let file_index_clone = Arc::clone(&file_index);
         let link_graph_clone = Arc::clone(&link_graph);
         let tag_index_clone = Arc::clone(&tag_index);
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             run_queue_consumer(
                 writer,
                 rx,
@@ -203,8 +213,7 @@ impl IndexCoordinator {
                 path_field,
                 title_field,
                 body_field,
-            )
-            .await;
+            );
         });
 
         // Evict orphans left over from prior sessions (issue #46). Runs on the
@@ -379,7 +388,7 @@ impl IndexCoordinator {
 // ── Queue consumer task ───────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
-async fn run_queue_consumer(
+fn run_queue_consumer(
     mut writer: IndexWriter,
     mut rx: mpsc::Receiver<IndexCmd>,
     reader: Arc<IndexReader>,
@@ -391,7 +400,10 @@ async fn run_queue_consumer(
     title_field: tantivy::schema::Field,
     body_field: tantivy::schema::Field,
 ) {
-    while let Some(cmd) = rx.recv().await {
+    // Runs on the blocking thread pool (see IndexCoordinator::new). Uses
+    // `blocking_recv()` so the Tantivy write chain never touches the async
+    // executor (#138).
+    while let Some(cmd) = rx.blocking_recv() {
         match cmd {
             IndexCmd::AddFile { path, title, body, .. } => {
                 let path_str = path.to_string_lossy().into_owned();
