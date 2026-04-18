@@ -246,10 +246,14 @@ describe("Inline table editing — structural", () => {
         '[data-testid="table-row-delete-1"]',
       );
       if (!wrap || !btn) return { found: false };
-      // Ancestry must hold for the `.cm-table-wrap:hover .cm-table-ctrl`
-      // hand-off to fire at all.
-      const inWrap = wrap.contains(btn);
-      const style = getComputedStyle(btn);
+      // The fade-out grace lives on the `.cm-table-ctrl` wrapper, not the
+      // inner delete button. The wrapper is the row-ctrls box that holds
+      // the delete + drag affordances; the button itself just inherits its
+      // parent's visibility. Climb to that wrapper before reading styles.
+      const ctrl = btn.closest<HTMLElement>(".cm-table-ctrl");
+      if (!ctrl) return { found: false };
+      const inWrap = wrap.contains(ctrl);
+      const style = getComputedStyle(ctrl);
       return {
         found: true,
         inWrap,
@@ -262,8 +266,7 @@ describe("Inline table editing — structural", () => {
     expect(result.inWrap).toBe(true);
     // The fix sets `transition: opacity 120ms ease 300ms, visibility 0s 300ms`.
     // Both axes must carry the 300ms fade-out delay. Browsers normalise the
-    // computed value, so check the comma-separated list includes "0.3s" twice
-    // (once per property).
+    // computed value, so check the comma-separated list includes "0.3s".
     const delays = (result.transitionDelay ?? "")
       .split(",")
       .map((d) => d.trim());
