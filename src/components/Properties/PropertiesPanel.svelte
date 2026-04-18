@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { Plus, X } from "lucide-svelte";
   import { activeViewStore } from "../../store/activeViewStore";
   import {
@@ -47,7 +48,60 @@
       n += 1;
       candidate = `${base}${n}`;
     }
-    commit([...existing, { key: candidate, value: "" }]);
+    commit([...existing, { key: candidate, values: [""], listStyle: false }]);
+  }
+
+  async function promoteToList(index: number): Promise<void> {
+    const row = parsed.properties[index];
+    if (!row) return;
+    if (!row.listStyle) {
+      const cleaned = row.values.length === 1 && row.values[0] === "" ? [] : row.values;
+      updateRow(index, { listStyle: true, values: cleaned });
+    }
+    await tick();
+    focusChipInput(index);
+  }
+
+  function focusChipInput(index: number): void {
+    const input = document.querySelector<HTMLInputElement>(
+      `[data-chip-input="${index}"]`,
+    );
+    input?.focus();
+  }
+
+  function appendChipValue(index: number, raw: string): void {
+    if (raw === "") return;
+    const row = parsed.properties[index];
+    if (!row) return;
+    const nextValues = [...row.values, raw];
+    const next = parsed.properties.map((p, i) =>
+      i === index ? { ...p, values: nextValues, listStyle: true } : p,
+    );
+    commit(next);
+  }
+
+  function removeChipAt(rowIndex: number, valueIndex: number): void {
+    const row = parsed.properties[rowIndex];
+    if (!row) return;
+    const nextValues = row.values.filter((_, i) => i !== valueIndex);
+    updateRow(rowIndex, { values: nextValues });
+  }
+
+  function onChipInputKeydown(e: KeyboardEvent, index: number): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const el = e.currentTarget as HTMLInputElement;
+      appendChipValue(index, el.value);
+      el.value = "";
+    }
+  }
+
+  function onChipInputBlur(e: FocusEvent, index: number): void {
+    const el = e.currentTarget as HTMLInputElement;
+    if (el.value !== "") {
+      appendChipValue(index, el.value);
+      el.value = "";
+    }
   }
 </script>
 
@@ -85,14 +139,54 @@
               aria-label="Schlüssel"
               spellcheck="false"
             />
-            <input
-              type="text"
-              class="vc-props-value"
-              value={prop.value}
-              onchange={(e) => updateRow(index, { value: e.currentTarget.value })}
-              aria-label="Wert"
-              spellcheck="false"
-            />
+            <div class="vc-props-value-col">
+              {#if prop.listStyle}
+                <div class="vc-props-chips" data-list-row={index}>
+                  {#each prop.values as chip, ci (ci)}
+                    <span class="vc-props-chip">
+                      <span class="vc-props-chip-text">{chip}</span>
+                      <button
+                        type="button"
+                        class="vc-props-chip-del"
+                        onclick={() => removeChipAt(index, ci)}
+                        aria-label="Wert entfernen"
+                        title="Wert entfernen"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  {/each}
+                  <input
+                    type="text"
+                    class="vc-props-chip-input"
+                    data-chip-input={index}
+                    placeholder={prop.values.length === 0 ? "Wert hinzufügen" : ""}
+                    onkeydown={(e) => onChipInputKeydown(e, index)}
+                    onblur={(e) => onChipInputBlur(e, index)}
+                    aria-label="Wert hinzufügen"
+                    spellcheck="false"
+                  />
+                </div>
+              {:else}
+                <input
+                  type="text"
+                  class="vc-props-value"
+                  value={prop.values[0] ?? ""}
+                  onchange={(e) => updateRow(index, { values: [e.currentTarget.value] })}
+                  aria-label="Wert"
+                  spellcheck="false"
+                />
+              {/if}
+            </div>
+            <button
+              type="button"
+              class="vc-props-plus"
+              onclick={() => promoteToList(index)}
+              aria-label="Wert hinzufügen"
+              title="Wert hinzufügen"
+            >
+              <Plus size={12} />
+            </button>
             <button
               type="button"
               class="vc-props-del"
@@ -164,9 +258,9 @@
   }
   .vc-props-row {
     display: grid;
-    grid-template-columns: 32% 1fr 20px;
+    grid-template-columns: 32% 1fr 20px 20px;
     gap: 4px;
-    align-items: center;
+    align-items: start;
   }
   .vc-props-key,
   .vc-props-value {
@@ -180,6 +274,7 @@
     box-sizing: border-box;
     outline: none;
     min-width: 0;
+    width: 100%;
   }
   .vc-props-key { font-family: var(--vc-font-mono); color: var(--color-text-muted); }
   .vc-props-key:focus,
@@ -187,6 +282,69 @@
     border-color: var(--color-accent);
     box-shadow: 0 0 0 2px var(--color-accent-bg);
   }
+  .vc-props-value-col {
+    min-width: 0;
+  }
+  .vc-props-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-height: 24px;
+    padding: 2px 4px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+  }
+  .vc-props-chips:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-bg);
+  }
+  .vc-props-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px 0 6px;
+    height: 18px;
+    font-size: 11px;
+    line-height: 18px;
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border-radius: 10px;
+    max-width: 100%;
+  }
+  .vc-props-chip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vc-props-chip-del {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    border-radius: 50%;
+  }
+  .vc-props-chip-del:hover { color: var(--color-error); }
+  .vc-props-chip-input {
+    flex: 1;
+    min-width: 40px;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 13px;
+    color: var(--color-text);
+    padding: 0 2px;
+    height: 18px;
+  }
+  .vc-props-plus,
   .vc-props-del {
     width: 20px;
     height: 20px;
@@ -198,6 +356,8 @@
     cursor: pointer;
     color: var(--color-text-muted);
     border-radius: 3px;
+    margin-top: 2px;
   }
+  .vc-props-plus:hover { background: var(--color-accent-bg); color: var(--color-accent); }
   .vc-props-del:hover { background: var(--color-accent-bg); color: var(--color-error); }
 </style>

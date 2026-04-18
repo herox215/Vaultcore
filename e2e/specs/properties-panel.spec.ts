@@ -40,6 +40,15 @@ describe("Properties panel", () => {
     }
   }
 
+  async function collectTexts(selector: string): Promise<string[]> {
+    const els = await browser.$$(selector);
+    const out: string[] = [];
+    for (const el of els) {
+      out.push(await textOf(el));
+    }
+    return out;
+  }
+
   async function activatePropertiesSubtab(): Promise<void> {
     await browser.execute(() => {
       const btn = document.querySelector('[aria-label="Properties"][role="tab"]') as HTMLElement | null;
@@ -104,5 +113,94 @@ describe("Properties panel", () => {
     await browser.$(".vc-props-empty").waitForDisplayed({ timeout: 3000 });
     const rows = await browser.$$(".vc-props-row");
     expect(rows.length).toBe(0);
+  });
+
+  it("renders pre-existing list frontmatter as chips on load", async () => {
+    await openTreeFile("Tagged.md");
+    await browser.waitUntil(
+      async () => {
+        const label = await browser.$(".vc-tab--active .vc-tab-label");
+        return (await textOf(label)) === "Tagged.md";
+      },
+      { timeout: 5000, timeoutMsg: "Tagged.md did not become the active tab" },
+    );
+    await ensureRightSidebar();
+    await activatePropertiesSubtab();
+
+    await browser.waitUntil(
+      async () => (await browser.$$(".vc-props-chip")).length === 2,
+      { timeout: 3000, timeoutMsg: "expected two chips for tags: [alpha, beta]" },
+    );
+    const chipTexts = await collectTexts(".vc-props-chip-text");
+    expect(chipTexts).toEqual(["alpha", "beta"]);
+  });
+
+  it("promotes a scalar row to list and manages chips via + and ×", async () => {
+    await openTreeFile("Welcome.md");
+    await browser.waitUntil(
+      async () => {
+        const label = await browser.$(".vc-tab--active .vc-tab-label");
+        return (await textOf(label)) === "Welcome.md";
+      },
+      { timeout: 5000, timeoutMsg: "Welcome.md did not become the active tab" },
+    );
+    await ensureRightSidebar();
+    await activatePropertiesSubtab();
+
+    const addBtn = await browser.$(".vc-props-add");
+    await browser.waitUntil(
+      async () => !(await addBtn.getAttribute("disabled")),
+      { timeout: 5000, timeoutMsg: ".vc-props-add never became enabled" },
+    );
+    await addBtn.click();
+    await browser.waitUntil(
+      async () => (await browser.$$(".vc-props-row")).length >= 1,
+      { timeout: 3000 },
+    );
+
+    // Click the row-level + button to promote scalar → list.
+    const plusBtn = (await browser.$$(".vc-props-plus"))[0]!;
+    await plusBtn.click();
+    await browser.waitUntil(
+      async () => (await browser.$$(".vc-props-chips")).length === 1,
+      { timeout: 3000, timeoutMsg: "chip container never appeared after clicking +" },
+    );
+
+    // Type a chip value + Enter.
+    const chipInput = await browser.$(".vc-props-chip-input");
+    await chipInput.click();
+    await chipInput.setValue("foo");
+    await browser.keys("Enter");
+    await browser.waitUntil(
+      async () => (await browser.$$(".vc-props-chip")).length === 1,
+      { timeout: 3000, timeoutMsg: "first chip never materialised" },
+    );
+
+    // Second chip.
+    await chipInput.click();
+    await chipInput.setValue("bar");
+    await browser.keys("Enter");
+    await browser.waitUntil(
+      async () => (await browser.$$(".vc-props-chip")).length === 2,
+      { timeout: 3000, timeoutMsg: "second chip never materialised" },
+    );
+
+    let texts = await collectTexts(".vc-props-chip-text");
+    expect(texts).toEqual(["foo", "bar"]);
+
+    // Remove first chip via its × button.
+    const chipDelButtons = await browser.$$(".vc-props-chip-del");
+    await chipDelButtons[0]!.click();
+    await browser.waitUntil(
+      async () => (await browser.$$(".vc-props-chip")).length === 1,
+      { timeout: 3000, timeoutMsg: "chip deletion did not take effect" },
+    );
+    texts = await collectTexts(".vc-props-chip-text");
+    expect(texts).toEqual(["bar"]);
+
+    // Row must still exist after removing the chip (AC: removing a single
+    // value does not delete the key).
+    const rows = await browser.$$(".vc-props-row");
+    expect(rows.length).toBe(1);
   });
 });
