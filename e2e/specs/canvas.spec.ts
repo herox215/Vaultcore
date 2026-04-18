@@ -557,4 +557,161 @@ describe("Canvas viewer (#124)", () => {
         : false;
     });
   });
+
+  // ─── Long-press-to-pan (#144) ─────────────────────────────────────────
+
+  it("long-press + drag on a node pans the camera without moving the node", async () => {
+    // Seed a clean file with one node at a known origin so we can assert
+    // its coordinates survived the pan.
+    fs.writeFileSync(
+      path.join(vault.path, "LongPress.canvas"),
+      JSON.stringify(
+        {
+          nodes: [
+            {
+              id: "lp-1",
+              type: "text",
+              x: 0,
+              y: 0,
+              width: 200,
+              height: 100,
+              text: "hold me",
+            },
+          ],
+          edges: [],
+        },
+        null,
+        "\t",
+      ),
+      "utf-8",
+    );
+
+    await openTreeFile("LongPress.canvas");
+    await waitForCanvas();
+
+    // Snapshot the camera transform + on-disk node coords before the drag.
+    const beforeTransform = (await browser.execute(() => {
+      const vps = Array.from(
+        document.querySelectorAll<HTMLElement>(".vc-canvas-viewport"),
+      );
+      const visible = vps.find((v) => v.offsetParent !== null);
+      const world = visible?.querySelector<HTMLElement>(".vc-canvas-world");
+      return world?.style.transform ?? "";
+    })) as string;
+
+    const nodeSel = await vizSel(" .vc-canvas-node-text");
+
+    // Resolve the node's center once, then fire the three events in three
+    // calls with a wall-clock sleep in between so the WebView's setTimeout
+    // for the long-press timer has real time to fire.
+    const origin = (await browser.execute((sel: string) => {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (!el) throw new Error(`No element: ${sel}`);
+      const rect = el.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    }, nodeSel)) as { x: number; y: number };
+
+    await browser.execute(
+      (sel: string, x: number, y: number) => {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (!el) throw new Error(`No element: ${sel}`);
+        el.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            pointerId: 1,
+            pointerType: "mouse",
+            button: 0,
+            buttons: 1,
+            isPrimary: true,
+          }),
+        );
+      },
+      nodeSel,
+      origin.x,
+      origin.y,
+    );
+
+    // Wait long enough for the 300 ms long-press timer to fire in the WebView.
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Verify the long-press fired — pointer mode should have transitioned
+    // from pending-longpress into pan. The viewport mirrors its current
+    // state into `data-pointer-mode` so tests can observe the transition.
+    const modeAfterHold = (await browser.execute(() => {
+      const vps = Array.from(
+        document.querySelectorAll<HTMLElement>(".vc-canvas-viewport"),
+      );
+      const visible = vps.find((v) => v.offsetParent !== null);
+      return visible?.getAttribute("data-pointer-mode") ?? null;
+    })) as string | null;
+    expect(modeAfterHold).toBe("pan");
+
+    // Now drag — pointermove on the captured element drives pan math.
+    await browser.execute(
+      (sel: string, x: number, y: number) => {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (!el) throw new Error(`No element: ${sel}`);
+        el.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            pointerId: 1,
+            pointerType: "mouse",
+            button: 0,
+            buttons: 1,
+            isPrimary: true,
+          }),
+        );
+        el.dispatchEvent(
+          new PointerEvent("pointerup", {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            pointerId: 1,
+            pointerType: "mouse",
+            button: 0,
+            buttons: 0,
+            isPrimary: true,
+          }),
+        );
+      },
+      nodeSel,
+      origin.x + 80,
+      origin.y + 40,
+    );
+
+    // Camera moved.
+    await browser.waitUntil(
+      async () => {
+        const t = (await browser.execute(() => {
+          const vps = Array.from(
+            document.querySelectorAll<HTMLElement>(".vc-canvas-viewport"),
+          );
+          const visible = vps.find((v) => v.offsetParent !== null);
+          const world = visible?.querySelector<HTMLElement>(".vc-canvas-world");
+          return world?.style.transform ?? "";
+        })) as string;
+        return t !== beforeTransform && t.length > 0;
+      },
+      { timeout: 3000, timeoutMsg: "Canvas world transform never changed" },
+    );
+
+    // Node coords on disk are unchanged (the node was *not* moved).
+    // The canvas autosaves with a 400ms debounce; wait long enough to have
+    // seen any write, then assert no coord change.
+    await new Promise((r) => setTimeout(r, FLUSH_WAIT_MS));
+    const disk = await readCanvasFromDisk("LongPress.canvas");
+    const node = (disk.nodes as Array<Record<string, unknown>>)[0]!;
+    expect(node.x).toBe(0);
+    expect(node.y).toBe(0);
+  });
 });
