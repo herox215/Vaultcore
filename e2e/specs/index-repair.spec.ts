@@ -45,10 +45,7 @@ describe.skip("Index repair modal", () => {
 
   async function switchTo(vaultPath: string): Promise<void> {
     await browser.execute((p: string) => {
-      const hook = (window as unknown as {
-        __e2e__: { switchVault: (p: string) => Promise<void> };
-      }).__e2e__;
-      void hook.switchVault(p);
+      void window.__e2e__!.switchVault(p);
     }, vaultPath);
   }
 

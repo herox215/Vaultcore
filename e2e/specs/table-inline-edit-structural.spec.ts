@@ -78,10 +78,7 @@ describe("Inline table editing — structural", () => {
 
   async function getDocText(): Promise<string> {
     return browser.executeAsync((done: (s: string) => void) => {
-      const hook = (
-        window as unknown as { __e2e__: { getActiveDocText: () => Promise<string> } }
-      ).__e2e__;
-      void hook.getActiveDocText().then((t) => done(t));
+      void window.__e2e__!.getActiveDocText().then((t) => done(t));
     });
   }
 
