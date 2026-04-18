@@ -234,8 +234,8 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="vc-settings-backdrop" onclick={onBackdropClick} role="presentation"></div>
-  <div class="vc-settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-testid="settings-modal">
+  <div class="vc-settings-backdrop vc-modal-scrim" onclick={onBackdropClick} role="presentation"></div>
+  <div class="vc-settings-modal vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-testid="settings-modal">
     <header class="vc-settings-header">
       <h2 id="settings-title" class="vc-settings-title">Einstellungen</h2>
       <button
@@ -470,13 +470,13 @@
   {#if pendingConflict}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-      class="vc-conflict-backdrop"
+      class="vc-conflict-backdrop vc-modal-scrim"
       role="presentation"
       onclick={resolveConflictCancel}
       data-testid="shortcut-conflict-backdrop"
     ></div>
     <div
-      class="vc-conflict-modal"
+      class="vc-conflict-modal vc-modal-surface"
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="shortcut-conflict-title"
@@ -509,8 +509,6 @@
 
 <style>
   .vc-settings-backdrop {
-    position: fixed; inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     z-index: 300;
   }
   .vc-settings-modal {
@@ -519,7 +517,6 @@
     /* BUG-05.1: previously flat (min-height not set), sections crowded.
        Give the modal a generous default size so all three sections breathe. */
     width: 600px; min-height: 560px; max-height: 85vh;
-    background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.2);
@@ -793,15 +790,12 @@
 
   /* Conflict modal (#65) */
   .vc-conflict-backdrop {
-    position: fixed; inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     z-index: 310;
   }
   .vc-conflict-modal {
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: 420px;
-    background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.2);
