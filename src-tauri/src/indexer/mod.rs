@@ -52,7 +52,15 @@ const PROGRESS_THROTTLE: Duration = Duration::from_millis(50);
 const PROGRESS_EVENT: &str = "vault://index_progress";
 /// T-03-02: cap the mpsc channel so a slow consumer doesn't cause unbounded
 /// memory growth. Watcher events use try_send and drop on full channel.
-const CHANNEL_CAPACITY: usize = 1024;
+///
+/// Issue #139: raised from 1024 → 8192. A bulk operation (`git pull`,
+/// `rsync`, mass rename) over a 100k-note vault can produce more than 1024
+/// events in one 200ms debounce window; at 1024 those events would silently
+/// drop and leave the link graph / tag index stale until a full rebuild.
+/// At ~100 bytes per enqueued command this is a 100KB memory cost for the
+/// queue — small compared to the Tantivy writer heap. Pairs with the
+/// `try_send_or_warn` helper in watcher.rs that now logs every overflow.
+pub(crate) const CHANNEL_CAPACITY: usize = 8192;
 /// IndexWriter heap budget per Tantivy recommendation for moderate workloads.
 const WRITER_HEAP_BYTES: usize = 50_000_000;
 
