@@ -23,6 +23,7 @@ import {
   resizeSize,
   updateDraftOnMove,
   resolvePointerUp,
+  memberPositions,
   type DraftEdge,
   type PointerMode,
 } from "../pointerMode";
@@ -53,7 +54,7 @@ describe("beginPan", () => {
 });
 
 describe("beginMove", () => {
-  it("snapshots pointer + node origin", () => {
+  it("snapshots pointer + node origin with empty members by default", () => {
     const n = node({ x: 100, y: 200 });
     const mode = beginMove(n, { clientX: 5, clientY: 6 });
     expect(mode).toEqual({
@@ -63,7 +64,22 @@ describe("beginMove", () => {
       startClientY: 6,
       startX: 100,
       startY: 200,
+      members: [],
     });
+  });
+
+  it("carries a members snapshot so group-drag can translate contained nodes (#168)", () => {
+    const g = node({ id: "g", x: 0, y: 0, width: 400, height: 300 });
+    const members = [
+      { nodeId: "m1", startX: 50, startY: 50 },
+      { nodeId: "m2", startX: 200, startY: 100 },
+    ];
+    const mode = beginMove(g, { clientX: 5, clientY: 6 }, members);
+    if (mode.kind !== "move") throw new Error("unreachable");
+    expect(mode.members).toEqual(members);
+    // And the leader's own origin is still captured independently.
+    expect(mode.startX).toBe(0);
+    expect(mode.startY).toBe(0);
   });
 });
 
@@ -141,6 +157,45 @@ describe("movePosition", () => {
       x: 40,
       y: 60,
     });
+  });
+});
+
+describe("memberPositions (#168 — group drag)", () => {
+  it("applies the same zoom-scaled delta to every member", () => {
+    const g = node({ id: "g", x: 0, y: 0 });
+    const mode = beginMove(
+      g,
+      { clientX: 0, clientY: 0 },
+      [
+        { nodeId: "a", startX: 50, startY: 50 },
+        { nodeId: "b", startX: 200, startY: 100 },
+      ],
+    );
+    if (mode.kind !== "move") throw new Error("unreachable");
+    expect(memberPositions(mode, { clientX: 20, clientY: 10 }, 1)).toEqual([
+      { nodeId: "a", x: 70, y: 60 },
+      { nodeId: "b", x: 220, y: 110 },
+    ]);
+  });
+
+  it("divides the client delta by zoom so members track the cursor under zoom", () => {
+    const g = node({ id: "g", x: 0, y: 0 });
+    const mode = beginMove(
+      g,
+      { clientX: 0, clientY: 0 },
+      [{ nodeId: "a", startX: 100, startY: 100 }],
+    );
+    if (mode.kind !== "move") throw new Error("unreachable");
+    expect(memberPositions(mode, { clientX: 200, clientY: 100 }, 2)).toEqual([
+      { nodeId: "a", x: 200, y: 150 },
+    ]);
+  });
+
+  it("returns an empty array when there are no members (leaf node drag)", () => {
+    const n = node({ x: 0, y: 0 });
+    const mode = beginMove(n, { clientX: 0, clientY: 0 });
+    if (mode.kind !== "move") throw new Error("unreachable");
+    expect(memberPositions(mode, { clientX: 50, clientY: 50 }, 1)).toEqual([]);
   });
 });
 
@@ -431,7 +486,20 @@ describe("longpressFallback", () => {
       startClientY: 40,
       startX: 100,
       startY: 200,
+      members: [],
     });
+  });
+
+  it("threads fallback.members through so group-drag survives long-press fall-through (#168)", () => {
+    const members = [{ nodeId: "a", startX: 10, startY: 20 }];
+    const pending = beginPendingLongpress(
+      { clientX: 1, clientY: 2 },
+      { kind: "move", nodeId: "g", nodeStartX: 0, nodeStartY: 0, members },
+    );
+    if (pending.kind !== "pending-longpress") throw new Error("unreachable");
+    const fallback = longpressFallback(pending);
+    if (fallback?.kind !== "move") throw new Error("expected move");
+    expect(fallback.members).toEqual(members);
   });
 
   it("returns null if the fallback metadata is incomplete (defensive)", () => {
