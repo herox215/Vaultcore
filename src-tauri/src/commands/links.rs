@@ -70,7 +70,7 @@ pub async fn get_backlinks(
         }
     };
 
-    let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+    let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
     Ok(lg.get_backlinks(&path, &fi))
@@ -152,7 +152,7 @@ pub async fn suggest_links(
     // Snapshot paths + per-file aliases under a single lock so the subsequent
     // matcher work runs without holding the FileIndex mutex.
     let (paths, file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
-        let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
         let paths = fi.all_relative_paths();
         let aliases: Vec<(String, Vec<String>)> = fi
             .all_entries()
@@ -314,7 +314,7 @@ pub async fn update_links_after_rename(
     };
 
     let all_paths: Vec<String> = {
-        let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
         fi.all_relative_paths()
     };
 
@@ -457,7 +457,7 @@ pub async fn get_resolved_links(
     };
 
     let (paths, file_aliases) = {
-        let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
         let paths = fi.all_relative_paths();
         let file_aliases: Vec<(String, Vec<String>)> = fi
             .all_entries()
@@ -785,7 +785,7 @@ pub async fn get_local_graph(
         }
     };
 
-    let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+    let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
     Ok(compute_local_graph(&path, depth, &lg, &fi))
@@ -902,7 +902,7 @@ pub async fn get_link_graph(
         }
     };
 
-    let fi = fi_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+    let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
     let ti = ti_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 

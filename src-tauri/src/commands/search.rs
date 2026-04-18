@@ -200,7 +200,7 @@ pub async fn search_filename(
     // Gather paths + per-file aliases in a single lock hold.
     let (paths, file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
         let fi = file_index_arc
-            .lock()
+            .read()
             .map_err(|_| VaultError::IndexCorrupt)?;
         let paths = fi.all_relative_paths();
         let aliases: Vec<(String, Vec<String>)> = fi
