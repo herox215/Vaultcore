@@ -151,12 +151,11 @@ impl IndexCoordinator {
         // before the background writer task is spawned.  If we wipe the
         // directory after the task is live, index.writer() races with
         // remove_dir_all() and fails with LockFailure / NotFound.
-        if !tantivy_index::check_version(&vaultcore_dir) {
-            if index_dir.exists() {
+        if !tantivy_index::check_version(&vaultcore_dir)
+            && index_dir.exists() {
                 std::fs::remove_dir_all(&index_dir).map_err(VaultError::Io)?;
                 log::info!("Schema mismatch — index directory wiped for rebuild");
             }
-        }
 
         let index = tantivy_index::open_or_create_index(&index_dir, &schema)?;
         let reader = index
@@ -269,7 +268,7 @@ impl IndexCoordinator {
             // don't re-index (IDX-03).
             let already_current = {
                 let guard = self.file_index.lock().map_err(|_| VaultError::Io(
-                    std::io::Error::new(std::io::ErrorKind::Other, "file_index lock poisoned"),
+                    std::io::Error::other("file_index lock poisoned"),
                 ))?;
                 guard.get(abs_path).map(|m| m.hash == hash).unwrap_or(false)
             };
@@ -297,7 +296,7 @@ impl IndexCoordinator {
                 // Update in-memory index before sending to queue.
                 {
                     let mut guard = self.file_index.lock().map_err(|_| VaultError::Io(
-                        std::io::Error::new(std::io::ErrorKind::Other, "file_index lock poisoned"),
+                        std::io::Error::other("file_index lock poisoned"),
                     ))?;
                     guard.insert(
                         abs_path.clone(),
@@ -583,7 +582,7 @@ fn collect_md_paths(vault_path: &Path) -> Vec<PathBuf> {
             e.file_type().is_file()
                 && e.path()
                     .extension()
-                    .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         })
         .map(|e| e.into_path())
         .collect()

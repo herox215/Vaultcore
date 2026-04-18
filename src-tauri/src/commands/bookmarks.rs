@@ -24,7 +24,7 @@ fn bookmarks_path_for(state: &VaultState, vault_path: &str) -> Result<PathBuf, V
         _ => VaultError::Io(e),
     })?;
     let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: vault_path.to_string(),
@@ -68,7 +68,7 @@ pub fn save_bookmarks_impl(
         std::fs::create_dir_all(parent).map_err(VaultError::Io)?;
     }
     let json = serde_json::to_vec_pretty(&bookmarks).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
     atomic_write(&path, &json)
 }

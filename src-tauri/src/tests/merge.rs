@@ -1,5 +1,5 @@
-/// Tests for the three-way merge engine (merge.rs, Plan 05).
-/// These tests correspond to the 8 behaviors specified in the PLAN.
+//! Tests for the three-way merge engine (merge.rs, Plan 05).
+//! These tests correspond to the 8 behaviors specified in the PLAN.
 
 use crate::merge::{three_way_merge, MergeOutcome};
 

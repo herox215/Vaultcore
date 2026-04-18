@@ -193,7 +193,7 @@ pub async fn suggest_links(
                 buf.clear();
                 let haystack = Utf32Str::new(path, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
-                let score = pattern.indices(haystack, &mut *matcher, &mut indices)?;
+                let score = pattern.indices(haystack, &mut matcher, &mut indices)?;
                 indices.sort_unstable();
                 indices.dedup();
                 Some(FileMatch {
@@ -213,7 +213,7 @@ pub async fn suggest_links(
                 buf.clear();
                 let haystack = Utf32Str::new(alias, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
-                if let Some(score) = pattern.indices(haystack, &mut *matcher, &mut indices) {
+                if let Some(score) = pattern.indices(haystack, &mut matcher, &mut indices) {
                     out.push(FileMatch {
                         path: rel_path.clone(),
                         score,
@@ -292,7 +292,7 @@ pub async fn update_links_after_rename(
     // Regex: [[old_stem]] or [[old_stem|alias]]
     let pattern = format!(r"\[\[{}(\|[^\]]*)?(\]\])", regex::escape(old_stem));
     let re = Regex::new(&pattern).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
     // BUG-04.1 FIX: Iterate ALL vault files (parallel with rayon) instead of

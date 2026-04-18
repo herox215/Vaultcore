@@ -227,7 +227,7 @@ pub async fn search_filename(
                 buf.clear();
                 let haystack = Utf32Str::new(path, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
-                let score = pattern.indices(haystack, &mut *matcher, &mut indices)?;
+                let score = pattern.indices(haystack, &mut matcher, &mut indices)?;
                 // Sort + dedup per nucleo docs — multiple atoms append independently.
                 indices.sort_unstable();
                 indices.dedup();
@@ -245,7 +245,7 @@ pub async fn search_filename(
                 buf.clear();
                 let haystack = Utf32Str::new(alias, &mut buf);
                 let mut indices: Vec<u32> = Vec::new();
-                if let Some(score) = pattern.indices(haystack, &mut *matcher, &mut indices) {
+                if let Some(score) = pattern.indices(haystack, &mut matcher, &mut indices) {
                     out.push(FileMatch {
                         path: rel_path.clone(),
                         score,

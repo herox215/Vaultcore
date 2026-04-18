@@ -75,7 +75,7 @@ pub fn count_md_files(root: &Path) -> usize {
             e.file_type().is_file()
                 && e.path()
                     .extension()
-                    .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         })
         .count()
 }
@@ -93,7 +93,7 @@ pub fn collect_file_list(root: &Path) -> Vec<String> {
             e.file_type().is_file()
                 && e.path()
                     .extension()
-                    .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         })
         .filter_map(|e| {
             e.path()
@@ -139,13 +139,13 @@ pub async fn open_vault(
     // canonical vault path, recursively. Without this, the frontend's
     // future @tauri-apps/plugin-fs calls would be refused.
     app.fs_scope().allow_directory(&canonical, true).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
     // Persist as the active vault (files commands read from here).
     {
         let mut guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+            std::io::Error::other("internal state lock poisoned"),
         ))?;
         *guard = Some(canonical.clone());
     }
@@ -169,7 +169,7 @@ pub async fn open_vault(
     // promptly — important for re-opening the same vault.
     {
         let mut handle = state.watcher_handle.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+            std::io::Error::other("internal state lock poisoned"),
         ))?;
         *handle = None; // drops old debouncer, stops previous watch
     }
@@ -181,7 +181,7 @@ pub async fn open_vault(
     // the old writer is still draining, but releasing earlier shortens it.
     {
         let mut guard = state.index_coordinator.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+            std::io::Error::other("internal state lock poisoned"),
         ))?;
         *guard = None;
     }
@@ -198,7 +198,7 @@ pub async fn open_vault(
     // Put the coordinator back into state.
     {
         let mut guard = state.index_coordinator.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+            std::io::Error::other("internal state lock poisoned"),
         ))?;
         *guard = Some(coordinator);
     }
@@ -209,7 +209,7 @@ pub async fn open_vault(
     // IndexCmd::UpdateLinks / RemoveLinks on file events (LINK-08).
     let index_tx = {
         let guard = state.index_coordinator.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+            std::io::Error::other("internal state lock poisoned"),
         ))?;
         guard.as_ref().map(|c| c.tx.clone())
     };
@@ -222,11 +222,11 @@ pub async fn open_vault(
         index_tx,
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))? = Some(debouncer);
 
     *state.vault_reachable.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))? = true;
 
     Ok(vault_info)
@@ -266,7 +266,7 @@ pub async fn repair_vault_index(vault_path: String) -> Result<(), VaultError> {
 
 fn recent_vaults_path(app: &AppHandle) -> Result<PathBuf, VaultError> {
     let dir = app.path().app_data_dir().map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
     std::fs::create_dir_all(&dir).map_err(VaultError::Io)?;
     Ok(dir.join(RECENT_VAULTS_FILENAME))
@@ -289,7 +289,7 @@ fn write_recent_vaults_at(file: &Path, vaults: &[RecentVault]) -> Result<(), Vau
         vaults: vaults.to_vec(),
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
     std::fs::write(file, json).map_err(VaultError::Io)
 }
@@ -403,8 +403,7 @@ pub async fn merge_external_change(
     // T-02-18 mitigation: validate path is inside vault
     let vault_path = {
         let guard = state.current_vault.lock().map_err(|_| {
-            crate::error::VaultError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::error::VaultError::Io(std::io::Error::other(
                 "internal state lock poisoned",
             ))
         })?;

@@ -31,7 +31,7 @@ use walkdir::WalkDir;
 /// currently-open vault.
 fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),
@@ -89,7 +89,7 @@ pub async fn write_file(
     })?;
     {
         let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-            std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+            std::io::Error::other("internal state lock poisoned"),
         ))?;
         let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
             path: path.clone(),
@@ -191,7 +191,7 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
         _ => VaultError::Io(e),
     })?;
     let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),
@@ -205,7 +205,7 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
 /// Helper: get the current vault root.
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))?;
     guard.as_ref().cloned().ok_or_else(|| VaultError::VaultUnavailable {
         path: String::from("<no vault>"),
@@ -272,7 +272,7 @@ fn walk_md_files(vault: &Path) -> impl Iterator<Item = PathBuf> {
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.file_type().is_file()
-                && e.path().extension().map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                && e.path().extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         })
         .map(|e| e.path().to_path_buf())
 }
@@ -359,7 +359,7 @@ pub fn rename_file_impl(state: &VaultState, old_path: String, new_name: String) 
     let vault_root = get_vault_root(state)?;
     let pattern = format!(r"\[\[{}\]\]", regex::escape(&old_stem));
     let re = Regex::new(&pattern).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
     let mut link_count: u32 = 0;
@@ -629,7 +629,7 @@ pub fn count_wiki_links_impl(state: &VaultState, filename: String) -> Result<u32
 
     let pattern = format!(r"\[\[{}\]\]", regex::escape(stem));
     let re = Regex::new(&pattern).map_err(|e| {
-        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
     let mut total: u32 = 0;

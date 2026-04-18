@@ -45,7 +45,7 @@ pub struct DirEntry {
 /// exist, so full canonicalization works.
 fn check_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),
@@ -103,7 +103,7 @@ pub fn list_directory_impl(state: &VaultState, path: String) -> Result<Vec<DirEn
         let is_dir = symlink_meta.is_dir();
         let is_md = !is_dir && entry.path()
             .extension()
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("md"));
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
 
         // T-02-03: use the actual path from the OS (not user-supplied string)
         // joined via canonical parent to prevent path traversal.

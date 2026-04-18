@@ -28,8 +28,7 @@ const SKIP_DIRS: &[&str] = &[".obsidian", ".git", ".vaultcore", ".trash"];
 
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| {
-        VaultError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        VaultError::Io(std::io::Error::other(
             "vault lock poisoned",
         ))
     })?;
@@ -370,7 +369,7 @@ fn wrap_document(title: &str, theme_css: &str, body_html: &str) -> String {
     doc.push_str(&title_escaped);
     doc.push_str("</title>\n<style>\n");
     doc.push_str(theme_css);
-    doc.push_str("\n");
+    doc.push('\n');
     doc.push_str(READABLE_CSS);
     doc.push_str("\n</style>\n</head>\n<body>\n<main>\n");
     doc.push_str(body_html);

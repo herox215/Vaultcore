@@ -28,7 +28,7 @@ fn templates_dir_for(state: &VaultState, vault_path: &str) -> Result<PathBuf, Va
         _ => VaultError::Io(e),
     })?;
     let guard = state.current_vault.lock().map_err(|_| VaultError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, "internal state lock poisoned"),
+        std::io::Error::other("internal state lock poisoned"),
     ))?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: vault_path.to_string(),

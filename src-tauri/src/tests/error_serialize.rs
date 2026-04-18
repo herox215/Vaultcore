@@ -70,7 +70,7 @@ fn vault_error_serialize_invalid_encoding() {
 
 #[test]
 fn vault_error_serialize_io() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+    let io_err = std::io::Error::other("boom");
     let v = to_json(VaultError::from(io_err));
     assert_eq!(v["kind"], "Io");
     assert_eq!(v["data"], Value::Null);
