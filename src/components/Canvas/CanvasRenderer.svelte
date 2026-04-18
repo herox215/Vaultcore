@@ -34,6 +34,8 @@
     draftPath as draftPathPure,
   } from "../../lib/canvas/edgeResolver";
   import type { DraftEdge } from "../../lib/canvas/pointerMode";
+  import { tokenizeCanvasText } from "../../lib/canvas/textTokens";
+  import { resolveTarget } from "../Editor/wikiLink";
 
   interface Props {
     doc: CanvasDoc;
@@ -67,6 +69,7 @@
     onTextBlur?: () => void;
     onOpenFileNode?: (node: CanvasFileNode) => void;
     onOpenLinkNode?: (node: CanvasLinkNode) => void;
+    onOpenWikiTarget?: (target: string) => void;
     onSelectNode?: (node: CanvasNode) => void;
 
     onEdgeHitPointerDown?: (e: PointerEvent, edge: CanvasEdge) => void;
@@ -105,6 +108,7 @@
     onTextBlur,
     onOpenFileNode,
     onOpenLinkNode,
+    onOpenWikiTarget,
     onSelectNode,
     onEdgeHitPointerDown,
     onEdgeDblClick,
@@ -257,8 +261,48 @@
             ondblclick={(e) => e.stopPropagation()}
           ></textarea>
         {:else}
+          {@const rawText = (node as CanvasTextNode).text}
+          {@const segments = tokenizeCanvasText(rawText)}
           <div class="vc-canvas-node-content">
-            {(node as CanvasTextNode).text || "Empty card"}
+            {#if rawText.length === 0}
+              Empty card
+            {:else}
+              {#each segments as seg, i (i)}
+                {#if seg.kind === "text"}{seg.text}{:else if seg.kind === "link"}
+                  {@const resolved = resolveTarget(seg.target)}
+                  {#if interactive}
+                    <button
+                      type="button"
+                      class="vc-canvas-link"
+                      class:vc-canvas-link-resolved={resolved !== null}
+                      class:vc-canvas-link-unresolved={resolved === null}
+                      data-wiki-target={seg.target}
+                      onpointerdown={(e) => e.stopPropagation()}
+                      onclick={(e) => { e.stopPropagation(); onOpenWikiTarget?.(seg.target); }}
+                    >{seg.display}</button>
+                  {:else}
+                    <span
+                      class="vc-canvas-link"
+                      class:vc-canvas-link-resolved={resolved !== null}
+                      class:vc-canvas-link-unresolved={resolved === null}
+                      data-wiki-target={seg.target}
+                    >{seg.display}</span>
+                  {/if}
+                {:else if seg.kind === "image"}
+                  {@const imgResolved = resolveTarget(seg.target)}
+                  {#if imgResolved && vaultPath}
+                    <img
+                      class="vc-canvas-inline-image"
+                      src={convertFileSrc(resolveVaultAbs(vaultPath, imgResolved))}
+                      alt={seg.target}
+                      draggable="false"
+                    />
+                  {:else}
+                    <span class="vc-canvas-link vc-canvas-link-unresolved">![[{seg.target}]]</span>
+                  {/if}
+                {/if}
+              {/each}
+            {/if}
           </div>
         {/if}
         {#if interactive}
@@ -623,6 +667,38 @@
   .vc-canvas-node-placeholder .vc-canvas-node-content {
     color: var(--color-text-muted);
     font-style: italic;
+  }
+
+  .vc-canvas-link {
+    display: inline;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .vc-canvas-link-resolved {
+    color: var(--color-accent, #4078c0);
+  }
+
+  .vc-canvas-link-unresolved {
+    color: var(--color-text-muted, #888);
+    text-decoration-style: dashed;
+  }
+
+  .vc-canvas-readonly .vc-canvas-link {
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .vc-canvas-inline-image {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 4px 0;
   }
 
   .vc-canvas-node-file,

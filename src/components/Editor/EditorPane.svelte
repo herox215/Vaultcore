@@ -63,11 +63,8 @@
   let unlistenFileChange: UnlistenFn | null = null;
   let unlistenVaultStatus: UnlistenFn | null = null;
 
-  // EditorPane host element for drag-to-split detection
+  // Pane host element — used by container-querying helpers below.
   let paneEl = $state<HTMLDivElement | undefined>();
-
-  // Drag-to-split visual state
-  let splitIndicatorSide = $state<"left" | "right" | null>(null);
 
   // ERR-04: Disk-full toast debounce — max one toast per 30 seconds
   let lastDiskFullToast = 0;
@@ -724,75 +721,6 @@
     }
   }
 
-  // Drag-to-split detection. #146: accept sidebar file drags in addition to
-  // the existing tab-reorder flow. Folder drags (text/vaultcore-folder) are
-  // ignored — folders stay sidebar-only.
-  function isAcceptedDrag(types: readonly string[]): boolean {
-    return types.includes("text/vaultcore-tab") || types.includes("text/vaultcore-file");
-  }
-
-  function handleDragover(e: DragEvent) {
-    if (!e.dataTransfer) return;
-    if (!isAcceptedDrag(e.dataTransfer.types)) return;
-    e.preventDefault();
-    if (!paneEl) return;
-
-    const rect = paneEl.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const EDGE_THRESHOLD = 40;
-
-    if (x < EDGE_THRESHOLD) {
-      splitIndicatorSide = "left";
-    } else if (x > rect.width - EDGE_THRESHOLD) {
-      splitIndicatorSide = "right";
-    } else {
-      splitIndicatorSide = null;
-    }
-  }
-
-  function handleDragleave() {
-    splitIndicatorSide = null;
-  }
-
-  async function handleDrop(e: DragEvent) {
-    if (!e.dataTransfer) return;
-    if (!isAcceptedDrag(e.dataTransfer.types)) {
-      splitIndicatorSide = null;
-      return;
-    }
-    const targetPane = splitIndicatorSide;
-    splitIndicatorSide = null;
-    if (!targetPane) return;
-    e.preventDefault();
-
-    const draggedTabId = e.dataTransfer.getData("text/vaultcore-tab");
-    if (draggedTabId) {
-      tabStore.activateTab(draggedTabId);
-      tabStore.moveToPane(targetPane);
-      return;
-    }
-
-    const filePath = e.dataTransfer.getData("text/vaultcore-file");
-    if (!filePath) return;
-
-    // Reuse an existing tab for this path (dedupe) — otherwise open a new one
-    // through the central viewer-routing dispatcher so canvas/image/text
-    // files pick the correct viewer, same as a sidebar click would.
-    const existing = allTabs.find((t) => t.filePath === filePath);
-    if (existing) {
-      tabStore.activateTab(existing.id);
-      tabStore.moveToPane(targetPane);
-      return;
-    }
-    try {
-      const newId = await openFileAsTab(filePath);
-      if (newId) tabStore.moveToPane(targetPane);
-    } catch {
-      // openFileAsTab already routes known errors to toasts via its callers;
-      // nothing useful to surface here.
-    }
-  }
-
   onMount(async () => {
     unlistenFileChange = await listenFileChange(handleExternalFileChange);
     unlistenVaultStatus = await listenVaultStatus(handleVaultStatus);
@@ -817,13 +745,9 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="vc-editor-pane"
   bind:this={paneEl}
-  ondragover={handleDragover}
-  ondragleave={handleDragleave}
-  ondrop={handleDrop}
 >
   <TabBar
     {paneId}
@@ -843,7 +767,7 @@
     {#if paneTabs.length === 0}
       <div class="vc-editor-empty">
         <p class="vc-editor-empty-heading">No file open</p>
-        <p class="vc-editor-empty-body">Select a file from the sidebar, or drag a tab here to split the view.</p>
+        <p class="vc-editor-empty-body">Select a file from the sidebar to get started.</p>
       </div>
     {/if}
     <!-- #87: ambient local-graph background behind the editor in edit mode -->
@@ -915,13 +839,6 @@
     <div class="vc-editor-readonly-overlay"></div>
   {/if}
 
-  {#if splitIndicatorSide !== null}
-    <div
-      class="vc-split-indicator"
-      class:vc-split-indicator--left={splitIndicatorSide === "left"}
-      class:vc-split-indicator--right={splitIndicatorSide === "right"}
-    ></div>
-  {/if}
 </div>
 
 <style>
@@ -989,40 +906,4 @@
     z-index: 10;
   }
 
-  .vc-split-indicator {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    background: var(--color-accent);
-    z-index: 20;
-    pointer-events: none;
-  }
-
-  .vc-split-indicator--left {
-    left: 0;
-  }
-
-  .vc-split-indicator--right {
-    right: 0;
-  }
-
-  .vc-split-indicator::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 200px;
-    background: var(--color-accent-bg);
-    opacity: 0.2;
-  }
-
-  .vc-split-indicator--left::after {
-    left: 4px;
-  }
-
-  .vc-split-indicator--right::after {
-    right: 4px;
-    left: auto;
-  }
 </style>

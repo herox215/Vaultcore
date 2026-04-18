@@ -27,6 +27,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore } from "../../store/tabStore";
   import { openFileAsTab } from "../../lib/openFileAsTab";
+  import { resolveTarget } from "../Editor/wikiLink";
   import { renderMarkdownToHtml } from "../Editor/reading/markdownRenderer";
   import CanvasRenderer from "./CanvasRenderer.svelte";
   import {
@@ -54,6 +55,7 @@
     isImageFile,
     isMarkdownFile,
     resolveVaultAbs,
+    toVaultRel,
   } from "../../lib/canvas/embed";
   import {
     type PointerMode,
@@ -260,6 +262,21 @@
       window.open(node.url, "_blank", "noopener,noreferrer");
     } catch {
       /* popup blocked or unsupported — silently swallow */
+    }
+  }
+
+  async function onOpenWikiTarget(target: string) {
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    const resolved = resolveTarget(target);
+    if (!resolved) return;
+    try {
+      await openFileAsTab(resolveVaultAbs(vaultPath, resolved));
+    } catch (e) {
+      const ve = isVaultError(e)
+        ? e
+        : { kind: "Io" as const, message: String(e), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
   }
 
@@ -608,6 +625,53 @@
     if (e.key === " ") spaceHeld = false;
   }
 
+  // Drag-and-drop from the sidebar tree: a file drop turns into a
+  // canvas file-node pinned at the drop point. Folder drags carry
+  // `text/vaultcore-folder` and are ignored — canvas file-nodes target
+  // a single file, not a directory.
+  function onViewportDragOver(e: DragEvent) {
+    if (!e.dataTransfer) return;
+    if (!e.dataTransfer.types.includes("text/vaultcore-file")) return;
+    e.preventDefault();
+  }
+
+  function onViewportDrop(e: DragEvent) {
+    if (!e.dataTransfer) return;
+    const absPath = e.dataTransfer.getData("text/vaultcore-file");
+    if (!absPath) return;
+    e.preventDefault();
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    const rel = toVaultRel(vaultPath, absPath);
+    if (!rel) {
+      toastStore.push({
+        variant: "error",
+        message: "Datei liegt außerhalb des aktuellen Vaults",
+      });
+      return;
+    }
+    // File-nodes render a header + (for markdown) a preview body, so the
+    // 60 px default used for text cards is too small to show anything
+    // useful. We pick a 400×400 card that matches Obsidian's drag-default
+    // size and gives the markdown preview room to render.
+    const FILE_DROP_WIDTH = 400;
+    const FILE_DROP_HEIGHT = 400;
+    const { x, y } = clientToWorld(e.clientX, e.clientY);
+    const node: CanvasFileNode = {
+      id: crypto.randomUUID(),
+      type: "file",
+      x: x - FILE_DROP_WIDTH / 2,
+      y: y - FILE_DROP_HEIGHT / 2,
+      width: FILE_DROP_WIDTH,
+      height: FILE_DROP_HEIGHT,
+      file: rel,
+    };
+    doc.nodes = [...doc.nodes, node];
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+    editingNodeId = null;
+  }
+
   // True while a long-press-to-pan pan is actively driving the camera. Used
   // to force the `grabbing` cursor globally on the canvas.
   let isPanActive = $derived(pointerMode?.kind === "pan");
@@ -630,6 +694,8 @@
   onpointerup={onViewportPointerUp}
   onpointercancel={onViewportPointerUp}
   ondblclick={onViewportDblClick}
+  ondragover={onViewportDragOver}
+  ondrop={onViewportDrop}
   onwheel={onWheel}
 >
   {#if !loaded}
@@ -665,6 +731,7 @@
       onTextBlur={onTextBlur}
       onOpenFileNode={(n) => { void onOpenFileNode(n); }}
       onOpenLinkNode={onOpenLinkNode}
+      onOpenWikiTarget={(t) => { void onOpenWikiTarget(t); }}
       onSelectNode={selectNode}
       onEdgeHitPointerDown={onEdgeHitPointerDown}
       onEdgeDblClick={onEdgeDblClick}

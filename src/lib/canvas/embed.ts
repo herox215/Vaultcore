@@ -30,6 +30,20 @@ export function resolveVaultAbs(
 }
 
 /**
+ * Inverse of {@link resolveVaultAbs}. Returns the vault-relative path for
+ * an absolute path, or `null` when `absPath` is outside `vaultPath`.
+ * Used when converting a drag-and-drop payload from the sidebar (which
+ * carries absolute paths) into the `file` field a canvas file-node needs.
+ */
+export function toVaultRel(vaultPath: string, absPath: string): string | null {
+  const absFwd = absPath.replace(/\\/g, "/");
+  const vaultFwd = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (absFwd === vaultFwd) return null;
+  if (!absFwd.startsWith(vaultFwd + "/")) return null;
+  return absFwd.slice(vaultFwd.length + 1);
+}
+
+/**
  * Extract a short "preview" slice from a markdown body so a file-node card
  * can show something the reader recognizes at-a-glance. Strips YAML
  * frontmatter and collapses whitespace — we hand the remainder to the
