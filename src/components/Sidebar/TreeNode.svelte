@@ -409,9 +409,12 @@
   }
 
   // Drag-and-drop (FILE-05 / D-17)
+  // #146: files use `text/vaultcore-file`, directories use `text/vaultcore-folder`
+  // so the editor pane can accept file drops for split-view while rejecting folders.
   function handleDragStart(e: DragEvent) {
     if (!e.dataTransfer) return;
-    e.dataTransfer.setData("text/vaultcore-file", entry.path);
+    const mime = entry.is_dir ? "text/vaultcore-folder" : "text/vaultcore-file";
+    e.dataTransfer.setData(mime, entry.path);
     e.dataTransfer.effectAllowed = "move";
     isDragSource = true;
   }
@@ -420,9 +423,13 @@
     isDragSource = false;
   }
 
+  function isSidebarDrag(types: readonly string[]): boolean {
+    return types.includes("text/vaultcore-file") || types.includes("text/vaultcore-folder");
+  }
+
   function handleDragOver(e: DragEvent) {
     if (!entry.is_dir) return;
-    if (!e.dataTransfer?.types.includes("text/vaultcore-file")) return;
+    if (!e.dataTransfer || !isSidebarDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     isDragTarget = true;
   }
@@ -434,9 +441,11 @@
   async function handleDrop(e: DragEvent) {
     isDragTarget = false;
     if (!entry.is_dir) return;
-    if (!e.dataTransfer?.types.includes("text/vaultcore-file")) return;
+    if (!e.dataTransfer || !isSidebarDrag(e.dataTransfer.types)) return;
     e.preventDefault();
-    const sourcePath = e.dataTransfer.getData("text/vaultcore-file");
+    const sourcePath =
+      e.dataTransfer.getData("text/vaultcore-file") ||
+      e.dataTransfer.getData("text/vaultcore-folder");
     if (!sourcePath || sourcePath === entry.path) return;
 
     // D-11: check backlinks before move and prompt cascade confirmation
