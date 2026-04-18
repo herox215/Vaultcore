@@ -22,6 +22,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { get } from "svelte/store";
   import { readFile, writeFile } from "../../ipc/commands";
+  import { listenFileChange } from "../../ipc/events";
   import { toastStore } from "../../store/toastStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import { vaultStore } from "../../store/vaultStore";
@@ -190,6 +191,11 @@
       void persist();
     }
     cancelLongpressTimer();
+    // #165: tear down preview-invalidation subscriptions so multi-tab
+    // open/close cycles don't leak listeners.
+    unsubTab();
+    destroyed = true;
+    watcherUnlisten?.();
   });
 
   $effect(() => {
@@ -220,6 +226,38 @@
     scheduleSave();
   });
 
+  // #165: per-file fetch-generation map. Incremented every time we kick a
+  // re-fetch for a given path so a stale in-flight read whose invalidation
+  // arrived mid-fetch cannot overwrite the fresh body. Pure module state —
+  // the view never renders it, so it's a plain `let`, not `$state`.
+  let mdPreviewGen: Map<string, number> = new Map();
+
+  function loadPreviewFor(vaultPath: string, file: string): void {
+    if (!isMarkdownFile(file)) return;
+    const gen = (mdPreviewGen.get(file) ?? 0) + 1;
+    mdPreviewGen.set(file, gen);
+    // Reserve the slot synchronously so the effect's `file in mdPreviews`
+    // guard doesn't re-queue the same fetch while it's in flight.
+    mdPreviews = { ...mdPreviews, [file]: "" };
+    const absPath = resolveVaultAbs(vaultPath, file);
+    void readFile(absPath).then(
+      (body) => {
+        // Drop the result if a newer fetch for the same file has started —
+        // otherwise a tabStore eviction followed by a re-fetch could have
+        // its fresh body clobbered by this older in-flight read resolving
+        // after it (#165).
+        if (mdPreviewGen.get(file) !== gen) return;
+        mdPreviews = {
+          ...mdPreviews,
+          [file]: renderMarkdownToHtml(canvasFilePreview(body)),
+        };
+      },
+      () => {
+        /* preview failure stays as "" — renderer shows a generic card */
+      },
+    );
+  }
+
   // Lazily load markdown body for every file-node that points at an .md note.
   // We resolve the file relative to the current vault root; when the vault
   // path is missing (e.g., a stray canvas opened without a vault) we fall
@@ -232,22 +270,84 @@
       const file = (n as CanvasFileNode).file;
       if (!file || !isMarkdownFile(file)) continue;
       if (file in untrack(() => mdPreviews)) continue;
-      // Reserve the slot synchronously so we don't re-queue the same file.
-      mdPreviews = { ...mdPreviews, [file]: "" };
-      const absPath = resolveVaultAbs(vaultPath, file);
-      void readFile(absPath).then(
-        (body) => {
-          mdPreviews = {
-            ...mdPreviews,
-            [file]: renderMarkdownToHtml(canvasFilePreview(body)),
-          };
-        },
-        () => {
-          /* preview failure stays as "" — renderer shows a generic card */
-        },
-      );
+      loadPreviewFor(vaultPath, file);
     }
   });
+
+  // #165: invalidate embedded-note previews when the source note is saved
+  // from another tab or modified externally. Mirror the pattern
+  // embedPlugin.ts uses for the inverse direction (canvas-inside-note).
+  //
+  // Two sources of change, independent because the watcher's write_ignore
+  // suppresses our own saves — we can't rely on `listenFileChange` alone:
+  //   (a) tabStore.setLastSavedContent — fires when any tab auto-saves.
+  //   (b) listenFileChange — fires for external edits (other editors, shell,
+  //       git checkout).
+  //
+  // Rename payloads (`new_path`) are a non-goal for #165: canvas nodes pin
+  // `file` by its original vault-relative path; after a rename that path no
+  // longer exists so re-fetching would just fail silently. Out of scope.
+  const lastSavedByTabId: Map<string, string> = new Map();
+  const unsubTab = tabStore.subscribe((state) => {
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    const fileNodes = untrack(() =>
+      doc.nodes
+        .filter((n): n is CanvasFileNode => n.type === "file")
+        .map((n) => n.file)
+        .filter((f) => !!f && isMarkdownFile(f)),
+    );
+    for (const tab of state.tabs) {
+      const prev = lastSavedByTabId.get(tab.id);
+      if (prev === tab.lastSavedContent) continue;
+      lastSavedByTabId.set(tab.id, tab.lastSavedContent);
+      if (prev === undefined) continue; // first sighting isn't a change
+      const rel = toVaultRel(vaultPath, tab.filePath);
+      if (!rel) continue;
+      const normalized = rel.replace(/\\/g, "/");
+      if (fileNodes.some((f) => f.replace(/\\/g, "/") === normalized)) {
+        loadPreviewFor(vaultPath, normalized);
+      }
+    }
+    // Prune snapshots for tabs that have closed so the map doesn't leak.
+    const liveIds = new Set(state.tabs.map((t) => t.id));
+    for (const id of Array.from(lastSavedByTabId.keys())) {
+      if (!liveIds.has(id)) lastSavedByTabId.delete(id);
+    }
+  });
+
+  // The async listen/unlisten contract means a quick mount/unmount could
+  // leak the subscription if we just stored the resolved unlisten fn; the
+  // `destroyed` flag guards against that race.
+  let watcherUnlisten: (() => void) | null = null;
+  let destroyed = false;
+  void listenFileChange((payload) => {
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    const paths = payload.new_path ? [payload.path, payload.new_path] : [payload.path];
+    for (const p of paths) {
+      const rel = toVaultRel(vaultPath, p);
+      if (!rel) continue;
+      const normalized = rel.replace(/\\/g, "/");
+      const fileNodes = untrack(() =>
+        doc.nodes
+          .filter((n): n is CanvasFileNode => n.type === "file")
+          .map((n) => n.file)
+          .filter((f) => !!f && isMarkdownFile(f)),
+      );
+      if (fileNodes.some((f) => f.replace(/\\/g, "/") === normalized)) {
+        loadPreviewFor(vaultPath, normalized);
+      }
+    }
+  }).then(
+    (fn) => {
+      if (destroyed) fn();
+      else watcherUnlisten = fn;
+    },
+    () => {
+      /* Tauri not initialized (vitest) — swallow so the module still loads. */
+    },
+  );
 
   async function onOpenFileNode(node: CanvasFileNode) {
     const vaultPath = get(vaultStore).currentPath;
