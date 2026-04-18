@@ -30,6 +30,8 @@ function makeCtx(overrides: Partial<DefaultCommandContext> = {}): DefaultCommand
     cycleTabPrev: noop,
     closeActiveTab: noop,
     createNewNote: noop,
+    createNewCanvas: noop,
+    createNewFolder: noop,
     openGraph: noop,
     openCommandPalette: noop,
     toggleBookmark: noop,
@@ -103,6 +105,49 @@ describe("defaultCommands — vault:export-html / vault:export-pdf (#61)", () =>
     commandRegistry.execute(CMD_IDS.EXPORT_PDF);
     expect(exportHtml).toHaveBeenCalledOnce();
     expect(exportPdf).toHaveBeenCalledOnce();
+  });
+});
+
+describe("defaultCommands — file creation (#145)", () => {
+  beforeEach(() => {
+    setupLocalStorage();
+    commandRegistry._reset();
+  });
+
+  it("registers new-note / new-canvas / new-folder with English palette labels", () => {
+    const note = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.NEW_NOTE);
+    const canvas = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.NEW_CANVAS);
+    const folder = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.NEW_FOLDER);
+    expect(note?.name).toBe("File: New note");
+    expect(canvas?.name).toBe("File: New canvas");
+    expect(folder?.name).toBe("File: New folder");
+  });
+
+  it("binds Cmd+Shift+C to new-canvas without clashing with plain Cmd+C", () => {
+    registerDefaultCommands(makeCtx());
+    const shiftEv = new KeyboardEvent("keydown", { key: "c", metaKey: true, shiftKey: true });
+    expect(commandRegistry.findByHotkey(shiftEv)?.id).toBe(CMD_IDS.NEW_CANVAS);
+    const plainEv = new KeyboardEvent("keydown", { key: "c", metaKey: true });
+    // Plain Cmd+C is editor copy — no default command owns it.
+    expect(commandRegistry.findByHotkey(plainEv)).toBeNull();
+  });
+
+  it("new-folder has no default hotkey (palette-only entry)", () => {
+    const folder = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.NEW_FOLDER);
+    expect(folder?.hotkey).toBeUndefined();
+  });
+
+  it("registerDefaultCommands wires all three create callbacks", () => {
+    const createNewNote = vi.fn();
+    const createNewCanvas = vi.fn();
+    const createNewFolder = vi.fn();
+    registerDefaultCommands(makeCtx({ createNewNote, createNewCanvas, createNewFolder }));
+    commandRegistry.execute(CMD_IDS.NEW_NOTE);
+    commandRegistry.execute(CMD_IDS.NEW_CANVAS);
+    commandRegistry.execute(CMD_IDS.NEW_FOLDER);
+    expect(createNewNote).toHaveBeenCalledOnce();
+    expect(createNewCanvas).toHaveBeenCalledOnce();
+    expect(createNewFolder).toHaveBeenCalledOnce();
   });
 });
 

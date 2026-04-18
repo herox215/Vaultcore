@@ -39,6 +39,7 @@
     dailyNoteFilename,
     splitFolderSegments,
   } from "../../lib/dailyNotes";
+  import { emptyCanvas, serializeCanvas } from "../../lib/canvas/parse";
 
   let { onSwitchVault }: { onSwitchVault: () => void } = $props();
 
@@ -261,6 +262,39 @@
       treeRefreshStore.requestRefresh();
     } catch {
       toastStore.push({ variant: "error", message: "Neue Notiz konnte nicht erstellt werden." });
+    }
+  }
+
+  // #145 — global "New canvas" / "New folder" commands. Palette + Cmd+Shift+C
+  // share this path; the sidebar header dropdown calls its own local handler
+  // because it needs to target the currently-selected folder, whereas the
+  // palette shortcut always drops the new item at the vault root (the palette
+  // is reachable even when no tree row is selected).
+  async function createNewCanvas() {
+    let vaultPath: string | null = null;
+    const unsub = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
+    unsub();
+    if (!vaultPath) return;
+    try {
+      const newPath = await createFile(vaultPath, "Untitled.canvas");
+      await writeFile(newPath, serializeCanvas(emptyCanvas()));
+      tabStore.openFileTab(newPath, "canvas");
+      treeRefreshStore.requestRefresh();
+    } catch {
+      toastStore.push({ variant: "error", message: "Neues Canvas konnte nicht erstellt werden." });
+    }
+  }
+
+  async function createNewFolder() {
+    let vaultPath: string | null = null;
+    const unsub = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
+    unsub();
+    if (!vaultPath) return;
+    try {
+      await createFolder(vaultPath, "");
+      treeRefreshStore.requestRefresh();
+    } catch {
+      toastStore.push({ variant: "error", message: "Neuer Ordner konnte nicht erstellt werden." });
     }
   }
 
@@ -509,6 +543,8 @@
         if (activeId) tabStore.closeTab(activeId);
       },
       createNewNote: () => { void createNewNote(); },
+      createNewCanvas: () => { void createNewCanvas(); },
+      createNewFolder: () => { void createNewFolder(); },
       openGraph: () => { tabStore.openGraphTab(); },
       openCommandPalette: () => { commandPaletteOpen = true; },
       toggleBookmark: () => { void toggleActiveBookmark(); },

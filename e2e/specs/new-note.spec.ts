@@ -47,21 +47,42 @@ describe("Create file / folder", () => {
     await waitForTreeName("Unbenannte Notiz 2.md");
   });
 
-  it("creates 'Untitled.md' via the sidebar + file button", async () => {
-    const btn = await browser.$('[aria-label="New file"]');
+  it("creates 'Untitled.md' via the sidebar + note button (primary click)", async () => {
+    // #145 renamed the header button from "New file" to "New note" and
+    // introduced a chevron dropdown alongside it. The primary click path
+    // (this test) must still create a note in one click — no extra UI.
+    const btn = await browser.$('[aria-label="New note"]');
     await btn.waitForDisplayed({ timeout: 3000 });
     await btn.click();
 
     await waitForTreeName("Untitled.md");
   });
 
-  it("auto-suffixes the sidebar + file button on repeat clicks", async () => {
-    const btn = await browser.$('[aria-label="New file"]');
+  it("auto-suffixes the sidebar + note button on repeat clicks", async () => {
+    const btn = await browser.$('[aria-label="New note"]');
     await btn.click();
     await waitForTreeName("Untitled 1.md");
 
     await btn.click();
     await waitForTreeName("Untitled 2.md");
+  });
+
+  it("exposes canvas creation from the header dropdown (#145)", async () => {
+    // Open the split-button chevron and pick "New canvas" — the canvas
+    // affordance used to be reachable only via right-click.
+    const chevron = await browser.$('[data-testid="sidebar-new-menu-toggle"]');
+    await chevron.waitForDisplayed({ timeout: 3000 });
+    await chevron.click();
+
+    const canvasItem = await browser.$('[data-testid="sidebar-new-menu-canvas"]');
+    await canvasItem.waitForDisplayed({ timeout: 3000 });
+    await canvasItem.click();
+
+    await waitForTreeName("Untitled.canvas");
+
+    // File opens in the canvas viewer, not the markdown editor — assert the
+    // viewer mounted so we know the tab used the canvas viewer branch.
+    await browser.$(".vc-canvas-viewport").waitForDisplayed({ timeout: 3000 });
   });
 
   it("creates 'New Folder' via the sidebar + folder button", async () => {
