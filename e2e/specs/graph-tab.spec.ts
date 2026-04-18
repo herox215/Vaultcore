@@ -75,8 +75,8 @@ describe("Graph view", () => {
     });
   });
 
-  it("opens the Graph via the sidebar 'Graph öffnen' button", async () => {
-    const btn = await browser.$('[aria-label="Graph öffnen"]');
+  it("opens the Graph via the sidebar 'Open graph' button", async () => {
+    const btn = await browser.$('[aria-label="Open graph"]');
     await btn.waitForDisplayed({ timeout: 3000 });
     await btn.click();
 

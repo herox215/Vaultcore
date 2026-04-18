@@ -12,6 +12,8 @@ export interface DefaultCommandContext {
   cycleTabPrev: () => void;
   closeActiveTab: () => void;
   createNewNote: () => void;
+  createNewCanvas: () => void;
+  createNewFolder: () => void;
   openGraph: () => void;
   openCommandPalette: () => void;
   toggleBookmark: () => void;
@@ -25,6 +27,11 @@ export interface DefaultCommandContext {
 /** Id constants — consumed by tests and anyone dispatching by id. */
 export const CMD_IDS = {
   NEW_NOTE: "vault:new-note",
+  // #145 — canvas + folder creation commands exposed in the palette so they
+  // match the sidebar header affordance. Shares the same underlying create
+  // path as the sidebar dropdown / context menu.
+  NEW_CANVAS: "vault:new-canvas",
+  NEW_FOLDER: "vault:new-folder",
   QUICK_SWITCHER: "app:quick-switcher",
   SEARCH: "app:fulltext-search",
   SEARCH_ALT: "app:fulltext-search-alt",
@@ -51,7 +58,9 @@ export interface DefaultCommandSpec {
 
 /** Static metadata — id, label, hotkey. Callback is wired in registerDefaultCommands. */
 export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
-  { id: CMD_IDS.NEW_NOTE, name: "Neue Notiz", hotkey: { meta: true, key: "n" } },
+  { id: CMD_IDS.NEW_NOTE, name: "File: New note", hotkey: { meta: true, key: "n" } },
+  { id: CMD_IDS.NEW_CANVAS, name: "File: New canvas", hotkey: { meta: true, shift: true, key: "c" } },
+  { id: CMD_IDS.NEW_FOLDER, name: "File: New folder" },
   { id: CMD_IDS.QUICK_SWITCHER, name: "Schnellwechsler", hotkey: { meta: true, key: "o" } },
   { id: CMD_IDS.SEARCH, name: "Volltext-Suche", hotkey: { meta: true, shift: true, key: "f" } },
   { id: CMD_IDS.SEARCH_ALT, name: "Volltext-Suche (Alternative)", hotkey: { meta: true, key: "f" } },
@@ -78,6 +87,8 @@ export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
 export function registerDefaultCommands(ctx: DefaultCommandContext): void {
   const byId: Record<string, () => void> = {
     [CMD_IDS.NEW_NOTE]: ctx.createNewNote,
+    [CMD_IDS.NEW_CANVAS]: ctx.createNewCanvas,
+    [CMD_IDS.NEW_FOLDER]: ctx.createNewFolder,
     [CMD_IDS.QUICK_SWITCHER]: ctx.openQuickSwitcher,
     [CMD_IDS.SEARCH]: ctx.activateSearchTab,
     [CMD_IDS.SEARCH_ALT]: ctx.activateSearchTab,
