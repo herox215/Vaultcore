@@ -35,7 +35,6 @@
   import { Hash } from "lucide-svelte";
   import TreeNode from "./TreeNode.svelte";
   import ProgressBar from "../Progress/ProgressBar.svelte";
-  import SearchPanel from "../Search/SearchPanel.svelte";
   import TagsPanel from "../Tags/TagsPanel.svelte";
   import BookmarksPanel from "../Bookmarks/BookmarksPanel.svelte";
   import { bookmarksStore } from "../../store/bookmarksStore";
@@ -44,9 +43,11 @@
     selectedPath: string | null;
     onSelect: (path: string) => void;
     onOpenFile: (path: string) => void;
+    /** Tag-click → open the omni-search modal in content mode, pre-filled. */
+    onOpenContentSearch: (query: string) => void;
   }
 
-  let { selectedPath, onSelect, onOpenFile }: Props = $props();
+  let { selectedPath, onSelect, onOpenFile, onOpenContentSearch }: Props = $props();
 
   let rootEntries = $state<DirEntry[]>([]);
   let loadError = $state<string | null>(null);
@@ -325,7 +326,8 @@
 </script>
 
 <aside class="vc-sidebar" data-testid="sidebar">
-  <!-- Tab bar — Dateien / Suche switching (D-01) -->
+  <!-- Tab bar — Dateien / Tags. The "Suche" tab was removed in #174; the
+       omni-search modal replaces the sidebar search panel. -->
   <div class="vc-sidebar-tabs" role="tablist">
     <button
       class="vc-sidebar-tab"
@@ -333,12 +335,6 @@
       aria-selected={$searchStore.activeTab === 'files'}
       onclick={() => searchStore.setActiveTab('files')}
     >Dateien</button>
-    <button
-      class="vc-sidebar-tab"
-      role="tab"
-      aria-selected={$searchStore.activeTab === 'search'}
-      onclick={() => searchStore.setActiveTab('search')}
-    >Suche</button>
     <button
       type="button"
       class="vc-sidebar-tab"
@@ -352,15 +348,10 @@
     </button>
   </div>
 
-  {#if $searchStore.activeTab === 'search'}
-    <!-- Search panel tab panel -->
-    <div class="vc-sidebar-tabpanel" role="tabpanel">
-      <SearchPanel {onOpenFile} />
-    </div>
-  {:else if $searchStore.activeTab === 'tags'}
+  {#if $searchStore.activeTab === 'tags'}
     <!-- Tags panel tab panel -->
     <div class="vc-sidebar-tabpanel" role="tabpanel">
-      <TagsPanel />
+      <TagsPanel {onOpenContentSearch} />
     </div>
   {:else}
   <!-- Files tab panel — Header strip and tree -->

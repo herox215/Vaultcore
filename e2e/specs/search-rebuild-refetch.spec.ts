@@ -5,18 +5,21 @@ import { openVaultInApp } from "../helpers/open-vault.js";
 import { textOf } from "../helpers/text.js";
 
 /**
- * E2E coverage for #148 — after "Index neu aufbauen" in the Suche panel,
- * the results list must be recomputed against the fresh index. Without
- * this, newly-indexed files only appear once the user edits the query.
+ * E2E coverage for #148, ported to the OmniSearch UI introduced in #174.
+ *
+ * Pre-#174, the Suche panel had a manual "Index neu aufbauen" button and the
+ * store auto-refetched the last query afterwards. OmniSearch replaces both:
+ *   - FS changes flip `indexStale = true` via VaultLayout's watcher.
+ *   - Opening the modal with a stale index kicks off `rebuild_index`
+ *     automatically (no button) and the user re-runs their query against the
+ *     fresh index without having to invoke anything.
  *
  * Scenario:
- *   1. Seed a vault with Alpha.md tagged #yoda.
- *   2. Run `#yoda` → 1 result.
- *   3. Write Beta.md (also tagged #yoda) directly to disk.
- *   4. Click rebuild → result list grows to 2 without query edit.
+ *   1. Seed Alpha.md tagged #yoda. Run `#yoda` in content mode → 1 hit.
+ *   2. Close modal. Write Beta.md (also #yoda) directly to disk.
+ *   3. Re-open → auto-rebuild completes, query re-run → 2 hits.
  */
-
-describe("Search re-runs after rebuild (#148)", () => {
+describe("OmniSearch auto-rebuild after FS change (#148, #174)", () => {
   let vault: TestVault;
 
   before(async () => {
@@ -30,13 +33,19 @@ describe("Search re-runs after rebuild (#148)", () => {
     vault.cleanup();
   });
 
-  async function ensureSearchTabActive(): Promise<WebdriverIO.Element> {
+  async function openContentSearch(): Promise<WebdriverIO.Element> {
     await browser.keys(["Control", "Shift", "f"]);
-    const panel = await browser.$(".vc-search-panel");
-    await panel.waitForDisplayed({ timeout: 3000 });
-    const input = await browser.$(".vc-search-input");
+    const modal = await browser.$(".vc-quick-switcher-modal");
+    await modal.waitForDisplayed({ timeout: 3000 });
+    const input = await browser.$(".vc-qs-input");
     await input.waitForDisplayed({ timeout: 3000 });
     return input;
+  }
+
+  async function closeOmni(): Promise<void> {
+    await browser.keys(["Escape"]);
+    const modal = await browser.$(".vc-quick-switcher-modal");
+    await modal.waitForDisplayed({ timeout: 2000, reverse: true });
   }
 
   async function typeQuery(input: WebdriverIO.Element, q: string): Promise<void> {
@@ -45,55 +54,66 @@ describe("Search re-runs after rebuild (#148)", () => {
     await browser.pause(400);
   }
 
-  it("refreshes the results list after a rebuild without editing the query", async () => {
-    const input = await ensureSearchTabActive();
+  async function resultFilenames(): Promise<string[]> {
+    const rows = await browser.$$(".vc-search-result-row");
+    const names: string[] = [];
+    for (const r of rows) {
+      const n = await r.$(".vc-search-result-filename");
+      names.push(await textOf(n));
+    }
+    return names;
+  }
+
+  it("auto-rebuilds on re-open after a file is added and finds the new hit", async () => {
+    // 1. First pass — only Alpha exists.
+    let input = await openContentSearch();
     await typeQuery(input, "#yoda");
 
     await browser.waitUntil(
       async () => (await browser.$$(".vc-search-result-row")).length >= 1,
       { timeout: 3000, timeoutMsg: "Initial #yoda search returned no hits" },
     );
-    const initialRows = await browser.$$(".vc-search-result-row");
-    const initialNames: string[] = [];
-    for (const r of initialRows) {
-      const n = await r.$(".vc-search-result-filename");
-      initialNames.push(await textOf(n));
-    }
+    const initialNames = await resultFilenames();
     expect(initialNames.some((n) => n.includes("Alpha"))).toBe(true);
     expect(initialNames.some((n) => n.includes("Beta"))).toBe(false);
 
-    // Add a second #yoda note on disk. The watcher flips indexStale = true
-    // but won't auto-rebuild — that's the manual rebuild this test exercises.
+    await closeOmni();
+
+    // 2. Add Beta.md on disk. The watcher flips indexStale = true in the
+    //    store. The next OmniSearch open triggers the auto-rebuild.
     fs.writeFileSync(path.join(vault.path, "Beta.md"), "# Beta\n\n#yoda\n", "utf-8");
     await browser.pause(500);
 
-    // Click rebuild.
-    const rebuildBtn = await browser.$('button[aria-label="Index neu aufbauen"]');
-    await rebuildBtn.click();
+    // 3. Re-open — auto-rebuild must run, then we re-type the query and
+    //    both notes should appear. Wait for the transient rebuild status
+    //    line to clear before asserting on results.
+    input = await openContentSearch();
 
-    // Wait for rebuild to finish (button re-enables) and refetch to populate.
     await browser.waitUntil(
       async () => {
-        const ariaDisabled = await rebuildBtn.getAttribute("aria-disabled");
-        return ariaDisabled !== "true";
+        const statusEl = await browser.$(".vc-omni-status");
+        const displayed = await statusEl.isDisplayed().catch(() => false);
+        return !displayed;
       },
-      { timeout: 15000, timeoutMsg: "Rebuild never finished" },
+      { timeout: 15000, timeoutMsg: "Rebuild status never cleared" },
     );
 
+    await typeQuery(input, "#yoda");
+
     await browser.waitUntil(
       async () => {
-        const rows = await browser.$$(".vc-search-result-row");
-        const names: string[] = [];
-        for (const r of rows) {
-          const n = await r.$(".vc-search-result-filename");
-          names.push(await textOf(n));
-        }
-        return names.some((n) => n.includes("Alpha")) && names.some((n) => n.includes("Beta"));
+        const names = await resultFilenames();
+        return (
+          names.some((n) => n.includes("Alpha")) &&
+          names.some((n) => n.includes("Beta"))
+        );
       },
       {
         timeout: 8000,
-        timeoutMsg: "Results never updated to include both Alpha.md and Beta.md after rebuild",
+        timeoutMsg: "Results never updated to include Alpha + Beta after auto-rebuild",
       },
     );
+
+    await closeOmni();
   });
 });

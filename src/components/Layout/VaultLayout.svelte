@@ -3,7 +3,7 @@
   import { PanelRight, Settings as SettingsIcon } from "lucide-svelte";
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
-  import QuickSwitcher from "../Search/QuickSwitcher.svelte";
+  import OmniSearch from "../Search/OmniSearch.svelte";
   import CommandPalette from "../CommandPalette/CommandPalette.svelte";
   import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
@@ -26,6 +26,7 @@
     writeFile,
   } from "../../ipc/commands";
   import { collectThemeCss, defaultExportFilename } from "../../lib/exportHtml";
+  import { listenFileChange } from "../../ipc/events";
   import { initHotkeyOverrides } from "../../lib/commands/hotkeyOverrides";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
@@ -52,7 +53,9 @@
   let sidebarWidth = $state(DEFAULT_SIDEBAR_WIDTH);
   let sidebarCollapsed = $state(false);
   let isDragging = $state(false);
-  let quickSwitcherOpen = $state(false);
+  let omniSearchOpen = $state(false);
+  let omniSearchMode = $state<"filename" | "content">("filename");
+  let omniSearchPrefill = $state<string | undefined>(undefined);
   let commandPaletteOpen = $state(false);
   let templatePickerOpen = $state(false);
   let settingsOpen = $state(false);
@@ -513,6 +516,12 @@
     selectedPath = path;
   }
 
+  function openContentSearchWith(query: string) {
+    omniSearchMode = "content";
+    omniSearchPrefill = query;
+    omniSearchOpen = true;
+  }
+
   function handleOpenFile(path: string) {
     // Wire sidebar open-file to tabStore (Plan 03 / #49). Markdown opens
     // synchronously; non-markdown is dispatched to a viewer via openFileAsTab.
@@ -530,10 +539,18 @@
   // had focus.
   onMount(() => {
     registerDefaultCommands({
-      openQuickSwitcher: () => { quickSwitcherOpen = true; },
+      openQuickSwitcher: () => {
+        omniSearchMode = "filename";
+        omniSearchPrefill = undefined;
+        omniSearchOpen = true;
+      },
       toggleSidebar: () => { toggleSidebar(); },
       openBacklinks: () => { backlinksStore.toggle(); },
-      activateSearchTab: () => { sidebarCollapsed = false; searchStore.setActiveTab("search"); },
+      activateSearchTab: () => {
+        omniSearchMode = "content";
+        omniSearchPrefill = undefined;
+        omniSearchOpen = true;
+      },
       cycleTabNext: () => { tabStore.cycleTab(1); },
       cycleTabPrev: () => { tabStore.cycleTab(-1); },
       closeActiveTab: () => {
@@ -557,9 +574,24 @@
     initHotkeyOverrides();
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
+
+    // #174 — any FS change flips the search index to "stale". The omni-search
+    // modal will auto-rebuild on next open. Subscription lives here (not in
+    // OmniSearch) so the flag is tracked even while the modal is closed.
+    let cancelledStale = false;
+    let unlistenStale: (() => void) | undefined;
+    void listenFileChange(() => {
+      if (!cancelledStale) searchStore.setIndexStale(true);
+    }).then((fn) => {
+      if (cancelledStale) { fn(); return; }
+      unlistenStale = fn;
+    });
+
     return () => {
       document.removeEventListener("keydown", handleKeydown, { capture: true });
       document.removeEventListener("contextmenu", handleContextMenu, { capture: true });
+      cancelledStale = true;
+      unlistenStale?.();
     };
   });
 
@@ -583,7 +615,7 @@
   function handleKeydown(e: KeyboardEvent) {
     if (settingsOpen || inlineRenameActive()) return;
     if (commandPaletteOpen) return; // palette handles its own keys
-    if (quickSwitcherOpen) return; // quick switcher handles its own keys
+    if (omniSearchOpen) return; // omni-search handles its own keys
     if (templatePickerOpen) return; // template picker handles its own keys
 
     const cmd = commandRegistry.findByHotkey(e);
@@ -626,6 +658,7 @@
       {selectedPath}
       onSelect={handleSelect}
       onOpenFile={handleOpenFile}
+      onOpenContentSearch={openContentSearchWith}
     />
   </div>
 
@@ -756,10 +789,12 @@
   </div>
 </div>
 
-<!-- Quick Switcher modal — rendered outside the grid at body level -->
-<QuickSwitcher
-  open={quickSwitcherOpen}
-  onClose={() => { quickSwitcherOpen = false; }}
+<!-- #174 — Omni-search (Spotlight-style) rendered outside the grid at body level -->
+<OmniSearch
+  open={omniSearchOpen}
+  initialMode={omniSearchMode}
+  initialQuery={omniSearchPrefill}
+  onClose={() => { omniSearchOpen = false; omniSearchPrefill = undefined; }}
   onOpenFile={handleOpenFile}
 />
 

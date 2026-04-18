@@ -3,13 +3,13 @@
 // locked for Phase 1 in CONTEXT.md. Components subscribe via `$searchStore`.
 //
 // State owned here:
-//   - query:        current search input text
+//   - query:        current search input text (content mode)
 //   - results:      array of Tantivy SearchResult objects
 //   - totalMatches: count of matched results (capped at Tantivy's `limit`)
 //   - totalFiles:   unique files matched (computed from results)
 //   - isSearching:  true while a search IPC call is in-flight
 //   - isRebuilding: true while rebuild_index is in-flight
-//   - activeTab:    sidebar tab — "files" (file browser) | "search" (results)
+//   - activeTab:    sidebar tab — "files" (file browser) | "tags"
 
 import { writable } from "svelte/store";
 import type { SearchResult } from "../types/search";
@@ -30,8 +30,12 @@ export interface SearchStoreState {
   isRebuilding: boolean;
   /** True when the search index is stale or corrupt (Issue #82). */
   indexStale: boolean;
-  /** Controls which sidebar panel is visible (D-01). */
-  activeTab: "files" | "search" | "tags";
+  /**
+   * Controls which sidebar panel is visible. The dedicated "Suche" tab was
+   * removed in #174 (omni-search replaces the sidebar search panel); this
+   * field now only toggles between the file tree and the tags panel.
+   */
+  activeTab: "files" | "tags";
 }
 
 const initial: SearchStoreState = {
@@ -79,8 +83,8 @@ function createSearchStore() {
     setIndexStale: (indexStale: boolean) =>
       update((s) => ({ ...s, indexStale })),
 
-    /** Switch the sidebar between the file browser, search results, and tags panels. */
-    setActiveTab: (tab: "files" | "search" | "tags") =>
+    /** Switch the sidebar between the file browser and the tags panel. */
+    setActiveTab: (tab: "files" | "tags") =>
       update((s) => ({ ...s, activeTab: tab })),
 
     /** Clear results and query — called on vault close or explicit dismiss. */
@@ -92,39 +96,6 @@ function createSearchStore() {
         totalFiles: 0,
         query: "",
       })),
-
-    /**
-     * Set the query AND execute the full-text search, populating results.
-     *
-     * Used by the Tags panel (tag-click) and any other caller that needs to
-     * programmatically run a search. Equivalent to typing `query` into the
-     * search box, but works from outside the SearchPanel component.
-     */
-    runSearch: async (query: string): Promise<void> => {
-      update((s) => ({ ...s, query, activeTab: "search" }));
-      if (!query.trim()) {
-        update((s) => ({ ...s, results: [], totalMatches: 0, totalFiles: 0 }));
-        return;
-      }
-      update((s) => ({ ...s, isSearching: true }));
-      try {
-        const results = await searchFulltext(query, 100);
-        const uniqueFileCount = new Set(results.map((r) => r.path)).size;
-        update((s) => ({
-          ...s,
-          results,
-          totalMatches: results.length,
-          totalFiles: uniqueFileCount,
-          isSearching: false,
-        }));
-      } catch (e) {
-        if (isVaultError(e) && e.kind === "IndexCorrupt") {
-          update((s) => ({ ...s, isSearching: false, indexStale: true }));
-        } else {
-          update((s) => ({ ...s, isSearching: false }));
-        }
-      }
-    },
 
     /**
      * Re-execute the current query against the freshly-built index.

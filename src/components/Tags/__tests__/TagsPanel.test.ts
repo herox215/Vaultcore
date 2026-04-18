@@ -12,33 +12,35 @@ describe("TagsPanel (TAG-03/TAG-04)", () => {
   beforeEach(() => { tagsStore.reset(); searchStore.reset(); vi.clearAllMocks(); });
 
   it("renders Keine Tags empty state when tags are empty", () => {
-    render(TagsPanel);
+    render(TagsPanel, { props: { onOpenContentSearch: () => {} } });
     expect(screen.getByText("Keine Tags")).toBeTruthy();
     expect(screen.getByText(/Erstelle Notizen mit #Tags/)).toBeTruthy();
   });
 
   it("renders tag rows with display name and count", async () => {
     (listTags as any).mockResolvedValueOnce([{ tag: "rust", count: 12 }]);
-    render(TagsPanel);
+    render(TagsPanel, { props: { onOpenContentSearch: () => {} } });
     await tagsStore.reload(); await tick();
     expect(screen.getByText("#rust")).toBeTruthy();
     expect(screen.getByText("(12)")).toBeTruthy();
   });
 
-  it("clicking a tag row switches to search tab and prefills query (TAG-04)", async () => {
+  it("clicking a tag row dispatches to onOpenContentSearch with the prefixed query (TAG-04, #174)", async () => {
+    // #174 — the sidebar no longer owns a search panel. Tag clicks dispatch to
+    // VaultLayout which opens the omni-search modal in content mode; we verify
+    // the dispatch shape (no store mutation any more).
     (listTags as any).mockResolvedValueOnce([{ tag: "rust", count: 12 }]);
-    render(TagsPanel);
+    const onOpenContentSearch = vi.fn();
+    render(TagsPanel, { props: { onOpenContentSearch } });
     await tagsStore.reload(); await tick();
     const btn = screen.getByText("#rust").closest("button") as HTMLButtonElement;
     await fireEvent.click(btn);
-    const { get } = await import("svelte/store");
-    expect(get(searchStore).activeTab).toBe("search");
-    expect(get(searchStore).query).toBe("#rust");
+    expect(onOpenContentSearch).toHaveBeenCalledWith("#rust");
   });
 
   it("nested tags group under parent and expand on chevron click", async () => {
     (listTags as any).mockResolvedValueOnce([{ tag: "work/daily", count: 3 }, { tag: "work/weekly", count: 5 }]);
-    render(TagsPanel);
+    render(TagsPanel, { props: { onOpenContentSearch: () => {} } });
     await tagsStore.reload(); await tick();
     // Parent 'work' renders
     expect(screen.getByText("#work")).toBeTruthy();

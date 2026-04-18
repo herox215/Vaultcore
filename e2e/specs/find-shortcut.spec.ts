@@ -4,9 +4,9 @@ import { openVaultInApp } from "../helpers/open-vault.js";
 /**
  * VaultCore has no in-editor find/replace (CodeMirror @codemirror/search is
  * not wired up). The Cmd+F shortcut is registered as an alias of fulltext
- * search — it activates the left-sidebar Search tab. This spec covers the
- * alias path specifically; the primary Ctrl+Shift+F shortcut is covered by
- * search.spec.ts.
+ * search — since #174 it opens the OmniSearch modal in content mode. This
+ * spec covers the alias path specifically; the primary Ctrl+Shift+F shortcut
+ * is covered by search.spec.ts.
  */
 describe("Find shortcut (Ctrl+F alias)", () => {
   let vault: TestVault;
@@ -20,10 +20,15 @@ describe("Find shortcut (Ctrl+F alias)", () => {
     vault.cleanup();
   });
 
-  it("activates the search sidebar when Ctrl+F is pressed", async () => {
+  it("opens OmniSearch in content mode when Ctrl+F is pressed", async () => {
     await browser.keys(["Control", "f"]);
 
-    const input = await browser.$('.vc-search-input, [role="searchbox"]');
+    const input = await browser.$(".vc-qs-input");
     await input.waitForDisplayed({ timeout: 3000 });
+
+    const contentTab = await browser.$('[data-omni-mode="content"]');
+    expect(await contentTab.getAttribute("aria-pressed")).toBe("true");
+
+    await browser.keys(["Escape"]);
   });
 });

@@ -48,7 +48,10 @@ describe("Sidebar layout", () => {
     });
   });
 
-  it("switches between Dateien / Suche / Tags sidebar tabs", async () => {
+  it("switches between Dateien / Tags sidebar tabs", async () => {
+    // #174 removed the dedicated "Suche" sidebar tab — search moved into
+    // the OmniSearch modal (Ctrl+Shift+F). Only two tabs remain.
+    //
     // Dispatch clicks through the DOM — the 200ms sidebar-expand CSS
     // transition leaves WebKitWebDriver briefly reporting elements as
     // "not interactable" even though they are fully rendered.
@@ -64,12 +67,9 @@ describe("Sidebar layout", () => {
       }, label);
     }
 
-    await clickTabByLabel("Suche");
-    const searchInput = await browser.$(".vc-search-input");
-    await searchInput.waitForDisplayed({ timeout: 3000 });
-
     await clickTabByLabel("Tags");
-    await searchInput.waitForDisplayed({ timeout: 2000, reverse: true });
+    const tagsPanel = await browser.$(".vc-tags-panel, [data-testid='tags-panel']");
+    await tagsPanel.waitForDisplayed({ timeout: 3000 });
 
     await clickTabByLabel("Dateien");
     const tree = await browser.$(".vc-sidebar-tree");

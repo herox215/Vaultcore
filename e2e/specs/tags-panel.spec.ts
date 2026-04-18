@@ -58,23 +58,25 @@ describe("Tags panel", () => {
     }
   });
 
-  it("drives a search when a tag is clicked", async () => {
+  it("opens the OmniSearch modal prefilled with #tag when a tag is clicked (#174)", async () => {
     const rows = await browser.$$(".vc-tags-panel .vc-tag-label");
     // Click the first visible tag label.
     const target = rows[0];
     if (!target) throw new Error("No tag rows rendered to click");
     await target.click();
 
-    // Clicking a tag switches the sidebar to the Search tab and populates the
-    // input with "#tagname". Verify the input received a value.
+    // Clicking a tag opens the OmniSearch modal in content mode with the
+    // "#tagname" prefilled — verify the input picked up the value.
     await browser.waitUntil(
       async () => {
-        const input = await browser.$(".vc-search-input, [data-testid='search-input']");
+        const input = await browser.$(".vc-qs-input");
         if (!(await input.isExisting())) return false;
         const v = (await input.getProperty("value")) as string;
         return typeof v === "string" && v.startsWith("#");
       },
-      { timeout: 3000, timeoutMsg: "Search input was never populated with a #tag query" },
+      { timeout: 3000, timeoutMsg: "OmniSearch input was never populated with a #tag query" },
     );
+
+    await browser.keys(["Escape"]);
   });
 });
