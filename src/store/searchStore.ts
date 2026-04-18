@@ -126,6 +126,41 @@ function createSearchStore() {
       }
     },
 
+    /**
+     * Re-execute the current query against the freshly-built index.
+     *
+     * Called after a successful rebuild (#148). If the query is empty there
+     * is nothing to fetch; otherwise we re-issue `search_fulltext` and replace
+     * the results so the panel reflects newly-indexed content without the
+     * user having to edit the query.
+     */
+    refetchIfQueryNonEmpty: async (): Promise<void> => {
+      let query = "";
+      const unsubscribe = subscribe((s) => {
+        query = s.query;
+      });
+      unsubscribe();
+      if (!query.trim()) return;
+      update((s) => ({ ...s, isSearching: true }));
+      try {
+        const results = await searchFulltext(query, 100);
+        const uniqueFileCount = new Set(results.map((r) => r.path)).size;
+        update((s) => ({
+          ...s,
+          results,
+          totalMatches: results.length,
+          totalFiles: uniqueFileCount,
+          isSearching: false,
+        }));
+      } catch (e) {
+        if (isVaultError(e) && e.kind === "IndexCorrupt") {
+          update((s) => ({ ...s, isSearching: false, indexStale: true }));
+        } else {
+          update((s) => ({ ...s, isSearching: false }));
+        }
+      }
+    },
+
     /** Full reset to initial state (vault close / new vault open). */
     reset: () => set({ ...initial }),
   };
