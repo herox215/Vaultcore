@@ -128,6 +128,43 @@ describe("CanvasRenderer (#156)", () => {
     expect(label?.textContent).toBe("My group");
   });
 
+  it("coloured group exposes its hex via the --vc-group-tint-source CSS var (#172)", () => {
+    // The group's stored `background` is a raw hex; the renderer pipes it
+    // into a CSS variable that the stylesheet turns into a translucent
+    // color-mix tint. The raw hex must NEVER reach an opaque fill.
+    const doc = docOf([
+      { id: "g", type: "group", background: "#22c55e", x: 0, y: 0, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    const group = container.querySelector<HTMLElement>(".vc-canvas-node-group")!;
+    expect(group.style.getPropertyValue("--vc-group-tint-source").trim()).toBe("#22c55e");
+    const styleAttr = group.getAttribute("style") ?? "";
+    expect(styleAttr).not.toContain("background-color");
+  });
+
+  it("uncoloured group does not override --vc-group-tint-source so CSS default applies (#172)", () => {
+    const doc = docOf([
+      { id: "g", type: "group", x: 0, y: 0, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    const group = container.querySelector<HTMLElement>(".vc-canvas-node-group")!;
+    expect(group.style.getPropertyValue("--vc-group-tint-source")).toBe("");
+    const styleAttr = group.getAttribute("style") ?? "";
+    expect(styleAttr).not.toContain("background-color");
+  });
+
+  it("selected + tinted group keeps the selected class alongside the tint (#172)", () => {
+    const doc = docOf([
+      { id: "g", type: "group", background: "#3b82f6", x: 0, y: 0, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, {
+      props: { doc, interactive: true, selectedNodeId: "g" },
+    });
+    const group = container.querySelector<HTMLElement>(".vc-canvas-node-group")!;
+    expect(group.classList.contains("vc-canvas-node-selected")).toBe(true);
+    expect(group.style.getPropertyValue("--vc-group-tint-source").trim()).toBe("#3b82f6");
+  });
+
   it("renders the link URL inside a link node", () => {
     const doc = docOf([
       { id: "l", type: "link", url: "https://example.com", x: 0, y: 0, width: 160, height: 60 },
