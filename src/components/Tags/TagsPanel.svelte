@@ -1,8 +1,14 @@
 <script lang="ts">
   import { tagsStore } from "../../store/tagsStore";
-  import { searchStore } from "../../store/searchStore";
   import TagRow from "./TagRow.svelte";
   import type { TagUsage } from "../../types/tags";
+
+  interface Props {
+    /** #174 — tag-click dispatches to the omni-search modal in content mode. */
+    onOpenContentSearch: (query: string) => void;
+  }
+
+  let { onOpenContentSearch }: Props = $props();
 
   // Group into {parent → children} structure (single level of nesting only per D-03).
   interface TagTreeNode { full: string; display: string; count: number; children: TagTreeNode[]; }
@@ -44,10 +50,7 @@
   }
 
   function runSearchFor(fullTag: string): void {
-    // BUG-05.1: previously only setActiveTab + setQuery, so the SearchPanel
-    // would show the query in the input but never actually run. runSearch
-    // switches the tab, sets the query, AND dispatches search_fulltext.
-    void searchStore.runSearch("#" + fullTag);
+    onOpenContentSearch("#" + fullTag);
   }
 </script>
 

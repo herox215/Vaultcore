@@ -35,7 +35,7 @@
   import ContextMenu from "../common/ContextMenu.svelte";
   import ColorPicker from "../common/ColorPicker.svelte";
   import UrlInputModal from "../common/UrlInputModal.svelte";
-  import QuickSwitcher from "../Search/QuickSwitcher.svelte";
+  import OmniSearch from "../Search/OmniSearch.svelte";
   import {
     parseCanvas,
     serializeCanvas,
@@ -1423,9 +1423,12 @@
   {/if}
 </ContextMenu>
 
-<!-- #166: modal + picker surfaces driven by the context menu -->
-<QuickSwitcher
+<!-- #166: modal + picker surfaces driven by the context menu. Uses the
+     #174 OmniSearch modal (filename mode) as the file picker — same contract
+     as the legacy QuickSwitcher. -->
+<OmniSearch
   open={pendingFileNodeAt !== null}
+  initialMode="filename"
   onClose={() => (pendingFileNodeAt = null)}
   onOpenFile={onAddFileNodeConfirm}
 />

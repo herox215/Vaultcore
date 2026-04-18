@@ -1,5 +1,5 @@
-// scrollStore — coordinates scroll-to-match requests between SearchPanel and EditorPane.
-// When a search result is clicked, SearchPanel calls requestScrollToMatch().
+// scrollStore — coordinates scroll-to-match requests between OmniSearch and EditorPane.
+// When a content-mode search result is clicked, OmniSearch calls requestScrollToMatch().
 // EditorPane watches for pending requests and executes them once the EditorView is ready.
 //
 // This is a one-shot event store: EditorPane consumes the request immediately after
