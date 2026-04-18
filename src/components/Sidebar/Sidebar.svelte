@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { FilePlus, FolderPlus, Network } from "lucide-svelte";
-  import { listDirectory, createFile, createFolder } from "../../ipc/commands";
+  import { FilePlus, FolderPlus, Network, ChevronDown, FileText, LayoutDashboard } from "lucide-svelte";
+  import { listDirectory, createFile, createFolder, writeFile } from "../../ipc/commands";
+  import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
+  import { commandRegistry } from "../../lib/commands/registry";
+  import { CMD_IDS } from "../../lib/commands/defaultCommands";
   // BUG-05.1: SortMenu was descoped per UAT — keep treeState for FILE-07
   // (expand persistence) but default sortBy stays "name" without a UI toggle.
   import {
@@ -51,6 +54,22 @@
   let bulkActive = $state(false);
   let bulkCount = $state(0);
   let treeState = $state<TreeState>({ ...DEFAULT_TREE_STATE });
+
+  // #145 — header "+ New ▾" split/dropdown open state. Primary click of the
+  // button creates a note; clicking the chevron opens this menu so canvas
+  // creation is visible without right-clicking a folder first.
+  let newMenuOpen = $state(false);
+  const newNoteHotkey = $derived(commandRegistry.getEffectiveHotkey(CMD_IDS.NEW_NOTE));
+  const newCanvasHotkey = $derived(commandRegistry.getEffectiveHotkey(CMD_IDS.NEW_CANVAS));
+
+  function formatHotkey(h: { meta: boolean; shift?: boolean; key: string } | undefined): string {
+    if (!h) return "";
+    const isMac = typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac");
+    const meta = h.meta ? (isMac ? "⌘" : "Ctrl+") : "";
+    const shift = h.shift ? (isMac ? "⇧" : "Shift+") : "";
+    const key = h.key.length === 1 ? h.key.toUpperCase() : h.key;
+    return isMac ? `${meta}${shift}${key}` : `${meta}${shift}${key}`;
+  }
 
   // Watcher unlisten handles — cleaned up on destroy
   let unlistenFileChange: UnlistenFn | null = null;
@@ -245,12 +264,33 @@
   });
 
   async function handleNewFile() {
+    newMenuOpen = false;
     const vaultPath = $vaultStore.currentPath;
     if (!vaultPath) return;
     const targetFolder = getSelectedFolder() ?? vaultPath;
     try {
       await createFile(targetFolder, "");
       await loadRoot();
+    } catch (e) {
+      const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
+  // #145 — header-level canvas creation. Targets the selected folder so
+  // dropdown + context-menu behavior stay symmetric. Seeds the file with an
+  // empty canvas doc (matches TreeNode.handleNewCanvasHere) so Obsidian
+  // accepts it on first open.
+  async function handleNewCanvas() {
+    newMenuOpen = false;
+    const vaultPath = $vaultStore.currentPath;
+    if (!vaultPath) return;
+    const targetFolder = getSelectedFolder() ?? vaultPath;
+    try {
+      const newPath = await createFile(targetFolder, "Untitled.canvas");
+      await writeFile(newPath, serializeCanvas(emptyCanvas()));
+      await loadRoot();
+      tabStore.openFileTab(newPath, "canvas");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -337,14 +377,65 @@
         {vaultName}
       </span>
       <div class="vc-sidebar-actions" style="position: relative;">
-        <button
-          class="vc-sidebar-action-btn"
-          onclick={handleNewFile}
-          aria-label="New file"
-          title="New file"
-        >
-          <FilePlus size={16} strokeWidth={1.5} />
-        </button>
+        <!-- #145: split/dropdown "+ New ▾". Primary click = new note (parity
+             with the previous lone FilePlus button); chevron toggles a menu
+             that exposes canvas creation as a first-class action. -->
+        <div class="vc-new-split" data-testid="sidebar-new-split">
+          <button
+            class="vc-sidebar-action-btn vc-new-split-primary"
+            onclick={handleNewFile}
+            aria-label="New note"
+            title={`New note${newNoteHotkey ? ` (${formatHotkey(newNoteHotkey)})` : ""}`}
+            data-testid="sidebar-new-note"
+          >
+            <FilePlus size={16} strokeWidth={1.5} />
+          </button>
+          <button
+            class="vc-sidebar-action-btn vc-new-split-chevron"
+            onclick={() => { newMenuOpen = !newMenuOpen; }}
+            aria-label="More file types"
+            aria-haspopup="menu"
+            aria-expanded={newMenuOpen}
+            title="More file types"
+            data-testid="sidebar-new-menu-toggle"
+          >
+            <ChevronDown size={12} strokeWidth={1.5} />
+          </button>
+          {#if newMenuOpen}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              class="vc-new-overlay"
+              onclick={() => { newMenuOpen = false; }}
+              role="presentation"
+            ></div>
+            <div class="vc-new-menu" role="menu" data-testid="sidebar-new-menu">
+              <button
+                class="vc-new-menu-item"
+                role="menuitem"
+                onclick={handleNewFile}
+                data-testid="sidebar-new-menu-note"
+              >
+                <FileText size={14} strokeWidth={1.5} />
+                <span class="vc-new-menu-label">New note</span>
+                {#if newNoteHotkey}
+                  <span class="vc-new-menu-hotkey">{formatHotkey(newNoteHotkey)}</span>
+                {/if}
+              </button>
+              <button
+                class="vc-new-menu-item"
+                role="menuitem"
+                onclick={handleNewCanvas}
+                data-testid="sidebar-new-menu-canvas"
+              >
+                <LayoutDashboard size={14} strokeWidth={1.5} />
+                <span class="vc-new-menu-label">New canvas</span>
+                {#if newCanvasHotkey}
+                  <span class="vc-new-menu-hotkey">{formatHotkey(newCanvasHotkey)}</span>
+                {/if}
+              </button>
+            </div>
+          {/if}
+        </div>
         <button
           class="vc-sidebar-action-btn"
           onclick={handleNewFolder}
@@ -356,8 +447,8 @@
         <button
           class="vc-sidebar-action-btn"
           onclick={() => tabStore.openGraphTab()}
-          aria-label="Graph öffnen"
-          title="Graph öffnen (Cmd/Ctrl+Shift+G)"
+          aria-label="Open graph"
+          title="Open graph (Cmd/Ctrl+Shift+G)"
         >
           <Network size={16} strokeWidth={1.5} />
         </button>
@@ -455,6 +546,81 @@
   .vc-sidebar-action-btn:hover {
     background: var(--color-accent-bg);
     color: var(--color-accent);
+  }
+
+  /* #145 — split/dropdown "+ New ▾". The two buttons share a hover state so
+     users read the group as one control; the chevron is narrower to signal
+     it's a secondary target. */
+  .vc-new-split {
+    display: inline-flex;
+    align-items: stretch;
+    border-radius: 4px;
+  }
+
+  .vc-new-split-primary {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-right: 4px;
+  }
+
+  .vc-new-split-chevron {
+    width: 18px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    padding: 0;
+    margin-left: -2px;
+  }
+
+  .vc-new-split:hover .vc-sidebar-action-btn {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+  }
+
+  .vc-new-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+  }
+
+  .vc-new-menu {
+    position: absolute;
+    top: 36px;
+    right: 0;
+    z-index: 100;
+    min-width: 200px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+    padding: 4px 0;
+  }
+
+  .vc-new-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 12px;
+    font-size: 14px;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text);
+  }
+
+  .vc-new-menu-item:hover {
+    background: var(--color-accent-bg);
+  }
+
+  .vc-new-menu-label {
+    flex: 1;
+  }
+
+  .vc-new-menu-hotkey {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
 
   /* Bulk-change progress strip — replaces vault name + action buttons */
