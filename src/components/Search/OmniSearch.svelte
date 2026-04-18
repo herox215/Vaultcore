@@ -349,11 +349,11 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
-    class="vc-quick-switcher-backdrop"
+    class="vc-quick-switcher-backdrop vc-modal-scrim"
     onmousedown={backdropClick}
   >
     <div
-      class="vc-quick-switcher-modal"
+      class="vc-quick-switcher-modal vc-modal-surface"
       role="dialog"
       aria-modal="true"
       aria-label="Suche"
@@ -458,9 +458,6 @@
 
 <style>
   .vc-quick-switcher-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     z-index: 200;
   }
 
@@ -471,7 +468,6 @@
     top: 12%;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);

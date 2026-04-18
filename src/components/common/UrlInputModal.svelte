@@ -50,11 +50,11 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
-    class="vc-url-modal-backdrop"
+    class="vc-url-modal-backdrop vc-modal-scrim"
     onclick={onCancel}
     role="presentation"
   ></div>
-  <div class="vc-url-modal" role="dialog" aria-modal="true" aria-label="Link hinzufügen">
+  <div class="vc-url-modal vc-modal-surface" role="dialog" aria-modal="true" aria-label="Link hinzufügen">
     <label class="vc-url-modal-label">
       URL
       <input
@@ -84,9 +84,6 @@
 
 <style>
   .vc-url-modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     z-index: 200;
   }
 
@@ -98,7 +95,6 @@
     width: 420px;
     max-width: calc(100vw - 32px);
     z-index: 201;
-    background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 16px;

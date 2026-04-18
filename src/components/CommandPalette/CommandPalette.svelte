@@ -124,12 +124,12 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
-    class="vc-command-palette-backdrop"
+    class="vc-command-palette-backdrop vc-modal-scrim"
     onclick={handleBackdropClick}
     data-testid="command-palette-backdrop"
   >
     <div
-      class="vc-command-palette-modal"
+      class="vc-command-palette-modal vc-modal-surface"
       role="dialog"
       aria-modal="true"
       aria-label="Befehlspalette"
@@ -185,9 +185,6 @@
 
 <style>
   .vc-command-palette-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     z-index: 200;
   }
   .vc-command-palette-modal {
@@ -197,7 +194,6 @@
     top: 15%;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
