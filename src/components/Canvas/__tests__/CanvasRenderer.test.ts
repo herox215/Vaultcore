@@ -85,6 +85,24 @@ describe("CanvasRenderer (#156)", () => {
     expect(container.querySelectorAll("path.vc-canvas-edge")).toHaveLength(1);
   });
 
+  it("arrow marker inherits the referencing edge's stroke color (#171)", () => {
+    // The arrowhead used to render in the defs' own color scope, so colored
+    // edges had uncolored arrows. The marker path now uses fill=context-stroke
+    // so the arrowhead picks up the edge's stroke (which is currentColor).
+    const doc = docOf(
+      [
+        { id: "a", type: "text", text: "a", x: 0, y: 0, width: 100, height: 40 },
+        { id: "b", type: "text", text: "b", x: 200, y: 0, width: 100, height: 40 },
+      ],
+      [{ id: "e1", fromNode: "a", toNode: "b", color: "#ef4444" }],
+    );
+    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    const markerPath = container.querySelector("marker#vc-canvas-arrow path");
+    expect(markerPath?.getAttribute("fill")).toBe("context-stroke");
+    const edgePath = container.querySelector<SVGPathElement>("path.vc-canvas-edge");
+    expect(edgePath?.style.color).toBe("rgb(239, 68, 68)");
+  });
+
   it("applies the camera transform to the world container", () => {
     const doc = docOf([
       { id: "t", type: "text", text: "x", x: 0, y: 0, width: 100, height: 40 },
