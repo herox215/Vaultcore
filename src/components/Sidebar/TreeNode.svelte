@@ -647,11 +647,11 @@
   {#if showDeleteConfirm}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-      class="vc-confirm-overlay"
+      class="vc-confirm-overlay vc-modal-scrim"
       onclick={cancelDelete}
       role="presentation"
     ></div>
-    <div class="vc-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-heading">
+    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="delete-heading">
       <h2 id="delete-heading" class="vc-confirm-heading">Move to Trash?</h2>
       <p class="vc-confirm-body">
         "{entry.name}" will be moved to .trash/ and can be recovered from there.
@@ -667,11 +667,11 @@
   {#if pendingRename}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-      class="vc-confirm-overlay"
+      class="vc-confirm-overlay vc-modal-scrim"
       onclick={cancelRenameWithLinks}
       role="presentation"
     ></div>
-    <div class="vc-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-heading">
+    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="rename-heading">
       <h2 id="rename-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
       <p class="vc-confirm-body">
         {pendingRename.linkCount} Links in {pendingRename.fileCount} Dateien werden aktualisiert. Fortfahren?
@@ -687,11 +687,11 @@
   {#if pendingMove}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-      class="vc-confirm-overlay"
+      class="vc-confirm-overlay vc-modal-scrim"
       onclick={cancelMoveWithLinks}
       role="presentation"
     ></div>
-    <div class="vc-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="move-heading">
+    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="move-heading">
       <h2 id="move-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
       <p class="vc-confirm-body">
         {pendingMove.linkCount} Links in {pendingMove.fileCount} Dateien werden aktualisiert. Fortfahren?
@@ -881,10 +881,7 @@
 
   /* Confirmation dialog */
   .vc-confirm-overlay {
-    position: fixed;
-    inset: 0;
     z-index: 199;
-    background: rgba(0, 0, 0, 0.1);
   }
 
   .vc-confirm-dialog {
@@ -894,7 +891,6 @@
     transform: translate(-50%, -50%);
     z-index: 200;
     width: 280px;
-    background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
