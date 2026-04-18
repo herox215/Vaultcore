@@ -306,20 +306,22 @@
       camX = pointerMode.startCamX + (e.clientX - pointerMode.startClientX);
       camY = pointerMode.startCamY + (e.clientY - pointerMode.startClientY);
     } else if (pointerMode.kind === "move") {
-      const dx = (e.clientX - pointerMode.startClientX) / zoom;
-      const dy = (e.clientY - pointerMode.startClientY) / zoom;
-      const node = doc.nodes.find((n) => n.id === pointerMode!.nodeId);
+      const mode = pointerMode;
+      const dx = (e.clientX - mode.startClientX) / zoom;
+      const dy = (e.clientY - mode.startClientY) / zoom;
+      const node = doc.nodes.find((n) => n.id === mode.nodeId);
       if (node) {
-        node.x = pointerMode.startX + dx;
-        node.y = pointerMode.startY + dy;
+        node.x = mode.startX + dx;
+        node.y = mode.startY + dy;
       }
     } else if (pointerMode.kind === "resize") {
-      const dx = (e.clientX - pointerMode.startClientX) / zoom;
-      const dy = (e.clientY - pointerMode.startClientY) / zoom;
-      const node = doc.nodes.find((n) => n.id === pointerMode!.nodeId);
+      const mode = pointerMode;
+      const dx = (e.clientX - mode.startClientX) / zoom;
+      const dy = (e.clientY - mode.startClientY) / zoom;
+      const node = doc.nodes.find((n) => n.id === mode.nodeId);
       if (node) {
-        node.width = Math.max(80, pointerMode.startW + dx);
-        node.height = Math.max(40, pointerMode.startH + dy);
+        node.width = Math.max(80, mode.startW + dx);
+        node.height = Math.max(40, mode.startH + dy);
       }
     } else if (pointerMode.kind === "edge" && draft) {
       const { x, y } = clientToWorld(e.clientX, e.clientY);

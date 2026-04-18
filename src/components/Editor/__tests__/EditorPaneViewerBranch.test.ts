@@ -43,6 +43,10 @@ vi.mock("../../../ipc/events", () => ({
 
 // Sidestep the sigma / WebGL import tree for the graph view.
 vi.mock("../../Graph/GraphView.svelte", async () => {
+  // svelte-check's `*.svelte` module shim resolves static imports but not the
+  // dynamic-import form inside vi.mock()'s hoisted factory — @ts-ignore the
+  // phantom "no declaration" error.
+  // @ts-ignore
   const { default: Empty } = await import("./emptyComponent.svelte");
   return { default: Empty };
 });
