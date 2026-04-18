@@ -209,7 +209,15 @@
         void reloadResolvedLinks();
         return;
       }
-      tabStore.openTab(`${vault}/${relPath}`);
+      const absPath = `${vault}/${relPath}`;
+      // #147 — `.canvas` targets need the canvas viewer; plain notes keep
+      // the synchronous `openTab` fast path so markdown clicks stay on the
+      // "zero IPC" path.
+      if (relPath.endsWith(".canvas")) {
+        tabStore.openFileTab(absPath, "canvas");
+      } else {
+        tabStore.openTab(absPath);
+      }
     } else {
       // LINK-04, D-08: click-to-create at vault root
       const filename = detail.target.endsWith(".md")

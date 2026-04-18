@@ -456,7 +456,7 @@ pub async fn get_resolved_links(
         }
     };
 
-    let (paths, file_aliases) = {
+    let (mut paths, file_aliases) = {
         let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
         let paths = fi.all_relative_paths();
         let file_aliases: Vec<(String, Vec<String>)> = fi
@@ -465,6 +465,22 @@ pub async fn get_resolved_links(
             .collect();
         (paths, file_aliases)
     };
+
+    // #147 — wiki-links like `[[mycanvas]]` should resolve to `.canvas` files
+    // the same way they resolve to notes. Canvases are not indexed by Tantivy
+    // or the FileIndex, so walk the filesystem once here and union the results
+    // into the path list fed to `resolved_map_with_aliases`. The cost is the
+    // same O(N) directory walk the attachment command already performs.
+    let vault_path = {
+        let guard = state
+            .current_vault
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        guard.clone()
+    };
+    if let Some(vp) = vault_path {
+        paths.extend(crate::indexer::collect_canvas_rel_paths(&vp));
+    }
 
     Ok(link_graph::resolved_map_with_aliases(&paths, &file_aliases))
 }

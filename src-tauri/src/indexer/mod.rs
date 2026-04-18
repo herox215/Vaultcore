@@ -609,3 +609,35 @@ fn collect_md_paths(vault_path: &Path) -> Vec<PathBuf> {
         .map(|e| e.into_path())
         .collect()
 }
+
+/// Collect all `.canvas` relative paths (forward-slash, vault-relative) under
+/// `vault_path`. Used by `get_resolved_links` so wiki-links like
+/// `[[mycanvas]]` resolve to `.canvas` files the same way they resolve to
+/// `.md` files (#147). Canvas files are not indexed by Tantivy or the
+/// FileIndex — link resolution is the only thing we need them for.
+pub fn collect_canvas_rel_paths(vault_path: &Path) -> Vec<String> {
+    walkdir::WalkDir::new(vault_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_str().unwrap_or("");
+            !name.starts_with('.')
+        })
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_type().is_file()
+                && e.path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("canvas"))
+        })
+        .filter_map(|e| {
+            e.path()
+                .strip_prefix(vault_path)
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+        })
+        .collect()
+}

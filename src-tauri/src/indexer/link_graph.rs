@@ -101,10 +101,18 @@ pub fn extract_links(content: &str) -> Vec<ParsedLink> {
 
 // ── resolve_link ───────────────────────────────────────────────────────────────
 
-/// Extract the filename stem (basename without `.md` extension) from a path.
+/// Extract the filename stem (basename without `.md` or `.canvas` extension)
+/// from a path. `.canvas` is accepted so wiki-links like `[[mycanvas]]` can
+/// resolve to `mycanvas.canvas` the same way they resolve to `mycanvas.md`.
 fn path_stem(p: &str) -> &str {
     let base = p.rsplit('/').next().unwrap_or(p);
-    base.strip_suffix(".md").unwrap_or(base)
+    if let Some(s) = base.strip_suffix(".md") {
+        return s;
+    }
+    if let Some(s) = base.strip_suffix(".canvas") {
+        return s;
+    }
+    base
 }
 
 /// Extract the parent folder portion of a vault-relative path.
@@ -132,8 +140,11 @@ fn path_depth(p: &str) -> usize {
 ///
 /// Security (T-04-01): returns a vault-relative path, never an absolute path.
 pub fn resolve_link(target_raw: &str, source_folder: &str, all_rel_paths: &[String]) -> Option<String> {
-    // Strip .md suffix from the target if the user included it
-    let stem = target_raw.strip_suffix(".md").unwrap_or(target_raw);
+    // Strip .md or .canvas suffix from the target if the user included one.
+    let stem = target_raw
+        .strip_suffix(".md")
+        .or_else(|| target_raw.strip_suffix(".canvas"))
+        .unwrap_or(target_raw);
     let stem_lower = stem.to_lowercase();
 
     // Stage 1: exact stem match in the same folder as the source

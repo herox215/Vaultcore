@@ -31,6 +31,9 @@ import { vaultStore } from "../../store/vaultStore";
 import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";
 import { listenFileChange } from "../../ipc/events";
+import { parseCanvas } from "../../lib/canvas/parse";
+import type { CanvasNode } from "../../lib/canvas/types";
+import { DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from "../../lib/canvas/types";
 
 // ── Regex ──────────────────────────────────────────────────────────────────────
 
@@ -220,6 +223,193 @@ class NoteEmbedWidget extends WidgetType {
   }
 }
 
+/**
+ * #147 — inline read-only mini-canvas for `![[mycanvas]]`. Renders node
+ * rectangles and edges as a single SVG that auto-fits all nodes into the
+ * widget's box. Clicking anywhere opens the full canvas viewer via the
+ * standard tabStore path.
+ */
+class CanvasEmbedWidget extends WidgetType {
+  constructor(readonly relPath: string, readonly widthPx: number | null) {
+    super();
+  }
+
+  eq(other: CanvasEmbedWidget): boolean {
+    return this.relPath === other.relPath && this.widthPx === other.widthPx;
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-embed-canvas";
+    wrap.setAttribute("data-embed-path", this.relPath);
+    wrap.setAttribute("role", "button");
+    wrap.setAttribute("tabindex", "0");
+    wrap.title = `Open ${this.relPath}`;
+    if (this.widthPx !== null) {
+      wrap.style.width = `${this.widthPx}px`;
+    }
+
+    const content = document.createElement("div");
+    content.className = "cm-embed-canvas-body";
+    content.textContent = "…";
+    wrap.appendChild(content);
+
+    const abs = absFromRel(this.relPath);
+    const openCanvas = (): void => {
+      if (!abs) return;
+      tabStore.openFileTab(abs, "canvas");
+    };
+    wrap.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openCanvas();
+    });
+    wrap.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openCanvas();
+      }
+    });
+
+    const cached = canvasContentCache.get(this.relPath);
+    if (cached !== undefined) {
+      renderCanvasPreviewInto(content, cached);
+    } else if (abs) {
+      readFile(abs)
+        .then((src) => {
+          canvasContentCache.set(this.relPath, src);
+          renderCanvasPreviewInto(content, src);
+        })
+        .catch(() => {
+          content.textContent = `\u26A0 cannot read: ${this.relPath}`;
+        });
+    }
+
+    return wrap;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    // Let click + keydown through to our own listener so the embed is
+    // actionable even though CM6 otherwise swallows widget events.
+    return !(event.type === "click" || event.type === "keydown");
+  }
+}
+
+/** Cache the raw canvas JSON so re-renders don't re-hit readFile. */
+const canvasContentCache: Map<string, string> = new Map();
+
+function renderCanvasPreviewInto(el: HTMLElement, rawJson: string): void {
+  el.textContent = "";
+  let doc;
+  try {
+    doc = parseCanvas(rawJson);
+  } catch {
+    el.textContent = "\u26A0 invalid canvas file";
+    return;
+  }
+  const nodes = doc.nodes;
+  if (nodes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "cm-embed-canvas-empty";
+    empty.textContent = "(empty canvas)";
+    el.appendChild(empty);
+    return;
+  }
+
+  // Compute bounding box including default sizes for nodes missing width/height.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    const w = n.width || DEFAULT_NODE_WIDTH;
+    const h = n.height || DEFAULT_NODE_HEIGHT;
+    if (n.x < minX) minX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.x + w > maxX) maxX = n.x + w;
+    if (n.y + h > maxY) maxY = n.y + h;
+  }
+  const pad = 20;
+  const vbX = minX - pad;
+  const vbY = minY - pad;
+  const vbW = maxX - minX + pad * 2;
+  const vbH = maxY - minY + pad * 2;
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `${vbX} ${vbY} ${vbW} ${vbH}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.setAttribute("class", "cm-embed-canvas-svg");
+
+  // Edges first, so nodes paint over.
+  const nodeMap = new Map<string, CanvasNode>(nodes.map((n) => [n.id, n]));
+  for (const edge of doc.edges) {
+    const a = nodeMap.get(edge.fromNode);
+    const b = nodeMap.get(edge.toNode);
+    if (!a || !b) continue;
+    const ax = a.x + (a.width || DEFAULT_NODE_WIDTH) / 2;
+    const ay = a.y + (a.height || DEFAULT_NODE_HEIGHT) / 2;
+    const bx = b.x + (b.width || DEFAULT_NODE_WIDTH) / 2;
+    const by = b.y + (b.height || DEFAULT_NODE_HEIGHT) / 2;
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", String(ax));
+    line.setAttribute("y1", String(ay));
+    line.setAttribute("x2", String(bx));
+    line.setAttribute("y2", String(by));
+    line.setAttribute("stroke", "currentColor");
+    line.setAttribute("stroke-width", "2");
+    line.setAttribute("opacity", "0.5");
+    svg.appendChild(line);
+  }
+
+  for (const n of nodes) {
+    const w = n.width || DEFAULT_NODE_WIDTH;
+    const h = n.height || DEFAULT_NODE_HEIGHT;
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", String(n.x));
+    rect.setAttribute("y", String(n.y));
+    rect.setAttribute("width", String(w));
+    rect.setAttribute("height", String(h));
+    rect.setAttribute("rx", "6");
+    rect.setAttribute("ry", "6");
+    rect.setAttribute("fill", "var(--vc-bg-secondary, #f5f5f5)");
+    rect.setAttribute("stroke", "currentColor");
+    rect.setAttribute("stroke-width", "1.5");
+    svg.appendChild(rect);
+    // Lightweight label: for text nodes we preview the first line; for other
+    // nodes we show the type so the reader sees the structure at a glance.
+    const label = nodeLabel(n);
+    if (label) {
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("x", String(n.x + 8));
+      text.setAttribute("y", String(n.y + 20));
+      text.setAttribute("font-size", "14");
+      text.setAttribute("fill", "currentColor");
+      text.textContent = label;
+      svg.appendChild(text);
+    }
+  }
+
+  el.appendChild(svg);
+}
+
+function nodeLabel(n: CanvasNode): string {
+  // `CanvasUnknownNode` overlaps every other variant on the `type` discriminant,
+  // so read optional fields through a loose record to keep the union-narrowing
+  // from collapsing into the fallback branch.
+  const any = n as unknown as Record<string, unknown>;
+  if (n.type === "text") {
+    const raw = typeof any["text"] === "string" ? (any["text"] as string) : "";
+    const firstLine = raw.split("\n", 1)[0] ?? "";
+    return firstLine.length > 40 ? `${firstLine.slice(0, 37)}…` : firstLine;
+  }
+  if (n.type === "file") return typeof any["file"] === "string" ? (any["file"] as string) : "(file)";
+  if (n.type === "link") return typeof any["url"] === "string" ? (any["url"] as string) : "(link)";
+  if (n.type === "group") {
+    return typeof any["label"] === "string" ? (any["label"] as string) : "(group)";
+  }
+  return n.type;
+}
+
 class BrokenEmbedWidget extends WidgetType {
   constructor(readonly target: string) {
     super();
@@ -318,18 +508,23 @@ function buildDecorations(view: EditorView): DecorationSet {
         deco = Decoration.replace({ widget: new BrokenEmbedWidget(target) });
       }
     } else {
-      // Note embed. We intentionally ignore the #heading capture for now and
-      // render the entire target note; heading slicing is a follow-up.
+      // Note / canvas embed. We intentionally ignore the #heading capture for
+      // now and render the entire target; heading slicing is a follow-up.
       const rel = resolveTarget(target);
       if (rel !== null) {
-        const cached = noteContentCache.get(rel);
-        if (cached === undefined) {
-          scheduleNoteFetch(view, rel);
-          // Show a muted placeholder while the fetch is in flight so the UI
-          // doesn't flash with a stale version of the target note.
-          deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, "…") });
+        if (rel.endsWith(".canvas")) {
+          // #147 — route canvas targets through the SVG preview widget.
+          deco = Decoration.replace({ widget: new CanvasEmbedWidget(rel, sizePx) });
         } else {
-          deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, cached) });
+          const cached = noteContentCache.get(rel);
+          if (cached === undefined) {
+            scheduleNoteFetch(view, rel);
+            // Show a muted placeholder while the fetch is in flight so the UI
+            // doesn't flash with a stale version of the target note.
+            deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, "…") });
+          } else {
+            deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, cached) });
+          }
         }
       } else {
         deco = Decoration.replace({ widget: new BrokenEmbedWidget(target) });
@@ -422,4 +617,10 @@ export const embedPlugin = ViewPlugin.fromClass(
 export function __resetEmbedCachesForTests(): void {
   noteContentCache.clear();
   noteFetchInFlight.clear();
+  canvasContentCache.clear();
+}
+
+/** Test-only: render an SVG preview for a raw canvas JSON string into `el`. */
+export function __renderCanvasPreviewForTests(el: HTMLElement, rawJson: string): void {
+  renderCanvasPreviewInto(el, rawJson);
 }
