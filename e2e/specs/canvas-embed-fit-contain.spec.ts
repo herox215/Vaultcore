@@ -72,37 +72,39 @@ describe("Canvas embed fit-contain (#158)", () => {
       { timeout: 8000, timeoutMsg: "Embed did not render 2 canvas nodes" },
     );
 
-    // The key assertion: every node's bounding rect must sit inside the
-    // embed body's clip rect (within a 1px tolerance). With the old
-    // fit-to-width camera the bottom node was cropped; with fit-contain
-    // it scales down and stays visible.
+    // Key assertion: every node's bounding rect must sit inside the
+    // embed *wrap*'s visible rect (not just the body — the wrap is what
+    // clips visually; a prior aspect-ratio CSS forced the wrap to 16:9
+    // even though the body was sized by fit-contain, so the body rect
+    // looked fine but the wrap was cropping). The wrap's visible area
+    // should grow to match the body so the whole canvas is shown.
     const result = await browser.execute(() => {
       const panes = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
       const active = panes.find((el) => el.offsetParent !== null);
       if (!active) return { ok: false, reason: "no active pane" };
-      const body = active.querySelector<HTMLElement>(".cm-embed-canvas-body");
-      if (!body) return { ok: false, reason: "no embed body" };
-      const bodyRect = body.getBoundingClientRect();
+      const wrap = active.querySelector<HTMLElement>(".cm-embed-canvas");
+      if (!wrap) return { ok: false, reason: "no embed wrap" };
+      const wrapRect = wrap.getBoundingClientRect();
       const nodes = Array.from(
-        body.querySelectorAll<HTMLElement>(".vc-canvas-node"),
+        wrap.querySelectorAll<HTMLElement>(".vc-canvas-node"),
       );
       const out: Array<{ id: string | null; top: number; bottom: number }> = [];
       for (const n of nodes) {
         const r = n.getBoundingClientRect();
         out.push({
           id: n.getAttribute("data-node-id"),
-          top: r.top - bodyRect.top,
-          bottom: r.bottom - bodyRect.top,
+          top: r.top - wrapRect.top,
+          bottom: r.bottom - wrapRect.top,
         });
       }
-      const bodyHeight = bodyRect.height;
-      const allInside = out.every((n) => n.top >= -1 && n.bottom <= bodyHeight + 1);
-      return { ok: allInside, bodyHeight, nodes: out };
+      const wrapHeight = wrapRect.height;
+      const allInside = out.every((n) => n.top >= -1 && n.bottom <= wrapHeight + 1);
+      return { ok: allInside, wrapHeight, nodes: out };
     });
 
     if (!result.ok) {
       throw new Error(
-        `Nodes outside embed body: ${JSON.stringify(result)}`,
+        `Nodes outside embed wrap: ${JSON.stringify(result)}`,
       );
     }
   });
