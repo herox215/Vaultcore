@@ -25,6 +25,7 @@
   import { toastStore } from "../../store/toastStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import { vaultStore } from "../../store/vaultStore";
+  import { tabStore } from "../../store/tabStore";
   import { openFileAsTab } from "../../lib/openFileAsTab";
   import { renderMarkdownToHtml } from "../Editor/reading/markdownRenderer";
   import {
@@ -161,6 +162,11 @@
     try {
       await writeFile(abs, serialized);
       lastWrittenJson = serialized;
+      // #154: surface the save via tabStore so embedPlugin's diff-on-snapshot
+      // subscriber invalidates cached canvas embeds — write_ignore hides our
+      // own writes from the watcher, so this is the only signal other views
+      // have that the .canvas just changed.
+      tabStore.setLastSavedContent(tabId, serialized);
     } catch (e) {
       const ve = isVaultError(e)
         ? e
