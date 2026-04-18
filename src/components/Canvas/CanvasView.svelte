@@ -46,19 +46,30 @@
     DEFAULT_NODE_WIDTH,
     DEFAULT_NODE_HEIGHT,
   } from "../../lib/canvas/types";
-  import {
-    SIDES,
-    anchorPoint,
-    autoSides,
-    bezierMidpoint,
-    bezierPath,
-  } from "../../lib/canvas/geometry";
+  import { SIDES, anchorPoint } from "../../lib/canvas/geometry";
   import {
     canvasFilePreview,
     isImageFile,
     isMarkdownFile,
     resolveVaultAbs,
   } from "../../lib/canvas/embed";
+  import {
+    type PointerMode,
+    type DraftEdge,
+    beginPan,
+    beginMove,
+    beginResize,
+    beginEdge,
+    panPosition,
+    movePosition,
+    resizeSize,
+    updateDraftOnMove,
+    resolvePointerUp,
+  } from "../../lib/canvas/pointerMode";
+  import {
+    resolveEdges as resolveEdgesPure,
+    draftPath as draftPathPure,
+  } from "../../lib/canvas/edgeResolver";
 
   interface Props {
     tabId: string;
@@ -81,17 +92,8 @@
   let editingEdgeId = $state<string | null>(null);
   let hoveredNodeId = $state<string | null>(null);
 
-  // Draft edge: populated while the user drags from a handle. `targetNodeId`
-  // + `targetSide` are only set when the pointer is over another node's
-  // handle, which is when pointerup commits the edge.
-  type DraftEdge = {
-    fromNodeId: string;
-    fromSide: CanvasSide;
-    currentX: number;
-    currentY: number;
-    targetNodeId: string | null;
-    targetSide: CanvasSide | null;
-  };
+  // Draft edge: populated while the user drags from a handle. The state
+  // machine in `pointerMode.ts` owns the update + commit rules.
   let draft = $state<DraftEdge | null>(null);
 
   let viewportEl: HTMLDivElement | null = null;
@@ -107,12 +109,6 @@
   // Missing / failed reads become "" so the renderer falls back to a
   // generic file card. `$state` keeps the template reactive to async loads.
   let mdPreviews = $state<Record<string, string>>({});
-
-  type PointerMode =
-    | { kind: "pan"; startClientX: number; startClientY: number; startCamX: number; startCamY: number }
-    | { kind: "move"; nodeId: string; startClientX: number; startClientY: number; startX: number; startY: number }
-    | { kind: "resize"; nodeId: string; startClientX: number; startClientY: number; startW: number; startH: number }
-    | { kind: "edge"; fromNodeId: string; fromSide: CanvasSide };
 
   let pointerMode: PointerMode | null = null;
 
@@ -291,50 +287,37 @@
     selectedNodeId = null;
     selectedEdgeId = null;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    pointerMode = {
-      kind: "pan",
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      startCamX: camX,
-      startCamY: camY,
-    };
+    pointerMode = beginPan(e, { x: camX, y: camY });
   }
 
   function onViewportPointerMove(e: PointerEvent) {
     if (!pointerMode) return;
     if (pointerMode.kind === "pan") {
-      camX = pointerMode.startCamX + (e.clientX - pointerMode.startClientX);
-      camY = pointerMode.startCamY + (e.clientY - pointerMode.startClientY);
+      const p = panPosition(pointerMode, e);
+      camX = p.camX;
+      camY = p.camY;
     } else if (pointerMode.kind === "move") {
       const mode = pointerMode;
-      const dx = (e.clientX - mode.startClientX) / zoom;
-      const dy = (e.clientY - mode.startClientY) / zoom;
+      const p = movePosition(mode, e, zoom);
       const node = doc.nodes.find((n) => n.id === mode.nodeId);
       if (node) {
-        node.x = mode.startX + dx;
-        node.y = mode.startY + dy;
+        node.x = p.x;
+        node.y = p.y;
       }
     } else if (pointerMode.kind === "resize") {
       const mode = pointerMode;
-      const dx = (e.clientX - mode.startClientX) / zoom;
-      const dy = (e.clientY - mode.startClientY) / zoom;
+      const s = resizeSize(mode, e, zoom);
       const node = doc.nodes.find((n) => n.id === mode.nodeId);
       if (node) {
-        node.width = Math.max(80, mode.startW + dx);
-        node.height = Math.max(40, mode.startH + dy);
+        node.width = s.width;
+        node.height = s.height;
       }
     } else if (pointerMode.kind === "edge" && draft) {
-      const { x, y } = clientToWorld(e.clientX, e.clientY);
-      draft.currentX = x;
-      draft.currentY = y;
-      const hit = handleAtPoint(e.clientX, e.clientY);
-      if (hit && hit.nodeId !== draft.fromNodeId) {
-        draft.targetNodeId = hit.nodeId;
-        draft.targetSide = hit.side;
-      } else {
-        draft.targetNodeId = null;
-        draft.targetSide = null;
-      }
+      draft = updateDraftOnMove(
+        draft,
+        clientToWorld(e.clientX, e.clientY),
+        handleAtPoint(e.clientX, e.clientY),
+      );
     }
   }
 
@@ -343,17 +326,11 @@
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     } catch { /* releasePointerCapture may throw in the synthetic test env */ }
-    if (pointerMode.kind === "edge" && draft) {
-      if (draft.targetNodeId && draft.targetSide) {
-        commitDraftEdge(
-          draft.fromNodeId,
-          draft.fromSide,
-          draft.targetNodeId,
-          draft.targetSide,
-        );
-      }
-      draft = null;
+    const action = resolvePointerUp(pointerMode, draft);
+    if (action.kind === "commit-edge") {
+      commitDraftEdge(action.fromId, action.fromSide, action.toId, action.toSide);
     }
+    if (pointerMode.kind === "edge") draft = null;
     pointerMode = null;
   }
 
@@ -404,14 +381,7 @@
     selectedNodeId = node.id;
     selectedEdgeId = null;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    pointerMode = {
-      kind: "move",
-      nodeId: node.id,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      startX: node.x,
-      startY: node.y,
-    };
+    pointerMode = beginMove(node, e);
   }
 
   function onNodeDblClick(e: MouseEvent, node: CanvasNode) {
@@ -455,14 +425,7 @@
     if (e.button !== 0) return;
     selectedNodeId = node.id;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    pointerMode = {
-      kind: "resize",
-      nodeId: node.id,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      startW: node.width,
-      startH: node.height,
-    };
+    pointerMode = beginResize(node, e);
   }
 
   function onHandlePointerDown(e: PointerEvent, node: CanvasNode, side: CanvasSide) {
@@ -478,7 +441,7 @@
       targetNodeId: null,
       targetSide: null,
     };
-    pointerMode = { kind: "edge", fromNodeId: node.id, fromSide: side };
+    pointerMode = beginEdge(node.id, side);
     try {
       viewportEl?.setPointerCapture(e.pointerId);
     } catch {
@@ -577,78 +540,8 @@
     if (e.key === " ") spaceHeld = false;
   }
 
-  // Resolved edge geometry for the render loop. An edge whose endpoint node
-  // is missing from the doc (corrupt file, partial edit) is silently skipped
-  // so the viewer keeps working rather than crashing.
-  type ResolvedEdge = {
-    edge: CanvasEdge;
-    fromPt: { x: number; y: number };
-    toPt: { x: number; y: number };
-    fromSide: CanvasSide;
-    toSide: CanvasSide;
-    path: string;
-    mid: { x: number; y: number };
-  };
-
-  function resolveEdges(): ResolvedEdge[] {
-    const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
-    const out: ResolvedEdge[] = [];
-    for (const edge of doc.edges) {
-      const from = byId.get(edge.fromNode);
-      const to = byId.get(edge.toNode);
-      if (!from || !to) continue;
-      const { fromSide, toSide } =
-        edge.fromSide && edge.toSide
-          ? { fromSide: edge.fromSide, toSide: edge.toSide }
-          : autoSides(from, to);
-      const fromPt = anchorPoint(from, fromSide);
-      const toPt = anchorPoint(to, toSide);
-      out.push({
-        edge,
-        fromPt,
-        toPt,
-        fromSide,
-        toSide,
-        path: bezierPath(fromPt, fromSide, toPt, toSide),
-        mid: bezierMidpoint(fromPt, fromSide, toPt, toSide),
-      });
-    }
-    return out;
-  }
-
-  let resolvedEdges = $derived(resolveEdges());
-
-  function draftPath(): string | null {
-    if (!draft) return null;
-    const from = doc.nodes.find((n) => n.id === draft!.fromNodeId);
-    if (!from) return null;
-    const fromPt = anchorPoint(from, draft.fromSide);
-    // If hovering a valid target handle, use that side for a natural entry;
-    // otherwise aim straight at the cursor with an opposite-ish side.
-    if (draft.targetNodeId && draft.targetSide) {
-      const to = doc.nodes.find((n) => n.id === draft!.targetNodeId);
-      if (to) {
-        const toPt = anchorPoint(to, draft.targetSide);
-        return bezierPath(fromPt, draft.fromSide, toPt, draft.targetSide);
-      }
-    }
-    const toSide: CanvasSide =
-      draft.fromSide === "left"
-        ? "right"
-        : draft.fromSide === "right"
-          ? "left"
-          : draft.fromSide === "top"
-            ? "bottom"
-            : "top";
-    return bezierPath(
-      fromPt,
-      draft.fromSide,
-      { x: draft.currentX, y: draft.currentY },
-      toSide,
-    );
-  }
-
-  let draftPathD = $derived(draftPath());
+  let resolvedEdges = $derived(resolveEdgesPure(doc));
+  let draftPathD = $derived(draftPathPure(doc, draft));
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
