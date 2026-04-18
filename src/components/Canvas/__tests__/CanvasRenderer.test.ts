@@ -128,6 +128,44 @@ describe("CanvasRenderer (#156)", () => {
     expect(label?.textContent).toBe("My group");
   });
 
+  it("coloured group renders a translucent tint derived from its background hex (#172)", () => {
+    // The group's stored `background` is a raw hex, but the renderer must
+    // apply it as a low-opacity tint (color-mix → transparent) so groups
+    // look like frosted glass, not a solid-filled rectangle.
+    const doc = docOf([
+      { id: "g", type: "group", background: "#22c55e", x: 0, y: 0, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    const group = container.querySelector<HTMLElement>(".vc-canvas-node-group")!;
+    const styleAttr = group.getAttribute("style") ?? "";
+    expect(styleAttr).toContain("color-mix(");
+    expect(styleAttr).toContain("#22c55e");
+    // And it must not paint the raw hex as the opaque fill.
+    expect(group.style.backgroundColor).not.toBe("rgb(34, 197, 94)");
+  });
+
+  it("uncoloured group has no inline background override so CSS defaults apply (#172)", () => {
+    const doc = docOf([
+      { id: "g", type: "group", x: 0, y: 0, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    const group = container.querySelector<HTMLElement>(".vc-canvas-node-group")!;
+    const styleAttr = group.getAttribute("style") ?? "";
+    expect(styleAttr).not.toContain("background-color");
+  });
+
+  it("selected + tinted group keeps the selected class alongside the tint (#172)", () => {
+    const doc = docOf([
+      { id: "g", type: "group", background: "#3b82f6", x: 0, y: 0, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, {
+      props: { doc, interactive: true, selectedNodeId: "g" },
+    });
+    const group = container.querySelector<HTMLElement>(".vc-canvas-node-group")!;
+    expect(group.classList.contains("vc-canvas-node-selected")).toBe(true);
+    expect(group.getAttribute("style") ?? "").toContain("color-mix(");
+  });
+
   it("renders the link URL inside a link node", () => {
     const doc = docOf([
       { id: "l", type: "link", url: "https://example.com", x: 0, y: 0, width: 160, height: 60 },

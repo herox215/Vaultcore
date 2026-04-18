@@ -537,7 +537,9 @@
         style:top={`${node.y}px`}
         style:width={`${node.width}px`}
         style:height={`${node.height}px`}
-        style:background-color={groupNode.background ?? null}
+        style:background-color={groupNode.background
+          ? `color-mix(in srgb, ${groupNode.background} var(--vc-group-tint-strength), transparent)`
+          : null}
         data-node-id={node.id}
         data-node-type="group"
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
@@ -867,9 +869,12 @@
   }
 
   .vc-canvas-node-group {
+    --vc-group-tint-strength: 18%;
     background: var(--color-accent-bg, rgba(64, 120, 192, 0.08));
     border-style: dashed;
     cursor: move;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
   }
 
   .vc-canvas-readonly .vc-canvas-node-group {
