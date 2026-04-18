@@ -422,6 +422,34 @@
     selectedEdgeId = null;
   }
 
+  // #130: keyboard activation for role="button" canvas cards. Enter / Space
+  // run `action` (the equivalent of a click / dblclick) and we prevent Space
+  // from scrolling the page. Called per-node so the caller picks the right
+  // semantic action (start-edit for text/edge, open for file/link).
+  function onCardKey(e: KeyboardEvent, action: () => void) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      action();
+    }
+  }
+
+  function startEditText(node: CanvasTextNode) {
+    editingNodeId = node.id;
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+  }
+
+  function startEditEdgeLabel(edge: CanvasEdge) {
+    editingEdgeId = edge.id;
+    selectedEdgeId = edge.id;
+    selectedNodeId = null;
+  }
+
+  function selectNode(node: CanvasNode) {
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+  }
+
   function onResizePointerDown(e: PointerEvent, node: CanvasNode) {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -724,6 +752,7 @@
             data-edge-id={re.edge.id}
             onpointerdown={(e) => onEdgeHitPointerDown(e, re.edge)}
             ondblclick={(e) => onEdgeDblClick(e, re.edge)}
+            onkeydown={(e) => onCardKey(e, () => startEditEdgeLabel(re.edge))}
             role="button"
             tabindex="0"
           >
@@ -746,6 +775,7 @@
             data-node-id={node.id}
             onpointerdown={(e) => onNodePointerDown(e, node)}
             ondblclick={(e) => onNodeDblClick(e, node)}
+            onkeydown={(e) => onCardKey(e, () => startEditText(node as CanvasTextNode))}
             onpointerenter={() => (hoveredNodeId = node.id)}
             onpointerleave={() => {
               if (hoveredNodeId === node.id) hoveredNodeId = null;
@@ -799,6 +829,7 @@
             data-node-id={node.id}
             data-node-type="file"
             onpointerdown={(e) => onNodePointerDown(e, node)}
+            onkeydown={(e) => onCardKey(e, () => void onOpenFileNode(fileNode))}
             onpointerenter={() => (hoveredNodeId = node.id)}
             onpointerleave={() => {
               if (hoveredNodeId === node.id) hoveredNodeId = null;
@@ -887,6 +918,7 @@
             data-node-id={node.id}
             data-node-type="link"
             onpointerdown={(e) => onNodePointerDown(e, node)}
+            onkeydown={(e) => onCardKey(e, () => onOpenLinkNode(linkNode))}
             onpointerenter={() => (hoveredNodeId = node.id)}
             onpointerleave={() => {
               if (hoveredNodeId === node.id) hoveredNodeId = null;
@@ -973,6 +1005,7 @@
             style:height={`${node.height}px`}
             data-node-id={node.id}
             onpointerdown={(e) => onNodePointerDown(e, node)}
+            onkeydown={(e) => onCardKey(e, () => selectNode(node))}
             onpointerenter={() => (hoveredNodeId = node.id)}
             onpointerleave={() => {
               if (hoveredNodeId === node.id) hoveredNodeId = null;
