@@ -35,6 +35,7 @@ function makeProps() {
     selectedPath: null,
     onSelect: vi.fn(),
     onOpenFile: vi.fn(),
+    onOpenContentSearch: vi.fn(),
   };
 }
 
