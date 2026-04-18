@@ -408,11 +408,34 @@ const CANVAS_EMBED_MAX_HEIGHT = 420;
 const CANVAS_EMBED_MIN_HEIGHT = 80;
 const CANVAS_EMBED_PADDING = 24;
 
+type EmbedCamera = { camX: number; camY: number; zoom: number; heightPx: number };
+
+// #158 — fit-contain camera: scale so the padded bbox fits inside both the
+// requested width and the max embed height, then center horizontally when
+// the height constraint wins. Returns null for empty canvases.
+function computeEmbedCamera(nodes: CanvasNode[], widthPx: number): EmbedCamera | null {
+  if (nodes.length === 0) return null;
+  const bbox = computeCanvasBBox(nodes);
+  const pad = CANVAS_EMBED_PADDING;
+  const bboxW = bbox.maxX - bbox.minX + pad * 2;
+  const bboxH = bbox.maxY - bbox.minY + pad * 2;
+  const zoomW = widthPx / bboxW;
+  const zoomH = CANVAS_EMBED_MAX_HEIGHT / bboxH;
+  const zoom = Math.min(zoomW, zoomH);
+  const contentW = bboxW * zoom;
+  const contentH = bboxH * zoom;
+  const offsetX = Math.max(0, (widthPx - contentW) / 2);
+  const camX = -(bbox.minX - pad) * zoom + offsetX;
+  const camY = -(bbox.minY - pad) * zoom;
+  const heightPx = Math.max(CANVAS_EMBED_MIN_HEIGHT, contentH);
+  return { camX, camY, zoom, heightPx };
+}
+
 /**
  * Populate the embed body by mounting CanvasRenderer in read-only mode.
- * The bounding box of all nodes drives a fit-to-width camera so the whole
- * canvas is visible. Height is capped so ridiculously tall canvases don't
- * push the host note off the screen.
+ * The bounding box of all nodes drives a fit-contain camera so the whole
+ * canvas is always visible with a margin on every side (#158) — we never
+ * crop; tall canvases scale down instead of being clipped.
  */
 function renderCanvasEmbedBody(
   body: HTMLElement,
@@ -435,29 +458,19 @@ function renderCanvasEmbedBody(
     return;
   }
 
-  const bbox = computeCanvasBBox(doc.nodes);
-  const pad = CANVAS_EMBED_PADDING;
-  const bboxW = bbox.maxX - bbox.minX + pad * 2;
-  const bboxH = bbox.maxY - bbox.minY + pad * 2;
-  const zoom = widthPx / bboxW;
-  const camX = -(bbox.minX - pad) * zoom;
-  const camY = -(bbox.minY - pad) * zoom;
-  const heightPx = Math.max(
-    CANVAS_EMBED_MIN_HEIGHT,
-    Math.min(CANVAS_EMBED_MAX_HEIGHT, bboxH * zoom),
-  );
+  const cam = computeEmbedCamera(doc.nodes, widthPx)!;
   body.style.position = "relative";
   body.style.overflow = "hidden";
-  body.style.height = `${heightPx}px`;
+  body.style.height = `${cam.heightPx}px`;
 
   const vaultPath = get(vaultStore).currentPath ?? null;
   const component = mount(CanvasRenderer, {
     target: body,
     props: {
       doc,
-      camX,
-      camY,
-      zoom,
+      camX: cam.camX,
+      camY: cam.camY,
+      zoom: cam.zoom,
       vaultPath,
       interactive: false,
     },
@@ -719,25 +732,13 @@ export function __resetEmbedCachesForTests(): void {
   canvasContentCache.clear();
 }
 
-/** Test-only: compute a fit-to-width camera for a raw canvas JSON (#156). */
+/** Test-only: compute the fit-contain camera for a raw canvas JSON (#156/#158). */
 export function __computeEmbedCameraForTests(
   rawJson: string,
   widthPx: number,
-): { camX: number; camY: number; zoom: number; heightPx: number } | null {
+): EmbedCamera | null {
   const doc = parseCanvas(rawJson);
-  if (doc.nodes.length === 0) return null;
-  const bbox = computeCanvasBBox(doc.nodes);
-  const pad = CANVAS_EMBED_PADDING;
-  const bboxW = bbox.maxX - bbox.minX + pad * 2;
-  const bboxH = bbox.maxY - bbox.minY + pad * 2;
-  const zoom = widthPx / bboxW;
-  const camX = -(bbox.minX - pad) * zoom;
-  const camY = -(bbox.minY - pad) * zoom;
-  const heightPx = Math.max(
-    CANVAS_EMBED_MIN_HEIGHT,
-    Math.min(CANVAS_EMBED_MAX_HEIGHT, bboxH * zoom),
-  );
-  return { camX, camY, zoom, heightPx };
+  return computeEmbedCamera(doc.nodes, widthPx);
 }
 
 /** Test-only: expose the canvas-content cache for cache-invalidation tests (#154). */
