@@ -15,6 +15,7 @@
   import { editorStore } from "../../store/editorStore";
   import { activeViewStore } from "../../store/activeViewStore";
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
+  import { openFileAsTab } from "../../lib/openFileAsTab";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
   import { searchStore } from "../../store/searchStore";
@@ -715,10 +716,16 @@
     }
   }
 
-  // Drag-to-split detection
+  // Drag-to-split detection. #146: accept sidebar file drags in addition to
+  // the existing tab-reorder flow. Folder drags (text/vaultcore-folder) are
+  // ignored — folders stay sidebar-only.
+  function isAcceptedDrag(types: readonly string[]): boolean {
+    return types.includes("text/vaultcore-tab") || types.includes("text/vaultcore-file");
+  }
+
   function handleDragover(e: DragEvent) {
     if (!e.dataTransfer) return;
-    if (!e.dataTransfer.types.includes("text/vaultcore-tab")) return;
+    if (!isAcceptedDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     if (!paneEl) return;
 
@@ -739,24 +746,43 @@
     splitIndicatorSide = null;
   }
 
-  function handleDrop(e: DragEvent) {
+  async function handleDrop(e: DragEvent) {
     if (!e.dataTransfer) return;
-    const draggedTabId = e.dataTransfer.getData("text/vaultcore-tab");
-    if (!draggedTabId || !splitIndicatorSide) {
+    if (!isAcceptedDrag(e.dataTransfer.types)) {
       splitIndicatorSide = null;
       return;
     }
+    const targetPane = splitIndicatorSide;
+    splitIndicatorSide = null;
+    if (!targetPane) return;
     e.preventDefault();
 
-    if (!e.dataTransfer.types.includes("text/vaultcore-tab")) {
-      splitIndicatorSide = null;
+    const draggedTabId = e.dataTransfer.getData("text/vaultcore-tab");
+    if (draggedTabId) {
+      tabStore.activateTab(draggedTabId);
+      tabStore.moveToPane(targetPane);
       return;
     }
 
-    const targetPane = splitIndicatorSide;
-    tabStore.activateTab(draggedTabId);
-    tabStore.moveToPane(targetPane);
-    splitIndicatorSide = null;
+    const filePath = e.dataTransfer.getData("text/vaultcore-file");
+    if (!filePath) return;
+
+    // Reuse an existing tab for this path (dedupe) — otherwise open a new one
+    // through the central viewer-routing dispatcher so canvas/image/text
+    // files pick the correct viewer, same as a sidebar click would.
+    const existing = allTabs.find((t) => t.filePath === filePath);
+    if (existing) {
+      tabStore.activateTab(existing.id);
+      tabStore.moveToPane(targetPane);
+      return;
+    }
+    try {
+      const newId = await openFileAsTab(filePath);
+      if (newId) tabStore.moveToPane(targetPane);
+    } catch {
+      // openFileAsTab already routes known errors to toasts via its callers;
+      // nothing useful to surface here.
+    }
   }
 
   onMount(async () => {
