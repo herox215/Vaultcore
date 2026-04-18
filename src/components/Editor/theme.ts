@@ -250,29 +250,25 @@ export const markdownTheme = EditorView.theme({
   ".cm-embed-canvas": {
     display: "block",
     width: "100%",
-    aspectRatio: "16 / 9",
     margin: "8px 0",
     border: "1px solid var(--color-border)",
     borderRadius: "6px",
     backgroundColor: "var(--color-surface-2, var(--color-bg))",
     cursor: "pointer",
-    overflow: "hidden",
     color: "var(--color-text)",
   },
+  // Body height is set inline by renderCanvasEmbedBody to the content-
+  // scaled height from the fit-contain camera (#158). We only own the
+  // width here; height and overflow are inline so the wrap grows to
+  // contain the whole canvas — no 16:9 clip.
   ".cm-embed-canvas-body": {
     width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  ".cm-embed-canvas-svg": {
-    width: "100%",
-    height: "100%",
   },
   ".cm-embed-canvas-empty": {
     color: "var(--color-text-muted)",
     fontStyle: "italic",
+    padding: "16px",
+    textAlign: "center",
   },
 
   // ── Inline HTML rendering (#70) ──────────────────────────────────────────
