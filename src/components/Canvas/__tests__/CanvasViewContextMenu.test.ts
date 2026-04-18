@@ -359,9 +359,10 @@ describe("CanvasView context menus (#164)", () => {
     const doc = nodesFromLastWrite();
     expect(doc.nodes[0]).toMatchObject({ type: "group", background: "#22c55e" });
 
-    // Renderer must apply inline background-color so the new colour is visible.
+    // Renderer must pipe the chosen colour through the CSS tint variable so
+    // the stylesheet can render it as a translucent frosted tint (#172).
     const groupEl = container.querySelector(".vc-canvas-node-group") as HTMLElement;
-    expect(groupEl.style.backgroundColor).toBeTruthy();
+    expect(groupEl.style.getPropertyValue("--vc-group-tint-source").trim()).toBe("#22c55e");
   });
 
   it("Change color… Clear on a group deletes the background field (#166)", async () => {
