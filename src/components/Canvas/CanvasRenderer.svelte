@@ -37,6 +37,14 @@
   import { tokenizeCanvasText } from "../../lib/canvas/textTokens";
   import { resolveTarget } from "../Editor/wikiLink";
 
+  // Tiny use:-action to focus + select an input on mount (the inline
+  // edits for link URL / group label rely on this rather than the
+  // `autofocus` attribute, which Svelte lints against for a11y).
+  function focusOnMount(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+
   interface Props {
     doc: CanvasDoc;
     camX?: number;
@@ -83,6 +91,13 @@
      *  embed use doesn't need a menu. */
     onNodeContextMenu?: (e: MouseEvent, node: CanvasNode) => void;
     onEdgeContextMenu?: (e: MouseEvent, edge: CanvasEdge) => void;
+
+    /** Inline edits for link URL / group label (#166). `editingNodeId`
+     *  doubles as the “which node is being edited” state — the renderer
+     *  branches on `node.type` to pick the right input. */
+    onLinkUrlInput?: (e: Event, node: CanvasLinkNode) => void;
+    onGroupLabelInput?: (e: Event, node: CanvasGroupNode) => void;
+    onStopEditingNode?: () => void;
   }
 
   let {
@@ -123,6 +138,9 @@
     onStopEditingEdge,
     onNodeContextMenu,
     onEdgeContextMenu,
+    onLinkUrlInput,
+    onGroupLabelInput,
+    onStopEditingNode,
   }: Props = $props();
 
   // Groups render first so other nodes stack visually on top of them.
@@ -452,17 +470,37 @@
         tabindex={interactive ? 0 : undefined}
       >
         <div class="vc-canvas-node-file-header">
-          <span class="vc-canvas-node-link-url" title={linkNode.url}>{linkNode.url}</span>
-          {#if interactive}
-            <button
-              type="button"
-              class="vc-canvas-node-open"
-              data-canvas-open="link"
+          {#if interactive && editingNodeId === node.id}
+            <input
+              type="url"
+              class="vc-canvas-node-link-url-input"
+              value={linkNode.url}
+              oninput={(e) => onLinkUrlInput?.(e, linkNode)}
+              onblur={() => onStopEditingNode?.()}
               onpointerdown={(e) => e.stopPropagation()}
-              onclick={(e) => { e.stopPropagation(); onOpenLinkNode?.(linkNode); }}
-            >
-              Open
-            </button>
+              ondblclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === "Escape") {
+                  e.preventDefault();
+                  onStopEditingNode?.();
+                }
+              }}
+              aria-label="Link-URL bearbeiten"
+              use:focusOnMount
+            />
+          {:else}
+            <span class="vc-canvas-node-link-url" title={linkNode.url}>{linkNode.url}</span>
+            {#if interactive}
+              <button
+                type="button"
+                class="vc-canvas-node-open"
+                data-canvas-open="link"
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); onOpenLinkNode?.(linkNode); }}
+              >
+                Open
+              </button>
+            {/if}
           {/if}
         </div>
         <div class="vc-canvas-node-file-body">External link</div>
@@ -494,6 +532,7 @@
         style:top={`${node.y}px`}
         style:width={`${node.width}px`}
         style:height={`${node.height}px`}
+        style:background-color={groupNode.background ?? null}
         data-node-id={node.id}
         data-node-type="group"
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
@@ -503,7 +542,26 @@
         role="group"
         aria-label={groupNode.label ?? "Group"}
       >
-        {#if groupNode.label}
+        {#if interactive && editingNodeId === node.id}
+          <input
+            type="text"
+            class="vc-canvas-node-group-label-input"
+            value={groupNode.label ?? ""}
+            oninput={(e) => onGroupLabelInput?.(e, groupNode)}
+            onblur={() => onStopEditingNode?.()}
+            onpointerdown={(e) => e.stopPropagation()}
+            ondblclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") {
+                e.preventDefault();
+                onStopEditingNode?.();
+              }
+            }}
+            placeholder="Label"
+            aria-label="Gruppen-Label bearbeiten"
+            use:focusOnMount
+          />
+        {:else if groupNode.label}
           <div class="vc-canvas-node-group-label">{groupNode.label}</div>
         {/if}
         {#if interactive}
@@ -825,6 +883,35 @@
     border-radius: 4px;
     padding: 2px 8px;
     pointer-events: none;
+  }
+
+  .vc-canvas-node-group-label-input {
+    position: absolute;
+    top: -24px;
+    left: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-accent);
+    border-radius: 4px;
+    padding: 2px 8px;
+    pointer-events: auto;
+    outline: none;
+    font-family: inherit;
+  }
+
+  .vc-canvas-node-link-url-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-accent);
+    border-radius: 4px;
+    padding: 2px 6px;
+    outline: none;
+    font-family: inherit;
   }
 
   .vc-canvas-node-textarea {
