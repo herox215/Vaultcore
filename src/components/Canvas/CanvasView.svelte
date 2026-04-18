@@ -633,7 +633,6 @@
     if (!e.dataTransfer) return;
     if (!e.dataTransfer.types.includes("text/vaultcore-file")) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
   }
 
   function onViewportDrop(e: DragEvent) {
@@ -651,14 +650,20 @@
       });
       return;
     }
+    // File-nodes render a header + (for markdown) a preview body, so the
+    // 60 px default used for text cards is too small to show anything
+    // useful. We pick a 400×400 card that matches Obsidian's drag-default
+    // size and gives the markdown preview room to render.
+    const FILE_DROP_WIDTH = 400;
+    const FILE_DROP_HEIGHT = 400;
     const { x, y } = clientToWorld(e.clientX, e.clientY);
     const node: CanvasFileNode = {
       id: crypto.randomUUID(),
       type: "file",
-      x: x - DEFAULT_NODE_WIDTH / 2,
-      y: y - DEFAULT_NODE_HEIGHT / 2,
-      width: DEFAULT_NODE_WIDTH,
-      height: DEFAULT_NODE_HEIGHT,
+      x: x - FILE_DROP_WIDTH / 2,
+      y: y - FILE_DROP_HEIGHT / 2,
+      width: FILE_DROP_WIDTH,
+      height: FILE_DROP_HEIGHT,
       file: rel,
     };
     doc.nodes = [...doc.nodes, node];
