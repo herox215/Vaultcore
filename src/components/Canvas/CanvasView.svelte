@@ -56,10 +56,15 @@
   import {
     type PointerMode,
     type DraftEdge,
+    LONGPRESS_HOLD_MS,
     beginPan,
     beginMove,
     beginResize,
     beginEdge,
+    beginPendingLongpress,
+    pendingLongpressExceeded,
+    longpressFire,
+    longpressFallback,
     panPosition,
     movePosition,
     resizeSize,
@@ -110,7 +115,13 @@
   // generic file card. `$state` keeps the template reactive to async loads.
   let mdPreviews = $state<Record<string, string>>({});
 
-  let pointerMode: PointerMode | null = null;
+  let pointerMode = $state<PointerMode | null>(null);
+  let longpressTimer: ReturnType<typeof setTimeout> | null = null;
+  // Pointer-capture target for the current gesture. Long-press starts on
+  // either the viewport (empty-canvas press) or on a node element; pointer-up
+  // must release capture from the same element to keep subsequent events in
+  // the native handler chain.
+  let longpressCaptureEl: HTMLElement | null = null;
 
   const MIN_ZOOM = 0.15;
   const MAX_ZOOM = 4;
@@ -168,6 +179,7 @@
       saveTimer = null;
       void persist();
     }
+    cancelLongpressTimer();
   });
 
   $effect(() => {
@@ -282,37 +294,84 @@
   function onViewportPointerDown(e: PointerEvent) {
     if (editingNodeId || editingEdgeId) return;
     const isPan = e.button === 1 || (e.button === 0 && spaceHeld);
-    if (!isPan) return;
-    e.preventDefault();
+    if (isPan) {
+      e.preventDefault();
+      selectedNodeId = null;
+      selectedEdgeId = null;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      pointerMode = beginPan(e, { x: camX, y: camY });
+      return;
+    }
+    // Left-click on empty viewport → start long-press-to-pan timer (#144).
+    // No movement yet — the timer fires after LONGPRESS_HOLD_MS if the
+    // pointer hasn't moved past the threshold.
+    if (e.button !== 0) return;
     selectedNodeId = null;
     selectedEdgeId = null;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    pointerMode = beginPan(e, { x: camX, y: camY });
+    startLongpress(e, { kind: "none" });
+  }
+
+  function startLongpress(
+    e: PointerEvent,
+    fallback: { kind: "none" } | { kind: "move"; nodeId: string; nodeStartX: number; nodeStartY: number },
+  ) {
+    pointerMode = beginPendingLongpress(e, fallback);
+    const el = e.currentTarget as HTMLElement;
+    longpressCaptureEl = el;
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* setPointerCapture throws for synthetic-test pointer IDs */
+    }
+    if (longpressTimer) clearTimeout(longpressTimer);
+    longpressTimer = setTimeout(() => {
+      longpressTimer = null;
+      if (pointerMode?.kind !== "pending-longpress") return;
+      pointerMode = longpressFire(pointerMode, { x: camX, y: camY });
+    }, LONGPRESS_HOLD_MS);
+  }
+
+  function cancelLongpressTimer() {
+    if (longpressTimer) {
+      clearTimeout(longpressTimer);
+      longpressTimer = null;
+    }
   }
 
   function onViewportPointerMove(e: PointerEvent) {
-    if (!pointerMode) return;
-    if (pointerMode.kind === "pan") {
-      const p = panPosition(pointerMode, e);
+    let mode = pointerMode;
+    if (!mode) return;
+    if (mode.kind === "pending-longpress") {
+      if (!pendingLongpressExceeded(mode, e)) return;
+      // User moved past the threshold before the timer fired — cancel the
+      // pending pan and fall through to the original gesture. If no
+      // fallback exists (viewport-only press), clear the mode so the event
+      // stops driving anything until pointer-up.
+      cancelLongpressTimer();
+      const next = longpressFallback(mode);
+      pointerMode = next;
+      if (!next) return;
+      mode = next;
+    }
+    if (mode.kind === "pan") {
+      const p = panPosition(mode, e);
       camX = p.camX;
       camY = p.camY;
-    } else if (pointerMode.kind === "move") {
-      const mode = pointerMode;
+    } else if (mode.kind === "move") {
       const p = movePosition(mode, e, zoom);
       const node = doc.nodes.find((n) => n.id === mode.nodeId);
       if (node) {
         node.x = p.x;
         node.y = p.y;
       }
-    } else if (pointerMode.kind === "resize") {
-      const mode = pointerMode;
+    } else if (mode.kind === "resize") {
       const s = resizeSize(mode, e, zoom);
       const node = doc.nodes.find((n) => n.id === mode.nodeId);
       if (node) {
         node.width = s.width;
         node.height = s.height;
       }
-    } else if (pointerMode.kind === "edge" && draft) {
+    } else if (mode.kind === "edge" && draft) {
       draft = updateDraftOnMove(
         draft,
         clientToWorld(e.clientX, e.clientY),
@@ -326,6 +385,13 @@
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     } catch { /* releasePointerCapture may throw in the synthetic test env */ }
+    if (longpressCaptureEl && longpressCaptureEl !== e.currentTarget) {
+      try {
+        longpressCaptureEl.releasePointerCapture?.(e.pointerId);
+      } catch { /* synthetic-test pointer ID */ }
+    }
+    cancelLongpressTimer();
+    longpressCaptureEl = null;
     const action = resolvePointerUp(pointerMode, draft);
     if (action.kind === "commit-edge") {
       commitDraftEdge(action.fromId, action.fromSide, action.toId, action.toSide);
@@ -380,8 +446,15 @@
     e.stopPropagation();
     selectedNodeId = node.id;
     selectedEdgeId = null;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    pointerMode = beginMove(node, e);
+    // Enter pending-longpress — if the user keeps the pointer still for
+    // LONGPRESS_HOLD_MS we flip to pan; if they move past the threshold
+    // first, we fall through to beginMove (the original gesture).
+    startLongpress(e, {
+      kind: "move",
+      nodeId: node.id,
+      nodeStartX: node.x,
+      nodeStartY: node.y,
+    });
   }
 
   function onNodeDblClick(e: MouseEvent, node: CanvasNode) {
@@ -542,6 +615,9 @@
 
   let resolvedEdges = $derived(resolveEdgesPure(doc));
   let draftPathD = $derived(draftPathPure(doc, draft));
+  // True while a long-press-to-pan pan is actively driving the camera. Used
+  // to force the `grabbing` cursor globally on the canvas.
+  let isPanActive = $derived(pointerMode?.kind === "pan");
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
@@ -549,11 +625,13 @@
 <div
   class="vc-canvas-viewport"
   class:vc-canvas-panning={spaceHeld}
+  class:vc-canvas-pan-active={isPanActive}
   class:vc-canvas-drafting={!!draft}
   bind:this={viewportEl}
   role="application"
   aria-label="Canvas"
   data-tab-id={tabId}
+  data-pointer-mode={pointerMode?.kind ?? "idle"}
   onpointerdown={onViewportPointerDown}
   onpointermove={onViewportPointerMove}
   onpointerup={onViewportPointerUp}
@@ -941,6 +1019,11 @@
 
   .vc-canvas-panning {
     cursor: grab;
+  }
+
+  .vc-canvas-pan-active,
+  .vc-canvas-pan-active * {
+    cursor: grabbing !important;
   }
 
   .vc-canvas-drafting {

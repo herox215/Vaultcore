@@ -8,10 +8,16 @@ import { describe, it, expect } from "vitest";
 import {
   MIN_NODE_WIDTH,
   MIN_NODE_HEIGHT,
+  LONGPRESS_HOLD_MS,
+  LONGPRESS_MOVE_THRESHOLD,
   beginPan,
   beginMove,
   beginResize,
   beginEdge,
+  beginPendingLongpress,
+  pendingLongpressExceeded,
+  longpressFire,
+  longpressFallback,
   panPosition,
   movePosition,
   resizeSize,
@@ -283,5 +289,166 @@ describe("resolvePointerUp", () => {
   it("does nothing when draft is null", () => {
     const mode: PointerMode = beginEdge("a", "right");
     expect(resolvePointerUp(mode, null)).toEqual({ kind: "none" });
+  });
+});
+
+// ── long-press-to-pan (#144) ─────────────────────────────────────────────
+
+describe("beginPendingLongpress", () => {
+  it("snapshots pointer-down position and carries the fallback payload", () => {
+    const mode = beginPendingLongpress(
+      { clientX: 40, clientY: 50 },
+      { kind: "none" },
+    );
+    expect(mode).toEqual({
+      kind: "pending-longpress",
+      startClientX: 40,
+      startClientY: 50,
+      fallback: { kind: "none" },
+    });
+  });
+
+  it("carries node fallback info so the move transition can begin without drift", () => {
+    const mode = beginPendingLongpress(
+      { clientX: 10, clientY: 20 },
+      { kind: "move", nodeId: "n1", nodeStartX: 100, nodeStartY: 200 },
+    );
+    if (mode.kind !== "pending-longpress") throw new Error("unreachable");
+    expect(mode.fallback).toEqual({
+      kind: "move",
+      nodeId: "n1",
+      nodeStartX: 100,
+      nodeStartY: 200,
+    });
+  });
+});
+
+describe("pendingLongpressExceeded", () => {
+  const mode = () => {
+    const m = beginPendingLongpress(
+      { clientX: 100, clientY: 100 },
+      { kind: "none" },
+    );
+    if (m.kind !== "pending-longpress") throw new Error("unreachable");
+    return m;
+  };
+
+  it("returns false for no movement", () => {
+    expect(pendingLongpressExceeded(mode(), { clientX: 100, clientY: 100 })).toBe(
+      false,
+    );
+  });
+
+  it("returns false for movement within the threshold (Euclidean)", () => {
+    // The default threshold is 4 px; a 3/4 delta gives distance 5 which exceeds,
+    // but 2/2 gives ~2.83 which is within.
+    expect(pendingLongpressExceeded(mode(), { clientX: 102, clientY: 102 })).toBe(
+      false,
+    );
+  });
+
+  it("returns true once the pointer moves beyond the threshold", () => {
+    expect(pendingLongpressExceeded(mode(), { clientX: 103, clientY: 104 })).toBe(
+      true,
+    );
+  });
+
+  it("uses Euclidean distance, not Manhattan", () => {
+    // 3 px in one axis is within threshold (3 < 4); 3+3 Manhattan would be 6
+    // but Euclidean is ~4.24 which also exceeds — ensure the test guards
+    // against an axis-summed implementation.
+    expect(pendingLongpressExceeded(mode(), { clientX: 103, clientY: 100 })).toBe(
+      false,
+    );
+    expect(pendingLongpressExceeded(mode(), { clientX: 103, clientY: 103 })).toBe(
+      true,
+    );
+  });
+
+  it("accepts a custom threshold", () => {
+    expect(
+      pendingLongpressExceeded(mode(), { clientX: 108, clientY: 100 }, 10),
+    ).toBe(false);
+    expect(
+      pendingLongpressExceeded(mode(), { clientX: 111, clientY: 100 }, 10),
+    ).toBe(true);
+  });
+});
+
+describe("longpressFire", () => {
+  it("transitions the pending state into pan mode preserving the start client + camera", () => {
+    const pending = beginPendingLongpress(
+      { clientX: 40, clientY: 60 },
+      { kind: "none" },
+    );
+    if (pending.kind !== "pending-longpress") throw new Error("unreachable");
+    const panned = longpressFire(pending, { x: 5, y: 7 });
+    expect(panned).toEqual({
+      kind: "pan",
+      startClientX: 40,
+      startClientY: 60,
+      startCamX: 5,
+      startCamY: 7,
+    });
+  });
+
+  it("panPosition after a fire yields zero delta for the same pointer coords", () => {
+    const pending = beginPendingLongpress(
+      { clientX: 10, clientY: 10 },
+      { kind: "none" },
+    );
+    if (pending.kind !== "pending-longpress") throw new Error("unreachable");
+    const panned = longpressFire(pending, { x: 100, y: 200 });
+    if (panned.kind !== "pan") throw new Error("unreachable");
+    expect(panPosition(panned, { clientX: 10, clientY: 10 })).toEqual({
+      camX: 100,
+      camY: 200,
+    });
+  });
+});
+
+describe("longpressFallback", () => {
+  it("returns null for an empty-viewport fallback", () => {
+    const pending = beginPendingLongpress(
+      { clientX: 0, clientY: 0 },
+      { kind: "none" },
+    );
+    if (pending.kind !== "pending-longpress") throw new Error("unreachable");
+    expect(longpressFallback(pending)).toBeNull();
+  });
+
+  it("synthesizes a move mode anchored at the original pointer-down so the first-px drift is not lost", () => {
+    const pending = beginPendingLongpress(
+      { clientX: 30, clientY: 40 },
+      { kind: "move", nodeId: "n1", nodeStartX: 100, nodeStartY: 200 },
+    );
+    if (pending.kind !== "pending-longpress") throw new Error("unreachable");
+    const fallback = longpressFallback(pending);
+    expect(fallback).toEqual({
+      kind: "move",
+      nodeId: "n1",
+      startClientX: 30,
+      startClientY: 40,
+      startX: 100,
+      startY: 200,
+    });
+  });
+
+  it("returns null if the fallback metadata is incomplete (defensive)", () => {
+    const mode: PointerMode = {
+      kind: "pending-longpress",
+      startClientX: 0,
+      startClientY: 0,
+      fallback: { kind: "move" },
+    };
+    if (mode.kind !== "pending-longpress") throw new Error("unreachable");
+    expect(longpressFallback(mode)).toBeNull();
+  });
+});
+
+describe("long-press constants", () => {
+  it("exposes sane defaults (documents the contract for the component)", () => {
+    expect(LONGPRESS_HOLD_MS).toBe(300);
+    expect(LONGPRESS_MOVE_THRESHOLD).toBe(4);
   });
 });

@@ -25,6 +25,22 @@ import type { CanvasNode, CanvasSide } from "./types";
 export const MIN_NODE_WIDTH = 80;
 export const MIN_NODE_HEIGHT = 40;
 
+// Long-press-to-pan (#144): hold the left button for this many ms without
+// moving further than the threshold to flip into pan mode. Values live here
+// so the component + tests + any future configurability agree.
+export const LONGPRESS_HOLD_MS = 300;
+export const LONGPRESS_MOVE_THRESHOLD = 4;
+
+// Snapshot of where a node started so pending-longpress can fall through to
+// beginMove without losing the pointer-down origin (otherwise the first
+// `threshold` pixels of drag would be dropped).
+export interface PendingLongpressFallback {
+  kind: "none" | "move";
+  nodeId?: string;
+  nodeStartX?: number;
+  nodeStartY?: number;
+}
+
 export type PointerMode =
   | {
       kind: "pan";
@@ -49,7 +65,16 @@ export type PointerMode =
       startW: number;
       startH: number;
     }
-  | { kind: "edge"; fromNodeId: string; fromSide: CanvasSide };
+  | { kind: "edge"; fromNodeId: string; fromSide: CanvasSide }
+  | {
+      kind: "pending-longpress";
+      startClientX: number;
+      startClientY: number;
+      // What to do if the user moves past the threshold *before* the timer
+      // fires. `none` = nothing (background-down gesture had no fallback),
+      // `move` = begin a node move from the original start coords.
+      fallback: PendingLongpressFallback;
+    };
 
 export interface ClientPoint {
   clientX: number;
@@ -106,6 +131,71 @@ export function beginResize(node: CanvasNode, e: ClientPoint): PointerMode {
 
 export function beginEdge(nodeId: string, side: CanvasSide): PointerMode {
   return { kind: "edge", fromNodeId: nodeId, fromSide: side };
+}
+
+// ── long-press ─────────────────────────────────────────────────────────────
+
+export function beginPendingLongpress(
+  e: ClientPoint,
+  fallback: PendingLongpressFallback,
+): PointerMode {
+  return {
+    kind: "pending-longpress",
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+    fallback,
+  };
+}
+
+export function pendingLongpressExceeded(
+  mode: Extract<PointerMode, { kind: "pending-longpress" }>,
+  e: ClientPoint,
+  threshold: number = LONGPRESS_MOVE_THRESHOLD,
+): boolean {
+  const dx = e.clientX - mode.startClientX;
+  const dy = e.clientY - mode.startClientY;
+  return dx * dx + dy * dy > threshold * threshold;
+}
+
+/** Timer fired without exceeding the movement threshold — enter pan mode. */
+export function longpressFire(
+  mode: Extract<PointerMode, { kind: "pending-longpress" }>,
+  cam: { x: number; y: number },
+): PointerMode {
+  return {
+    kind: "pan",
+    startClientX: mode.startClientX,
+    startClientY: mode.startClientY,
+    startCamX: cam.x,
+    startCamY: cam.y,
+  };
+}
+
+/**
+ * User moved past the threshold before the timer fired — fall through to
+ * the gesture that would have started if long-press hadn't been in the way.
+ * Returns `null` when there is nothing to fall through to (pending was on
+ * empty viewport).
+ */
+export function longpressFallback(
+  mode: Extract<PointerMode, { kind: "pending-longpress" }>,
+): PointerMode | null {
+  if (
+    mode.fallback.kind !== "move" ||
+    mode.fallback.nodeId === undefined ||
+    mode.fallback.nodeStartX === undefined ||
+    mode.fallback.nodeStartY === undefined
+  ) {
+    return null;
+  }
+  return {
+    kind: "move",
+    nodeId: mode.fallback.nodeId,
+    startClientX: mode.startClientX,
+    startClientY: mode.startClientY,
+    startX: mode.fallback.nodeStartX,
+    startY: mode.fallback.nodeStartY,
+  };
 }
 
 // ── move handlers (pure delta → position / size) ───────────────────────────
