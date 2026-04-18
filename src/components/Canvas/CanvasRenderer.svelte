@@ -78,6 +78,11 @@
     onEdgeLabelBlur?: () => void;
     onStartEditEdgeLabel?: (edge: CanvasEdge) => void;
     onStopEditingEdge?: () => void;
+
+    /** Right-click surfaces (#164). When omitted the renderer stays inert —
+     *  embed use doesn't need a menu. */
+    onNodeContextMenu?: (e: MouseEvent, node: CanvasNode) => void;
+    onEdgeContextMenu?: (e: MouseEvent, edge: CanvasEdge) => void;
   }
 
   let {
@@ -116,6 +121,8 @@
     onEdgeLabelBlur,
     onStartEditEdgeLabel,
     onStopEditingEdge,
+    onNodeContextMenu,
+    onEdgeContextMenu,
   }: Props = $props();
 
   // Groups render first so other nodes stack visually on top of them.
@@ -156,12 +163,14 @@
       {@const arrowEnd = re.edge.toEnd !== "none"}
       {@const arrowStart = re.edge.fromEnd === "arrow"}
       {#if interactive}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <path
           class="vc-canvas-edge-hit"
           d={re.path}
           data-edge-id={re.edge.id}
           onpointerdown={(e) => onEdgeHitPointerDown?.(e, re.edge)}
           ondblclick={(e) => onEdgeDblClick?.(e, re.edge)}
+          oncontextmenu={(e) => onEdgeContextMenu?.(e, re.edge)}
         />
       {/if}
       <path
@@ -211,6 +220,7 @@
           data-edge-id={re.edge.id}
           onpointerdown={(e) => onEdgeHitPointerDown?.(e, re.edge)}
           ondblclick={(e) => onEdgeDblClick?.(e, re.edge)}
+          oncontextmenu={(e) => onEdgeContextMenu?.(e, re.edge)}
           onkeydown={(e) => onCardKey?.(e, () => onStartEditEdgeLabel?.(re.edge))}
           role="button"
           tabindex="0"
@@ -244,6 +254,7 @@
         data-node-id={node.id}
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
         ondblclick={interactive ? (e) => onNodeDblClick?.(e, node) : undefined}
+        oncontextmenu={interactive ? (e) => onNodeContextMenu?.(e, node) : undefined}
         onkeydown={interactive ? (e) => onCardKey?.(e, () => onStartEditText?.(node as CanvasTextNode)) : undefined}
         onpointerenter={interactive ? () => onNodeHoverEnter?.(node) : undefined}
         onpointerleave={interactive ? () => onNodeHoverLeave?.(node) : undefined}
@@ -337,6 +348,7 @@
         data-node-id={node.id}
         data-node-type="file"
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
+        oncontextmenu={interactive ? (e) => onNodeContextMenu?.(e, node) : undefined}
         onkeydown={interactive ? (e) => onCardKey?.(e, () => onOpenFileNode?.(fileNode)) : undefined}
         onpointerenter={interactive ? () => onNodeHoverEnter?.(node) : undefined}
         onpointerleave={interactive ? () => onNodeHoverLeave?.(node) : undefined}
@@ -432,6 +444,7 @@
         data-node-id={node.id}
         data-node-type="link"
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
+        oncontextmenu={interactive ? (e) => onNodeContextMenu?.(e, node) : undefined}
         onkeydown={interactive ? (e) => onCardKey?.(e, () => onOpenLinkNode?.(linkNode)) : undefined}
         onpointerenter={interactive ? () => onNodeHoverEnter?.(node) : undefined}
         onpointerleave={interactive ? () => onNodeHoverLeave?.(node) : undefined}
@@ -484,6 +497,7 @@
         data-node-id={node.id}
         data-node-type="group"
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
+        oncontextmenu={interactive ? (e) => onNodeContextMenu?.(e, node) : undefined}
         onpointerenter={interactive ? () => onNodeHoverEnter?.(node) : undefined}
         onpointerleave={interactive ? () => onNodeHoverLeave?.(node) : undefined}
         role="group"
@@ -521,6 +535,7 @@
         style:height={`${node.height}px`}
         data-node-id={node.id}
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
+        oncontextmenu={interactive ? (e) => onNodeContextMenu?.(e, node) : undefined}
         onkeydown={interactive ? (e) => onCardKey?.(e, () => onSelectNode?.(node)) : undefined}
         onpointerenter={interactive ? () => onNodeHoverEnter?.(node) : undefined}
         onpointerleave={interactive ? () => onNodeHoverLeave?.(node) : undefined}

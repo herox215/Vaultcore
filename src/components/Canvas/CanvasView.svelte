@@ -26,10 +26,12 @@
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore } from "../../store/tabStore";
+  import { treeRevealStore } from "../../store/treeRevealStore";
   import { openFileAsTab } from "../../lib/openFileAsTab";
   import { resolveTarget } from "../Editor/wikiLink";
   import { renderMarkdownToHtml } from "../Editor/reading/markdownRenderer";
   import CanvasRenderer from "./CanvasRenderer.svelte";
+  import ContextMenu from "../common/ContextMenu.svelte";
   import {
     parseCanvas,
     serializeCanvas,
@@ -675,6 +677,211 @@
   // True while a long-press-to-pan pan is actively driving the camera. Used
   // to force the `grabbing` cursor globally on the canvas.
   let isPanActive = $derived(pointerMode?.kind === "pan");
+
+  // ─── Context menus (#164) ─────────────────────────────────────────────
+  // Discriminated target — picks the menu entries the user sees and the
+  // action handlers wired up below.
+  type ContextTarget =
+    | { kind: "empty"; worldX: number; worldY: number }
+    | { kind: "node"; nodeId: string }
+    | { kind: "edge"; edgeId: string };
+
+  let contextMenu = $state<{ target: ContextTarget; x: number; y: number } | null>(null);
+
+  // Snapshot of the node / edge under the menu so the template can branch on
+  // type without re-scanning the doc on every render.
+  const contextNode = $derived.by((): CanvasNode | null => {
+    if (contextMenu?.target.kind !== "node") return null;
+    const id = contextMenu.target.nodeId;
+    return doc.nodes.find((n) => n.id === id) ?? null;
+  });
+
+  const contextEdge = $derived.by((): CanvasEdge | null => {
+    if (contextMenu?.target.kind !== "edge") return null;
+    const id = contextMenu.target.edgeId;
+    return doc.edges.find((e) => e.id === id) ?? null;
+  });
+
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+
+  function cancelGestureForContextMenu() {
+    // Right-click cancels any in-flight longpress / pending pan so the menu
+    // doesn't surface on top of a primed pan gesture.
+    cancelLongpressTimer();
+    longpressCaptureEl = null;
+    pointerMode = null;
+  }
+
+  function onViewportContextMenu(e: MouseEvent) {
+    // Bubbles from node/edge handlers — stopPropagation there prevents this.
+    e.preventDefault();
+    cancelGestureForContextMenu();
+    selectedNodeId = null;
+    selectedEdgeId = null;
+    const { x, y } = clientToWorld(e.clientX, e.clientY);
+    contextMenu = {
+      target: { kind: "empty", worldX: x, worldY: y },
+      x: e.clientX,
+      y: e.clientY,
+    };
+  }
+
+  function onNodeContextMenu(e: MouseEvent, node: CanvasNode) {
+    e.preventDefault();
+    e.stopPropagation();
+    cancelGestureForContextMenu();
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+    contextMenu = {
+      target: { kind: "node", nodeId: node.id },
+      x: e.clientX,
+      y: e.clientY,
+    };
+  }
+
+  function onEdgeContextMenu(e: MouseEvent, edge: CanvasEdge) {
+    e.preventDefault();
+    e.stopPropagation();
+    cancelGestureForContextMenu();
+    selectedEdgeId = edge.id;
+    selectedNodeId = null;
+    contextMenu = {
+      target: { kind: "edge", edgeId: edge.id },
+      x: e.clientX,
+      y: e.clientY,
+    };
+  }
+
+  // ─── Menu actions ──────────────────────────────────────────────────────
+
+  function addTextNodeAt(worldX: number, worldY: number) {
+    const node: CanvasTextNode = {
+      id: crypto.randomUUID(),
+      type: "text",
+      x: worldX - DEFAULT_NODE_WIDTH / 2,
+      y: worldY - DEFAULT_NODE_HEIGHT / 2,
+      width: DEFAULT_NODE_WIDTH,
+      height: DEFAULT_NODE_HEIGHT,
+      text: "",
+    };
+    doc.nodes = [...doc.nodes, node];
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+    editingNodeId = node.id;
+  }
+
+  function addGroupAt(worldX: number, worldY: number) {
+    const GROUP_W = 400;
+    const GROUP_H = 300;
+    const node: CanvasGroupNode = {
+      id: crypto.randomUUID(),
+      type: "group",
+      x: worldX - GROUP_W / 2,
+      y: worldY - GROUP_H / 2,
+      width: GROUP_W,
+      height: GROUP_H,
+    };
+    doc.nodes = [...doc.nodes, node];
+    selectedNodeId = node.id;
+    selectedEdgeId = null;
+  }
+
+  function duplicateNode(nodeId: string) {
+    const src = doc.nodes.find((n) => n.id === nodeId);
+    if (!src) return;
+    const clone: CanvasNode = {
+      ...src,
+      id: crypto.randomUUID(),
+      x: src.x + 24,
+      y: src.y + 24,
+    };
+    doc.nodes = [...doc.nodes, clone];
+    selectedNodeId = clone.id;
+    selectedEdgeId = null;
+  }
+
+  function copyNodeToClipboard(nodeId: string) {
+    const src = doc.nodes.find((n) => n.id === nodeId);
+    if (!src) return;
+    try {
+      void navigator.clipboard.writeText(JSON.stringify(src));
+    } catch {
+      /* clipboard API blocked — silently swallow */
+    }
+  }
+
+  function copyTextToClipboard(text: string) {
+    try {
+      void navigator.clipboard.writeText(text);
+    } catch {
+      /* clipboard API blocked */
+    }
+  }
+
+  function bringNodeToFront(nodeId: string) {
+    const src = doc.nodes.find((n) => n.id === nodeId);
+    if (!src) return;
+    // Groups render behind other nodes (CanvasRenderer sorts group-first);
+    // reordering across that band has no visual effect, so we keep the swap
+    // within the same band to stay intuitive.
+    const rest = doc.nodes.filter((n) => n.id !== nodeId);
+    doc.nodes = [...rest, src];
+  }
+
+  function sendNodeToBack(nodeId: string) {
+    const src = doc.nodes.find((n) => n.id === nodeId);
+    if (!src) return;
+    const rest = doc.nodes.filter((n) => n.id !== nodeId);
+    doc.nodes = [src, ...rest];
+  }
+
+  function deleteNode(nodeId: string) {
+    doc.nodes = doc.nodes.filter((n) => n.id !== nodeId);
+    doc.edges = doc.edges.filter(
+      (ed) => ed.fromNode !== nodeId && ed.toNode !== nodeId,
+    );
+    if (selectedNodeId === nodeId) selectedNodeId = null;
+  }
+
+  function deleteEdge(edgeId: string) {
+    doc.edges = doc.edges.filter((ed) => ed.id !== edgeId);
+    if (selectedEdgeId === edgeId) selectedEdgeId = null;
+  }
+
+  function flipEdge(edgeId: string) {
+    const idx = doc.edges.findIndex((e) => e.id === edgeId);
+    if (idx < 0) return;
+    const src = doc.edges[idx];
+    if (!src) return;
+    const swapped: CanvasEdge = { ...src, fromNode: src.toNode, toNode: src.fromNode };
+    if (src.toSide !== undefined) swapped.fromSide = src.toSide;
+    else delete swapped.fromSide;
+    if (src.fromSide !== undefined) swapped.toSide = src.fromSide;
+    else delete swapped.toSide;
+    if (src.toEnd !== undefined) swapped.fromEnd = src.toEnd;
+    else delete swapped.fromEnd;
+    if (src.fromEnd !== undefined) swapped.toEnd = src.fromEnd;
+    else delete swapped.toEnd;
+    doc.edges = [
+      ...doc.edges.slice(0, idx),
+      swapped,
+      ...doc.edges.slice(idx + 1),
+    ];
+  }
+
+  async function revealFileNode(node: CanvasFileNode) {
+    treeRevealStore.requestReveal(node.file);
+  }
+
+  async function openFileNodeInSplit(node: CanvasFileNode) {
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
+    const absPath = resolveVaultAbs(vaultPath, node.file);
+    tabStore.openTab(absPath);
+    tabStore.moveToPane("right");
+  }
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
@@ -694,6 +901,7 @@
   onpointerup={onViewportPointerUp}
   onpointercancel={onViewportPointerUp}
   ondblclick={onViewportDblClick}
+  oncontextmenu={onViewportContextMenu}
   ondragover={onViewportDragOver}
   ondrop={onViewportDrop}
   onwheel={onWheel}
@@ -739,9 +947,147 @@
       onEdgeLabelBlur={onEdgeLabelBlur}
       onStartEditEdgeLabel={startEditEdgeLabel}
       onStopEditingEdge={() => (editingEdgeId = null)}
+      onNodeContextMenu={onNodeContextMenu}
+      onEdgeContextMenu={onEdgeContextMenu}
     />
   {/if}
 </div>
+
+<ContextMenu
+  open={contextMenu !== null}
+  x={contextMenu?.x ?? 0}
+  y={contextMenu?.y ?? 0}
+  onClose={closeContextMenu}
+>
+  {#if contextMenu?.target.kind === "empty"}
+    {@const worldX = contextMenu.target.worldX}
+    {@const worldY = contextMenu.target.worldY}
+    <button
+      class="vc-context-item"
+      onclick={() => { addTextNodeAt(worldX, worldY); closeContextMenu(); }}
+    >Add text node</button>
+    <button
+      class="vc-context-item"
+      onclick={() => { addGroupAt(worldX, worldY); closeContextMenu(); }}
+    >Add group</button>
+  {:else if contextMenu?.target.kind === "node" && contextNode}
+    {@const node = contextNode}
+    {@const nodeId = node.id}
+    {#if node.type === "text"}
+      <button
+        class="vc-context-item"
+        onclick={() => { startEditText(node as CanvasTextNode); closeContextMenu(); }}
+      >Edit text</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { duplicateNode(nodeId); closeContextMenu(); }}
+      >Duplicate</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { copyTextToClipboard((node as CanvasTextNode).text); closeContextMenu(); }}
+      >Copy text</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { bringNodeToFront(nodeId); closeContextMenu(); }}
+      >Bring to front</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { sendNodeToBack(nodeId); closeContextMenu(); }}
+      >Send to back</button>
+      <div class="vc-context-separator" role="separator"></div>
+      <button
+        class="vc-context-item vc-context-item--danger"
+        onclick={() => { deleteNode(nodeId); closeContextMenu(); }}
+      >Delete</button>
+    {:else if node.type === "file"}
+      <button
+        class="vc-context-item"
+        onclick={() => { void onOpenFileNode(node as CanvasFileNode); closeContextMenu(); }}
+      >Open in editor</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { void openFileNodeInSplit(node as CanvasFileNode); closeContextMenu(); }}
+      >Open in split</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { void revealFileNode(node as CanvasFileNode); closeContextMenu(); }}
+      >Reveal in sidebar</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { copyTextToClipboard((node as CanvasFileNode).file); closeContextMenu(); }}
+      >Copy vault path</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { duplicateNode(nodeId); closeContextMenu(); }}
+      >Duplicate</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { bringNodeToFront(nodeId); closeContextMenu(); }}
+      >Bring to front</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { sendNodeToBack(nodeId); closeContextMenu(); }}
+      >Send to back</button>
+      <div class="vc-context-separator" role="separator"></div>
+      <button
+        class="vc-context-item vc-context-item--danger"
+        onclick={() => { deleteNode(nodeId); closeContextMenu(); }}
+      >Delete</button>
+    {:else if node.type === "link"}
+      <button
+        class="vc-context-item"
+        onclick={() => { onOpenLinkNode(node as CanvasLinkNode); closeContextMenu(); }}
+      >Open link</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { copyTextToClipboard((node as CanvasLinkNode).url); closeContextMenu(); }}
+      >Copy URL</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { duplicateNode(nodeId); closeContextMenu(); }}
+      >Duplicate</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { bringNodeToFront(nodeId); closeContextMenu(); }}
+      >Bring to front</button>
+      <button
+        class="vc-context-item"
+        onclick={() => { sendNodeToBack(nodeId); closeContextMenu(); }}
+      >Send to back</button>
+      <div class="vc-context-separator" role="separator"></div>
+      <button
+        class="vc-context-item vc-context-item--danger"
+        onclick={() => { deleteNode(nodeId); closeContextMenu(); }}
+      >Delete</button>
+    {:else if node.type === "group"}
+      <button
+        class="vc-context-item"
+        onclick={() => { duplicateNode(nodeId); closeContextMenu(); }}
+      >Duplicate</button>
+      <div class="vc-context-separator" role="separator"></div>
+      <button
+        class="vc-context-item vc-context-item--danger"
+        onclick={() => { deleteNode(nodeId); closeContextMenu(); }}
+      >Delete</button>
+    {/if}
+  {:else if contextMenu?.target.kind === "edge" && contextEdge}
+    {@const edge = contextEdge}
+    {@const edgeId = edge.id}
+    <button
+      class="vc-context-item"
+      onclick={() => { startEditEdgeLabel(edge); closeContextMenu(); }}
+    >Edit label</button>
+    <button
+      class="vc-context-item"
+      onclick={() => { flipEdge(edgeId); closeContextMenu(); }}
+    >Flip direction</button>
+    <div class="vc-context-separator" role="separator"></div>
+    <button
+      class="vc-context-item vc-context-item--danger"
+      onclick={() => { deleteEdge(edgeId); closeContextMenu(); }}
+    >Delete</button>
+  {/if}
+</ContextMenu>
 
 
 <style>

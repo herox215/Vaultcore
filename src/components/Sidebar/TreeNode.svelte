@@ -7,6 +7,7 @@
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import type { DirEntry } from "../../types/tree";
   import InlineRename from "./InlineRename.svelte";
+  import ContextMenu from "../common/ContextMenu.svelte";
   import TreeNode from "./TreeNode.svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
@@ -61,11 +62,11 @@
   let renaming = $state(false);
   let isNewFile = $state(false);
 
-  // Context menu state. When opened via right-click we position at the mouse
-  // coordinates; when opened via the three-dots button we leave `menuPos` null
-  // and fall back to the row-anchored CSS default.
+  // Context menu state. Anchored at the cursor point when opened via
+  // right-click, and at the three-dots button's bounding rect when opened
+  // via click. Shared ContextMenu handles overflow-flip + ESC.
   let showContextMenu = $state(false);
-  let menuPos = $state<{ x: number; y: number } | null>(null);
+  let menuPos = $state<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Delete confirmation state
   let showDeleteConfirm = $state(false);
@@ -219,7 +220,9 @@
   // Context menu
   function openContextMenu(e: MouseEvent) {
     e.stopPropagation();
-    menuPos = null;
+    const btn = e.currentTarget as HTMLElement;
+    const rect = btn.getBoundingClientRect();
+    menuPos = { x: rect.left, y: rect.bottom };
     showContextMenu = true;
   }
 
@@ -234,7 +237,6 @@
 
   function closeContextMenu() {
     showContextMenu = false;
-    menuPos = null;
   }
 
   function startRename() {
@@ -623,35 +625,23 @@
   </div>
 
   <!-- Context menu -->
-  {#if showContextMenu}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="vc-context-overlay"
-      onclick={closeContextMenu}
-      role="presentation"
-    ></div>
-    <div
-      class="vc-context-menu"
-      class:vc-context-menu--pointer={menuPos !== null}
-      style={menuPos ? `top: ${menuPos.y}px; left: ${menuPos.x}px` : undefined}
-    >
-      {#if !entry.is_dir}
-        <button class="vc-context-item" onclick={handleOpenInSplit}>Open in split</button>
-      {/if}
-      <button class="vc-context-item" onclick={startRename}>Rename</button>
-      {#if !entry.is_dir}
-        <button class="vc-context-item" onclick={() => void toggleBookmark()}>
-          {isBookmarked ? "Remove bookmark" : "Bookmark"}
-        </button>
-      {/if}
-      <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
-      {#if entry.is_dir}
-        <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
-        <button class="vc-context-item" onclick={handleNewCanvasHere}>New canvas here</button>
-        <button class="vc-context-item" onclick={handleNewFolderHere}>New folder here</button>
-      {/if}
-    </div>
-  {/if}
+  <ContextMenu open={showContextMenu} x={menuPos.x} y={menuPos.y} onClose={closeContextMenu}>
+    {#if !entry.is_dir}
+      <button class="vc-context-item" onclick={handleOpenInSplit}>Open in split</button>
+    {/if}
+    <button class="vc-context-item" onclick={startRename}>Rename</button>
+    {#if !entry.is_dir}
+      <button class="vc-context-item" onclick={() => void toggleBookmark()}>
+        {isBookmarked ? "Remove bookmark" : "Bookmark"}
+      </button>
+    {/if}
+    <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
+    {#if entry.is_dir}
+      <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
+      <button class="vc-context-item" onclick={handleNewCanvasHere}>New canvas here</button>
+      <button class="vc-context-item" onclick={handleNewFolderHere}>New folder here</button>
+    {/if}
+  </ContextMenu>
 
   <!-- Delete confirmation dialog -->
   {#if showDeleteConfirm}
@@ -887,51 +877,6 @@
     color: var(--color-text-muted);
     padding: 4px 8px 4px 32px;
     font-style: italic;
-  }
-
-  /* Context menu */
-  .vc-context-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 99;
-  }
-
-  .vc-context-menu {
-    position: absolute;
-    top: 24px;
-    left: 24px;
-    z-index: 100;
-    min-width: 160px;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
-    padding: 4px 0;
-  }
-
-  /* Right-click positioning uses viewport-relative clientX/clientY. */
-  .vc-context-menu--pointer {
-    position: fixed;
-  }
-
-  .vc-context-item {
-    display: block;
-    width: 100%;
-    padding: 6px 12px;
-    font-size: 14px;
-    text-align: left;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--color-text);
-  }
-
-  .vc-context-item:hover {
-    background: var(--color-accent-bg);
-  }
-
-  .vc-context-item--danger {
-    color: var(--color-error);
   }
 
   /* Confirmation dialog */

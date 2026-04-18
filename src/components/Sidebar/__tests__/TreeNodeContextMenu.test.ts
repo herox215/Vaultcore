@@ -77,9 +77,7 @@ describe("TreeNode right-click context menu (#47)", () => {
     await tick();
     const menu = container.querySelector(".vc-context-menu") as HTMLElement;
     expect(menu).toBeTruthy();
-    // When opened via right-click, menu is positioned at the mouse coords
-    // (via inline style) and uses fixed positioning via the pointer modifier.
-    expect(menu.classList.contains("vc-context-menu--pointer")).toBe(true);
+    // Menu is positioned at the mouse coords via inline style.
     expect(menu.style.top).toBe("80px");
     expect(menu.style.left).toBe("120px");
   });
