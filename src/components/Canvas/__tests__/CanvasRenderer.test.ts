@@ -6,7 +6,7 @@
 // the main view keep agreeing on the DOM contract.
 
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/svelte";
+import { render, fireEvent } from "@testing-library/svelte";
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (p: string) => `asset://localhost/${encodeURIComponent(p)}`,
@@ -126,6 +126,64 @@ describe("CanvasRenderer (#156)", () => {
     expect(img).toBeTruthy();
     expect(img!.getAttribute("src")).toContain("asset://localhost/");
     expect(img!.getAttribute("src")).toContain(encodeURIComponent("/vault/pic.png"));
+  });
+
+  it("fires onNodeContextMenu with the clicked node (#164)", async () => {
+    const onNodeContextMenu = vi.fn();
+    const doc = docOf([
+      { id: "t", type: "text", text: "hi", x: 0, y: 0, width: 100, height: 40 },
+      { id: "f", type: "file", file: "a.md", x: 0, y: 60, width: 100, height: 40 },
+      { id: "l", type: "link", url: "https://x", x: 0, y: 120, width: 100, height: 40 },
+      { id: "g", type: "group", label: "G", x: 0, y: 180, width: 300, height: 200 },
+    ]);
+    const { container } = render(CanvasRenderer, {
+      props: { doc, interactive: true, vaultPath: "/vault", onNodeContextMenu },
+    });
+    for (const id of ["t", "f", "l", "g"]) {
+      const el = container.querySelector(`[data-node-id="${id}"]`) as HTMLElement;
+      await fireEvent.contextMenu(el);
+    }
+    expect(onNodeContextMenu).toHaveBeenCalledTimes(4);
+    const nodeIds = onNodeContextMenu.mock.calls.map((c) => (c[1] as { id: string }).id);
+    expect(nodeIds).toEqual(["t", "f", "l", "g"]);
+  });
+
+  it("fires onEdgeContextMenu when right-clicking the edge hit path (#164)", async () => {
+    const onEdgeContextMenu = vi.fn();
+    const doc = docOf(
+      [
+        { id: "a", type: "text", text: "a", x: 0, y: 0, width: 100, height: 40 },
+        { id: "b", type: "text", text: "b", x: 200, y: 0, width: 100, height: 40 },
+      ],
+      [{ id: "e1", fromNode: "a", toNode: "b" }],
+    );
+    const { container } = render(CanvasRenderer, {
+      props: { doc, interactive: true, onEdgeContextMenu },
+    });
+    const hit = container.querySelector(".vc-canvas-edge-hit") as SVGPathElement;
+    expect(hit).toBeTruthy();
+    await fireEvent.contextMenu(hit);
+    expect(onEdgeContextMenu).toHaveBeenCalledTimes(1);
+    expect((onEdgeContextMenu.mock.calls[0]?.[1] as { id: string }).id).toBe("e1");
+  });
+
+  it("does not fire context-menu callbacks in read-only mode (#164)", async () => {
+    const onNodeContextMenu = vi.fn();
+    const onEdgeContextMenu = vi.fn();
+    const doc = docOf(
+      [
+        { id: "a", type: "text", text: "a", x: 0, y: 0, width: 100, height: 40 },
+        { id: "b", type: "text", text: "b", x: 200, y: 0, width: 100, height: 40 },
+      ],
+      [{ id: "e1", fromNode: "a", toNode: "b" }],
+    );
+    const { container } = render(CanvasRenderer, {
+      props: { doc, interactive: false, onNodeContextMenu, onEdgeContextMenu },
+    });
+    const el = container.querySelector('[data-node-id="a"]') as HTMLElement;
+    await fireEvent.contextMenu(el);
+    expect(onNodeContextMenu).not.toHaveBeenCalled();
+    expect(onEdgeContextMenu).not.toHaveBeenCalled();
   });
 
   it("markdown file nodes use the provided mdPreviews HTML", () => {
