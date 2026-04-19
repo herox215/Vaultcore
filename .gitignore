@@ -31,6 +31,9 @@ coverage
 src-tauri/target
 src-tauri/gen/schemas
 
+# Bench harness (#207) — transient run output; baseline.json stays tracked.
+src-tauri/benches/latest.json
+
 # Reference material (not part of the codebase)
 VaultCore_MVP_Spezifikation_v3.md
 
