@@ -104,19 +104,46 @@ fn ensure_onnxruntime(
     let dest_dir = resources_dir.join("onnxruntime");
     fs::create_dir_all(&dest_dir)?;
     let dest = dest_dir.join(dylib_name);
-    if dest.exists() {
-        return Ok(());
+    if !dest.exists() {
+        println!("cargo:warning=fetching {url}");
+        let archive_bytes = http_get(url)?;
+        verify_sha256(&archive_bytes, sha256)?;
+        if url.ends_with(".tgz") || url.ends_with(".tar.gz") {
+            extract_from_tgz(&archive_bytes, archive_path, &dest)?;
+        } else if url.ends_with(".zip") {
+            extract_from_zip(&archive_bytes, archive_path, &dest)?;
+        } else {
+            return Err(AssetError(format!("unsupported archive extension: {url}")));
+        }
     }
 
-    println!("cargo:warning=fetching {url}");
-    let archive_bytes = http_get(url)?;
-    verify_sha256(&archive_bytes, sha256)?;
-    if url.ends_with(".tgz") || url.ends_with(".tar.gz") {
-        extract_from_tgz(&archive_bytes, archive_path, &dest)?;
-    } else if url.ends_with(".zip") {
-        extract_from_zip(&archive_bytes, archive_path, &dest)?;
-    } else {
-        return Err(AssetError(format!("unsupported archive extension: {url}")));
+    // #242: upstream onnxruntime ships signed by Microsoft (Team UBF8T346G9).
+    // Tauri's bundled host is linker-signed ad-hoc with no Team — the TeamID
+    // mismatch makes AMFI refuse the dlopen at runtime, so embeddings fail
+    // silently in installed builds. Strip the upstream signature back to
+    // ad-hoc so it matches the host's identity. Idempotent: re-running on an
+    // already-ad-hoc dylib is a no-op rewrite. Non-fatal on failure (e.g.
+    // cross-compiling from Linux where `codesign` doesn't exist) — the build
+    // continues and the runtime falls back to the existing signature.
+    if platform.starts_with("macos-") {
+        if let Err(e) = adhoc_resign(&dest) {
+            println!("cargo:warning=macos adhoc re-sign skipped: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn adhoc_resign(path: &Path) -> Result<(), AssetError> {
+    let status = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(path)
+        .status()
+        .map_err(|e| AssetError(format!("spawn codesign: {e}")))?;
+    if !status.success() {
+        return Err(AssetError(format!(
+            "codesign exited with {:?}",
+            status.code()
+        )));
     }
     Ok(())
 }
