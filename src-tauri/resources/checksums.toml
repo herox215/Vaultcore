@@ -34,3 +34,52 @@ url = "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxru
 sha256 = "0b38df9af21834e41e73d602d90db5cb06dbd1ca618948b8f1d66d607ac9f3cd"
 archive_path = "onnxruntime-win-x64-1.23.2/lib/onnxruntime.dll"
 dylib_name = "onnxruntime.dll"
+
+# MiniLM-L6-v2 INT8 ONNX, Apache-2.0 (sentence-transformers).
+# Sources: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+#
+# The ONNX file is per CPU-architecture because the upstream Optimum exports
+# bake architecture-specific quantization kernels into the model graph
+# (avx2 / avx512 / arm64). Tokenizer + config files are architecture-agnostic.
+[model]
+id = "all-MiniLM-L6-v2-int8"
+
+[model.shared.tokenizer_json]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+sha256 = "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037"
+dest_name = "tokenizer.json"
+
+[model.shared.config_json]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json"
+sha256 = "953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41"
+dest_name = "config.json"
+
+[model.shared.tokenizer_config_json]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json"
+sha256 = "acb92769e8195aabd29b7b2137a9e6d6e25c476a4f15aa4355c233426c61576b"
+dest_name = "tokenizer_config.json"
+
+[model.shared.special_tokens_map_json]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/special_tokens_map.json"
+sha256 = "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3"
+dest_name = "special_tokens_map.json"
+
+[model.linux-x86_64]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_quint8_avx2.onnx"
+sha256 = "b941bf19f1f1283680f449fa6a7336bb5600bdcd5f84d10ddc5cd72218a0fd21"
+dest_name = "model.onnx"
+
+[model.macos-x86_64]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_quint8_avx2.onnx"
+sha256 = "b941bf19f1f1283680f449fa6a7336bb5600bdcd5f84d10ddc5cd72218a0fd21"
+dest_name = "model.onnx"
+
+[model.macos-aarch64]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_arm64.onnx"
+sha256 = "4278337fd0ff3c68bfb6291042cad8ab363e1d9fbc43dcb499fe91c871902474"
+dest_name = "model.onnx"
+
+[model.windows-x86_64]
+url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_quint8_avx2.onnx"
+sha256 = "b941bf19f1f1283680f449fa6a7336bb5600bdcd5f84d10ddc5cd72218a0fd21"
+dest_name = "model.onnx"

@@ -76,49 +76,41 @@ fn ensure_assets(resources_dir: &Path) -> Result<(), AssetError> {
         ("windows", "x86_64") => "windows-x86_64",
         _ => {
             return Err(AssetError(format!(
-                "no onnxruntime asset pinned for {target_os}/{target_arch}"
+                "no asset pinned for {target_os}/{target_arch}"
             )));
         }
     };
 
+    ensure_onnxruntime(&manifest, resources_dir, platform)?;
+    ensure_model(&manifest, resources_dir, platform)?;
+    Ok(())
+}
+
+fn ensure_onnxruntime(
+    manifest: &toml::Value,
+    resources_dir: &Path,
+    platform: &str,
+) -> Result<(), AssetError> {
     let entry = manifest
         .get("onnxruntime")
         .and_then(|v| v.get(platform))
         .ok_or_else(|| AssetError(format!("missing onnxruntime.{platform}")))?;
 
-    let url = entry
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AssetError("missing url".into()))?;
-    let sha256 = entry
-        .get("sha256")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AssetError("missing sha256".into()))?;
-    let archive_path = entry
-        .get("archive_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AssetError("missing archive_path".into()))?;
-    let dylib_name = entry
-        .get("dylib_name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AssetError("missing dylib_name".into()))?;
+    let url = required_str(entry, "url")?;
+    let sha256 = required_str(entry, "sha256")?;
+    let archive_path = required_str(entry, "archive_path")?;
+    let dylib_name = required_str(entry, "dylib_name")?;
 
     let dest_dir = resources_dir.join("onnxruntime");
     fs::create_dir_all(&dest_dir)?;
     let dest = dest_dir.join(dylib_name);
-
     if dest.exists() {
-        // Already extracted — accept as-is. We don't re-hash the dylib here
-        // because the archive SHA does not equal the dylib SHA, and dylib
-        // SHA varies across upstream rebuilds. The trust anchor is the
-        // archive SHA at download time.
         return Ok(());
     }
 
     println!("cargo:warning=fetching {url}");
     let archive_bytes = http_get(url)?;
     verify_sha256(&archive_bytes, sha256)?;
-
     if url.ends_with(".tgz") || url.ends_with(".tar.gz") {
         extract_from_tgz(&archive_bytes, archive_path, &dest)?;
     } else if url.ends_with(".zip") {
@@ -128,6 +120,80 @@ fn ensure_assets(resources_dir: &Path) -> Result<(), AssetError> {
     }
     Ok(())
 }
+
+fn ensure_model(
+    manifest: &toml::Value,
+    resources_dir: &Path,
+    platform: &str,
+) -> Result<(), AssetError> {
+    let model_block = match manifest.get("model") {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let id = required_str(model_block, "id")?;
+    let dest_dir = resources_dir.join("models").join(id);
+    fs::create_dir_all(&dest_dir)?;
+
+    // Per-arch ONNX file (renamed to model.onnx so embeddings code stays
+    // architecture-agnostic).
+    let arch_entry = model_block
+        .get(platform)
+        .ok_or_else(|| AssetError(format!("missing model.{platform}")))?;
+    fetch_one_file(arch_entry, &dest_dir)?;
+
+    // Architecture-shared tokenizer + config files.
+    if let Some(shared) = model_block.get("shared").and_then(|v| v.as_table()) {
+        for entry in shared.values() {
+            fetch_one_file(entry, &dest_dir)?;
+        }
+    }
+
+    // Bundle Apache-2.0 LICENSE + NOTICE next to the model files. Both are
+    // required to satisfy the upstream Apache-2.0 attribution clause.
+    write_if_missing(&dest_dir.join("LICENSE"), APACHE_2_0_LICENSE)?;
+    write_if_missing(&dest_dir.join("NOTICE"), MODEL_NOTICE)?;
+    Ok(())
+}
+
+fn fetch_one_file(entry: &toml::Value, dest_dir: &Path) -> Result<(), AssetError> {
+    let url = required_str(entry, "url")?;
+    let sha256 = required_str(entry, "sha256")?;
+    let dest_name = required_str(entry, "dest_name")?;
+    let dest = dest_dir.join(dest_name);
+    if dest.exists() {
+        return Ok(());
+    }
+    println!("cargo:warning=fetching {url}");
+    let bytes = http_get(url)?;
+    verify_sha256(&bytes, sha256)?;
+    write_atomic(&dest, |f| f.write_all(&bytes))?;
+    Ok(())
+}
+
+fn required_str<'a>(v: &'a toml::Value, key: &str) -> Result<&'a str, AssetError> {
+    v.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AssetError(format!("missing field: {key}")))
+}
+
+fn write_if_missing(path: &Path, contents: &str) -> Result<(), AssetError> {
+    if path.exists() {
+        return Ok(());
+    }
+    write_atomic(path, |f| f.write_all(contents.as_bytes()))
+}
+
+const MODEL_NOTICE: &str = "all-MiniLM-L6-v2 (sentence-transformers)\n\
+Copyright sentence-transformers contributors\n\
+Licensed under the Apache License, Version 2.0.\n\
+\n\
+Source: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2\n\
+\n\
+This product bundles the architecture-specific INT8 / UINT8 ONNX export\n\
+of the model (`model_quint8_avx2.onnx` for x86_64,\n`model_qint8_arm64.onnx`\n\
+for aarch64). The original model card and license live upstream.\n";
+
+const APACHE_2_0_LICENSE: &str = include_str!("resources/LICENSE-APACHE-2.0");
 
 fn http_get(url: &str) -> Result<Vec<u8>, AssetError> {
     let resp = ureq::get(url)
