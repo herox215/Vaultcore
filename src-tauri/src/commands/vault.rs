@@ -202,6 +202,20 @@ pub async fn open_vault(
     // (mirrors the IndexCoordinator drop-then-replace pattern above).
     #[cfg(feature = "embeddings")]
     {
+        // #201 PR-B: cancel any in-flight reindex for the prior vault
+        // BEFORE dropping the old coordinator. The reindex worker holds
+        // clones of the prior coordinator's Sender; cancelling lets it
+        // wind down cleanly so the next vault's worker has a fresh
+        // checkpoint to resume from.
+        {
+            let mut guard = state
+                .reindex_handle
+                .lock()
+                .map_err(|_| VaultError::LockPoisoned)?;
+            if let Some(h) = guard.take() {
+                h.cancel();
+            }
+        }
         {
             let mut guard = state
                 .embed_coordinator
@@ -481,4 +495,115 @@ pub async fn merge_external_change(
             merged_content: local,
         }),
     }
+}
+
+// ─── #201 PR-B: reindex IPC ──────────────────────────────────────────────────
+
+/// Start a resumable initial-embed pass over the currently-open vault.
+///
+/// Cancels any prior running reindex before spawning. Progress is
+/// streamed to the frontend via `embed://reindex_progress` Tauri events
+/// (payload: `ReindexProgress`). The call returns as soon as the worker
+/// has been parked on its thread; the frontend drives the lifecycle
+/// entirely through events + `cancel_reindex`.
+///
+/// No-op (returns `Ok`) when the embeddings feature is on but the
+/// coordinator didn't spawn (no bundled model / ORT init failed).
+#[cfg(feature = "embeddings")]
+#[tauri::command]
+pub async fn reindex_vault(
+    app: AppHandle,
+    state: tauri::State<'_, crate::VaultState>,
+) -> Result<(), VaultError> {
+    use tauri::Emitter;
+
+    let vault_root = {
+        let guard = state
+            .current_vault
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        guard.clone().ok_or_else(|| VaultError::VaultUnavailable {
+            path: String::new(),
+        })?
+    };
+
+    // Cancel any prior reindex so the new one owns the checkpoint.
+    {
+        let mut guard = state
+            .reindex_handle
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        if let Some(h) = guard.take() {
+            h.cancel();
+        }
+    }
+
+    let coord_parts = {
+        let guard = state
+            .embed_coordinator
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        guard
+            .as_ref()
+            .map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
+    };
+    let Some((tx, pending)) = coord_parts else {
+        log::warn!("reindex_vault: embedding coordinator unavailable; no-op");
+        return Ok(());
+    };
+
+    let checkpoint_dir = vault_root.join(".vaultcore").join("embeddings");
+    let app_for_progress = app.clone();
+
+    let handle = crate::embeddings::start_reindex(
+        vault_root,
+        checkpoint_dir,
+        move |path, content| {
+            let probe = crate::embeddings::EmbedCoordinator {
+                tx: tx.clone(),
+                pending: std::sync::Arc::clone(&pending),
+            };
+            match probe.enqueue(path.to_path_buf(), content) {
+                Ok(()) => true,
+                // QueueFull is benign: the content already lives in the
+                // pending map and the next successful signal drains it.
+                // The file is "on its way" — record the checkpoint.
+                Err(crate::embeddings::EnqueueError::QueueFull) => true,
+                Err(e) => {
+                    log::warn!("reindex enqueue: {e}");
+                    false
+                }
+            }
+        },
+        move |progress| {
+            if let Err(e) = app_for_progress.emit("embed://reindex_progress", progress) {
+                log::debug!("reindex_progress emit dropped: {e}");
+            }
+        },
+    );
+
+    let mut guard = state
+        .reindex_handle
+        .lock()
+        .map_err(|_| VaultError::LockPoisoned)?;
+    *guard = Some(handle);
+    Ok(())
+}
+
+/// Cooperatively cancel any running reindex. Safe to call when no
+/// reindex is in flight (no-op). The worker flushes its checkpoint
+/// before exiting, so the next `reindex_vault` resumes from there.
+#[cfg(feature = "embeddings")]
+#[tauri::command]
+pub async fn cancel_reindex(
+    state: tauri::State<'_, crate::VaultState>,
+) -> Result<(), VaultError> {
+    let mut guard = state
+        .reindex_handle
+        .lock()
+        .map_err(|_| VaultError::LockPoisoned)?;
+    if let Some(h) = guard.take() {
+        h.cancel();
+    }
+    Ok(())
 }

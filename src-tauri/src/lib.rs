@@ -70,6 +70,12 @@ pub struct VaultState {
     /// `write_file` skips the embed dispatch silently in that case.
     #[cfg(feature = "embeddings")]
     pub embed_coordinator: Arc<Mutex<Option<embeddings::EmbedCoordinator>>>,
+    /// Running reindex worker (#201 PR-B), if any. The `reindex_vault`
+    /// command cancels the previous handle before spawning a new one,
+    /// and `open_vault` cancels on vault switch so the old worker can't
+    /// write to the freshly-replaced coordinator's checkpoint.
+    #[cfg(feature = "embeddings")]
+    pub reindex_handle: Arc<Mutex<Option<Arc<embeddings::ReindexHandle>>>>,
 }
 
 impl Default for VaultState {
@@ -82,6 +88,8 @@ impl Default for VaultState {
             index_coordinator: Arc::new(Mutex::new(None)),
             #[cfg(feature = "embeddings")]
             embed_coordinator: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "embeddings")]
+            reindex_handle: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -107,6 +115,10 @@ pub fn run() {
             commands::vault::get_recent_vaults,
             commands::vault::get_vault_stats,
             commands::vault::repair_vault_index,
+            #[cfg(feature = "embeddings")]
+            commands::vault::reindex_vault,
+            #[cfg(feature = "embeddings")]
+            commands::vault::cancel_reindex,
             commands::files::read_file,
             commands::files::write_file,
             commands::files::create_file,
