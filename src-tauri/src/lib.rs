@@ -65,6 +65,11 @@ pub struct VaultState {
     pub watcher_handle: Arc<Mutex<Option<Debouncer<RecommendedWatcher, RecommendedCache>>>>,
     /// Tantivy IndexCoordinator — created lazily on first open_vault call.
     pub index_coordinator: Arc<Mutex<Option<indexer::IndexCoordinator>>>,
+    /// Embed-on-save coordinator (#196). `None` when the embeddings
+    /// feature is off, the model isn't bundled, or ORT init failed.
+    /// `write_file` skips the embed dispatch silently in that case.
+    #[cfg(feature = "embeddings")]
+    pub embed_coordinator: Arc<Mutex<Option<embeddings::EmbedCoordinator>>>,
 }
 
 impl Default for VaultState {
@@ -75,6 +80,8 @@ impl Default for VaultState {
             vault_reachable: Arc::new(Mutex::new(false)),
             watcher_handle: Arc::new(Mutex::new(None)),
             index_coordinator: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "embeddings")]
+            embed_coordinator: Arc::new(Mutex::new(None)),
         }
     }
 }

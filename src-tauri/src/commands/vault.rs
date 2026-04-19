@@ -195,6 +195,41 @@ pub async fn open_vault(
         *guard = Some(coordinator);
     }
 
+    // --- Embed-on-save coordinator (#196) ---
+    // Spawn after the index coordinator so a vault open without bundled
+    // embedding assets still succeeds. Drop the previous coordinator
+    // before spawning the new one so the old worker shuts down cleanly
+    // (mirrors the IndexCoordinator drop-then-replace pattern above).
+    #[cfg(feature = "embeddings")]
+    {
+        {
+            let mut guard = state
+                .embed_coordinator
+                .lock()
+                .map_err(|_| VaultError::LockPoisoned)?;
+            *guard = None;
+        }
+        let resource_dir = app.path().resource_dir().ok();
+        let svc = crate::embeddings::EmbeddingService::load(resource_dir.as_deref());
+        let chk = crate::embeddings::Chunker::load(resource_dir.as_deref());
+        match (svc, chk) {
+            (Ok(svc), Ok(chk)) => {
+                use std::sync::Arc;
+                let sink: Arc<dyn crate::embeddings::VectorSink> =
+                    Arc::new(crate::embeddings::NoopSink);
+                let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
+                let mut guard = state
+                    .embed_coordinator
+                    .lock()
+                    .map_err(|_| VaultError::LockPoisoned)?;
+                *guard = Some(coord);
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                log::warn!("embed-on-save disabled: {e}");
+            }
+        }
+    }
+
     // --- Spawn file watcher (Plan 04) ---
 
     // Clone the index_tx sender for the watcher so it can dispatch

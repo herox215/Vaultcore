@@ -33,6 +33,16 @@ mod chunking;
 #[cfg(feature = "embeddings")]
 pub use chunking::{Chunk, Chunker, DEFAULT_OVERLAP_TOKENS, MAX_CONTENT_TOKENS};
 
+#[cfg(feature = "embeddings")]
+mod sink;
+#[cfg(feature = "embeddings")]
+pub use sink::{NoopSink, VectorSink};
+
+#[cfg(feature = "embeddings")]
+mod embed_coordinator;
+#[cfg(feature = "embeddings")]
+pub use embed_coordinator::{EmbedCoordinator, EnqueueError, WAKEUP_CAPACITY};
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]
