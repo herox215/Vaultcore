@@ -46,6 +46,10 @@ const K_SIZE = "vaultcore-font-size";
 const K_DAILY_FOLDER = "vaultcore-daily-notes-folder";
 const K_DAILY_FORMAT = "vaultcore-daily-notes-date-format";
 const K_DAILY_TEMPLATE = "vaultcore-daily-notes-template";
+// #201: semantic-search master toggle. When true, the next vault-open
+// triggers an initial reindex; toggling to false cancels any in-flight
+// reindex but does NOT delete prior embeddings.
+const K_SEMANTIC = "vaultcore-semantic-search";
 // Legacy key from the brief attachment-folder era (before embeds). Removed
 // during cleanup so stale entries don't linger in localStorage.
 const K_ATTACHMENT_FOLDER_LEGACY = "vaultcore-attachment-folder";
@@ -60,6 +64,9 @@ export interface SettingsState {
   dailyNotesDateFormat: string;
   /** Vault-relative path to a template file. Empty = no template. */
   dailyNotesTemplate: string;
+  /** #201: master toggle for semantic search. Off by default so the
+   *  reindex never runs until the user opts in. */
+  enableSemanticSearch: boolean;
 }
 
 const initial: SettingsState = {
@@ -69,6 +76,7 @@ const initial: SettingsState = {
   dailyNotesFolder: "",
   dailyNotesDateFormat: DEFAULT_DAILY_DATE_FORMAT,
   dailyNotesTemplate: "",
+  enableSemanticSearch: false,
 };
 
 function isBodyFont(v: unknown): v is BodyFont {
@@ -98,6 +106,7 @@ function readInitial(): SettingsState {
     const dFolder = localStorage.getItem(K_DAILY_FOLDER);
     const dFormat = localStorage.getItem(K_DAILY_FORMAT);
     const dTemplate = localStorage.getItem(K_DAILY_TEMPLATE);
+    const semantic = localStorage.getItem(K_SEMANTIC);
     return {
       fontBody: isBodyFont(b) ? b : initial.fontBody,
       fontMono: isMonoFont(m) ? m : initial.fontMono,
@@ -105,6 +114,7 @@ function readInitial(): SettingsState {
       dailyNotesFolder: sanitizeDailyString(dFolder, initial.dailyNotesFolder),
       dailyNotesDateFormat: sanitizeDailyString(dFormat, initial.dailyNotesDateFormat),
       dailyNotesTemplate: sanitizeDailyString(dTemplate, initial.dailyNotesTemplate),
+      enableSemanticSearch: semantic === "true",
     };
   } catch { return { ...initial }; }
 }
@@ -165,6 +175,13 @@ function createSettingsStore() {
       const v = sanitizeDailyString(value, "");
       _store.update((s) => ({ ...s, dailyNotesTemplate: v }));
       try { localStorage.setItem(K_DAILY_TEMPLATE, v); } catch { /* */ }
+    },
+    /** #201: persist the semantic-search master toggle. The caller owns
+     *  wiring this to `reindexVault` / `cancelReindex`; this setter is
+     *  storage-only so the flag can be read on next launch. */
+    setEnableSemanticSearch(enable: boolean): void {
+      _store.update((s) => ({ ...s, enableSemanticSearch: enable }));
+      try { localStorage.setItem(K_SEMANTIC, String(enable)); } catch { /* */ }
     },
   };
 }
