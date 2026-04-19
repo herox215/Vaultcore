@@ -50,23 +50,27 @@ serde_yml = "0.0.12"
 base64 = "0.22"
 
 # Embeddings stack — gated behind `embeddings` feature.
-# fastembed re-exports `ort` with the `load-dynamic` feature, so libonnxruntime
-# is dlopen'd at runtime from a Tauri-bundled resource (#191) instead of being
-# linked statically. Default features are disabled to suppress the binary
-# downloader (`ort-download-binaries-native-tls`) and unused candle backends.
-fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic"], optional = true }
-# Pin must match fastembed's exact `ort` requirement — fastembed 5.13.2 needs rc.11.
+# `ort` with the `load-dynamic` feature dlopen's libonnxruntime at runtime
+# from a Tauri-bundled resource (#191) instead of linking statically.
+# Default features are disabled to suppress the binary downloader
+# (`ort-download-binaries-native-tls`) and unused candle backends.
+# #205: SessionBuilder is used directly — no fastembed wrapper — so we can
+# set `memory_pattern=false` and opt into an env-level CPU arena allocator
+# with `arena_extend_strategy=kSameAsRequested`.
 ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
-# Direct dep on the same `tokenizers` crate fastembed pulls in transitively
-# (Cargo.lock pins 0.22.2). Same feature set so cargo unifies to one copy.
+ort-sys = { version = "=2.0.0-rc.11", optional = true }
+# ndarray is used to build `[batch, seq]` i64 tensors for MiniLM inputs.
+# Version pinned to ort's requirement so cargo unifies on one copy.
+ndarray = { version = "0.17", optional = true }
 # Used by the embedding chunker (#195) to split notes into overlapping
-# ≤256-token windows before they reach the embedder.
+# ≤256-token windows, and by `EmbeddingService` (#205) to tokenize queries
+# directly without the fastembed wrapper.
 tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
 hnsw_rs = { version = "0.3.4", optional = true, features = ["simdeez_f"] }
 
 [features]
 default = ["embeddings"]
-embeddings = ["dep:fastembed", "dep:ort", "dep:tokenizers", "dep:hnsw_rs"]
+embeddings = ["dep:ort", "dep:ort-sys", "dep:ndarray", "dep:tokenizers", "dep:hnsw_rs"]
 
 [dev-dependencies]
 tempfile = "3"
