@@ -135,19 +135,16 @@ mod orphan_cleanup_tests {
     /// before it is guaranteed to have been applied and the reader reloaded.
     async fn wait_for_drain(coord: &IndexCoordinator) {
         // The channel has capacity 1024, so we can't rely on backpressure.
-        // Instead: poll `reader.searcher().num_docs()` stability — it goes
-        // up on each Commit the writer processes. We send a no-op Commit and
-        // wait briefly, which is enough for the writer's `ReloadPolicy::
-        // OnCommitWithDelay` (default 100ms) to publish the new view.
+        // Send a no-op Commit and wait for the writer's `OnCommitWithDelay`
+        // (default ~100 ms) reader reload to publish. The 2 s ceiling is
+        // generous so the test tolerates CPU pressure from sibling
+        // real-ML embedding tests in the same suite.
         coord
             .tx
             .send(IndexCmd::Commit)
             .await
             .expect("drain Commit send");
-        // OnCommitWithDelay is ~100ms — give it a comfortable margin so the
-        // reader.reload() inside the writer task definitely lands before we
-        // query num_docs.
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
     fn path_hits(index: &Index, reader: &IndexReader, path_str: &str) -> usize {
