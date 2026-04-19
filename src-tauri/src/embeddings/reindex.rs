@@ -61,6 +61,27 @@ pub const CHECKPOINT_VERSION: u32 = 1;
 /// Flush cadence: every N successful enqueues we atomically write the
 /// checkpoint. Trades worst-case re-work (≤ N files) against disk churn.
 const FLUSH_EVERY: usize = 100;
+/// #201 PR-D — reindex reader batch size. The reader accumulates up to
+/// this many (path, content) pairs before committing them to the
+/// embedder in a single `enqueue_bulk` call. Net effect: the embedder's
+/// drain window sees ~N files worth of chunks per wake-up instead of 1-4,
+/// which collapses ORT per-call setup overhead and lets `run_embed_batch`
+/// actually run sub-batches of 64.
+///
+/// 32 is a balance: small enough that a cancel is observed within ~1-2 s
+/// worth of work (cancel flag is polled between batches), large enough
+/// that the embedder gets ~96 chunks to batch across sub-calls.
+const REINDEX_BATCH_SIZE: usize = 32;
+/// #201 PR-D — RAM backpressure. If the embedder's pending map already
+/// holds this many entries, the reader parks briefly before reading more
+/// files. Keeps a 100k-vault reindex from piling the entire set of file
+/// bodies into the map if disk reads outrun ORT inference.
+///
+/// 256 × avg ~5 KB body = ~1.3 MB in-flight — negligible vs the 500 MB
+/// active-semantic budget (see CLAUDE.md). Raising this number trades
+/// lower bursty CPU overhead for more RAM held; lowering it starves the
+/// embedder during I/O-bound phases.
+const PENDING_HIGH_WATER: usize = 256;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -144,23 +165,50 @@ impl ReindexHandle {
 /// and the thread join; drop it without joining to detach, or call
 /// `cancel_and_join` for cooperative shutdown.
 ///
-/// - `enqueue(path, content) -> bool`: invoked for every file whose hash
-///   differs from the checkpoint. The closure must be non-blocking
-///   (wraps `EmbedCoordinator::enqueue`). Returns `true` iff the content
-///   landed — the checkpoint is only updated on `true`, so a transient
-///   `Closed` result will be retried on the next reindex.
+/// - `enqueue_bulk(batch) -> bool`: invoked with up to `REINDEX_BATCH_SIZE`
+///   `(path, content)` pairs whose hashes differ from the checkpoint.
+///   The closure must be non-blocking (wraps `EmbedCoordinator::enqueue_bulk`).
+///   Returns `true` iff the whole batch landed in the pending map —
+///   the checkpoint is only updated on `true`, so a transient `Closed`
+///   result will be retried on the next reindex.
 /// - `on_progress(ReindexProgress)`: invoked on every phase change and
 ///   after every file. Production wiring emits a Tauri event; tests
 ///   push into a Mutex<Vec<_>>.
 pub fn start_reindex<F, P>(
     vault_root: PathBuf,
     checkpoint_dir: PathBuf,
-    enqueue: F,
+    enqueue_bulk: F,
     on_progress: P,
 ) -> Arc<ReindexHandle>
 where
-    F: Fn(&Path, String) -> bool + Send + Sync + 'static,
+    F: Fn(Vec<(PathBuf, String)>) -> bool + Send + Sync + 'static,
     P: Fn(ReindexProgress) + Send + Sync + 'static,
+{
+    start_reindex_with_backpressure(
+        vault_root,
+        checkpoint_dir,
+        enqueue_bulk,
+        on_progress,
+        || 0,
+    )
+}
+
+/// #201 PR-D — same as `start_reindex` but with a RAM-backpressure hook.
+/// `pending_size` is polled after every flush; when it exceeds
+/// `PENDING_HIGH_WATER` the reader sleeps briefly before reading the
+/// next file. Production wiring passes a closure that reads
+/// `EmbedCoordinator::pending_len`; tests may pass `|| 0`.
+pub fn start_reindex_with_backpressure<F, P, B>(
+    vault_root: PathBuf,
+    checkpoint_dir: PathBuf,
+    enqueue_bulk: F,
+    on_progress: P,
+    pending_size: B,
+) -> Arc<ReindexHandle>
+where
+    F: Fn(Vec<(PathBuf, String)>) -> bool + Send + Sync + 'static,
+    P: Fn(ReindexProgress) + Send + Sync + 'static,
+    B: Fn() -> usize + Send + Sync + 'static,
 {
     let cancel = Arc::new(AtomicBool::new(false));
     let handle = Arc::new(ReindexHandle {
@@ -171,7 +219,14 @@ where
     let join = std::thread::Builder::new()
         .name("vc-reindex".into())
         .spawn(move || {
-            run(vault_root, checkpoint_dir, cancel, enqueue, on_progress);
+            run(
+                vault_root,
+                checkpoint_dir,
+                cancel,
+                enqueue_bulk,
+                on_progress,
+                pending_size,
+            );
         })
         .expect("spawn reindex thread");
 
@@ -179,15 +234,17 @@ where
     handle
 }
 
-fn run<F, P>(
+fn run<F, P, B>(
     vault_root: PathBuf,
     checkpoint_dir: PathBuf,
     cancel: Arc<AtomicBool>,
-    enqueue: F,
+    enqueue_bulk: F,
     on_progress: P,
+    pending_size: B,
 ) where
-    F: Fn(&Path, String) -> bool,
+    F: Fn(Vec<(PathBuf, String)>) -> bool,
     P: Fn(ReindexProgress),
+    B: Fn() -> usize,
 {
     let _ = std::fs::create_dir_all(&checkpoint_dir);
     let checkpoint_path = checkpoint_dir.join(CHECKPOINT_FILE);
@@ -223,6 +280,13 @@ fn run<F, P>(
     let mut embedded = 0usize;
     let mut since_flush = 0usize;
 
+    // Pending batch: files whose hash is stale and are queued to the
+    // embedder on the next flush. Tuple form: (abs_path, rel_key, content,
+    // hash). `hash` is kept here so we only write it to the checkpoint
+    // once the bulk enqueue reports success.
+    let mut batch: Vec<(PathBuf, String, String, String)> =
+        Vec::with_capacity(REINDEX_BATCH_SIZE);
+
     // Initial Index emission so the frontend can swap the statusbar from
     // "Scanning" to "0 / total" before the first file completes.
     on_progress(ReindexProgress {
@@ -234,21 +298,61 @@ fn run<F, P>(
         eta_seconds: None,
     });
 
+    let flush = |batch: &mut Vec<(PathBuf, String, String, String)>,
+                     checkpoint: &mut CheckpointFile,
+                     embedded: &mut usize,
+                     since_flush: &mut usize| {
+        if batch.is_empty() {
+            return;
+        }
+        let items: Vec<(PathBuf, String)> = batch
+            .iter()
+            .map(|(abs, _, c, _)| (abs.clone(), c.clone()))
+            .collect();
+        let ok = enqueue_bulk(items);
+        if ok {
+            for (_abs, rel_key, _content, hash) in batch.drain(..) {
+                checkpoint.entries.insert(rel_key, hash);
+                *embedded += 1;
+                *since_flush += 1;
+            }
+        } else {
+            // Enqueue failed — do NOT write the checkpoint. The next
+            // reindex run will re-hash these files and retry. Drain so
+            // the buffer is empty for the next iteration; the (path,
+            // content) tuples drop unused.
+            batch.clear();
+        }
+    };
+
     for abs in files {
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let rel_key = rel_key(&vault_root, &abs);
-        let (did_skip, did_embed) = process_file(&abs, &rel_key, &mut checkpoint, &enqueue);
-        if did_skip {
-            skipped += 1;
+        // RAM backpressure: park the reader while the embedder drains.
+        // Poll the cancel flag inside the park loop so a cancel during a
+        // full pending map is observed within ~20 ms.
+        while pending_size() > PENDING_HIGH_WATER {
+            if cancel.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        if did_embed {
-            embedded += 1;
-            since_flush += 1;
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
+        let rel_key_str = rel_key(&vault_root, &abs);
+        match classify_file(&abs, &rel_key_str, &checkpoint) {
+            FileAction::Skip => skipped += 1,
+            FileAction::Embed { content, hash } => {
+                batch.push((abs.clone(), rel_key_str, content, hash));
+                if batch.len() >= REINDEX_BATCH_SIZE {
+                    flush(&mut batch, &mut checkpoint, &mut embedded, &mut since_flush);
+                }
+            }
+            FileAction::Error => {}
         }
         done += 1;
-
         emit_progress(&on_progress, done, total, skipped, embedded, started);
 
         if since_flush >= FLUSH_EVERY {
@@ -257,6 +361,11 @@ fn run<F, P>(
             }
             since_flush = 0;
         }
+    }
+
+    // Drain the tail batch (files left over after the last full-batch flush).
+    if !cancel.load(Ordering::Acquire) {
+        flush(&mut batch, &mut checkpoint, &mut embedded, &mut since_flush);
     }
 
     if let Err(e) = save_checkpoint(&checkpoint_path, &checkpoint) {
@@ -278,45 +387,38 @@ fn run<F, P>(
     });
 }
 
-/// Hash, compare, enqueue. Returns `(did_skip, did_embed)`. Exactly one
-/// of the two is true when the file was readable; both false on read
-/// error or non-UTF-8 content (we log and move on).
-fn process_file<F>(
-    abs: &Path,
-    rel_key: &str,
-    checkpoint: &mut CheckpointFile,
-    enqueue: &F,
-) -> (bool, bool)
-where
-    F: Fn(&Path, String) -> bool,
-{
+/// Outcome of the cheap read + hash step. `Skip` and `Error` are the
+/// terminal states; `Embed` hands the decoded content back to the reader
+/// so it can be accumulated into the next batch without re-reading.
+enum FileAction {
+    Skip,
+    Embed { content: String, hash: String },
+    Error,
+}
+
+/// Read a file's bytes, hash them, and decide what to do. No side effects:
+/// the reader owns the checkpoint write and the bulk enqueue so that a
+/// failed batch doesn't leak half-applied state.
+fn classify_file(abs: &Path, rel_key: &str, checkpoint: &CheckpointFile) -> FileAction {
     let bytes = match std::fs::read(abs) {
         Ok(b) => b,
         Err(e) => {
             log::warn!("reindex: read {} failed: {e}", abs.display());
-            return (false, false);
+            return FileAction::Error;
         }
     };
     let hash = hash_bytes(&bytes);
-
     if checkpoint.entries.get(rel_key) == Some(&hash) {
-        return (true, false);
+        return FileAction::Skip;
     }
-
     let content = match String::from_utf8(bytes) {
         Ok(s) => s,
         Err(e) => {
             log::warn!("reindex: {} not utf-8 ({e}); skipping", abs.display());
-            return (false, false);
+            return FileAction::Error;
         }
     };
-
-    if enqueue(abs, content) {
-        checkpoint.entries.insert(rel_key.to_string(), hash);
-        (false, true)
-    } else {
-        (false, false)
-    }
+    FileAction::Embed { content, hash }
 }
 
 fn emit_progress<P: Fn(ReindexProgress)>(
@@ -446,12 +548,11 @@ mod tests {
         let handle = start_reindex(
             vault.to_path_buf(),
             ckpt_dir.to_path_buf(),
-            move |path, content| {
-                enqueue_rec
-                    .enqueued
-                    .lock()
-                    .unwrap()
-                    .push((path.to_path_buf(), content));
+            move |batch| {
+                let mut g = enqueue_rec.enqueued.lock().unwrap();
+                for (p, c) in batch {
+                    g.push((p, c));
+                }
                 true
             },
             move |p| progress_rec.progress.lock().unwrap().push(p),
@@ -593,13 +694,12 @@ mod tests {
         let handle = start_reindex(
             vault.path().to_path_buf(),
             ckpt.path().to_path_buf(),
-            move |path, content| {
-                std::thread::sleep(Duration::from_millis(2));
-                enqueue_rec
-                    .enqueued
-                    .lock()
-                    .unwrap()
-                    .push((path.to_path_buf(), content));
+            move |batch| {
+                std::thread::sleep(Duration::from_millis(2 * batch.len() as u64));
+                let mut g = enqueue_rec.enqueued.lock().unwrap();
+                for (p, c) in batch {
+                    g.push((p, c));
+                }
                 true
             },
             move |p| progress_rec.progress.lock().unwrap().push(p),
@@ -633,6 +733,233 @@ mod tests {
         );
     }
 
+    /// #201 PR-D — RAM backpressure. While the pending_size() closure
+    /// reports a saturated map, the reader must NOT read new files;
+    /// once the closure reports below-high-water, the reader resumes.
+    #[test]
+    fn backpressure_pauses_reader_until_pending_drains() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+
+        let vault = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        for i in 0..50 {
+            write_md(vault.path(), &format!("n-{i:04}.md"), "body");
+        }
+
+        let fake_pending = Arc::new(AtomicUsize::new(10_000)); // far above high-water
+        let enqueued = Arc::new(AtomicUsize::new(0));
+        let released = Arc::new(AtomicBool::new(false));
+
+        let fp_cb = Arc::clone(&fake_pending);
+        let enq_cb = Arc::clone(&enqueued);
+        let handle = start_reindex_with_backpressure(
+            vault.path().to_path_buf(),
+            ckpt.path().to_path_buf(),
+            move |batch| {
+                enq_cb.fetch_add(batch.len(), AtomicOrdering::SeqCst);
+                true
+            },
+            |_p| {},
+            move || fp_cb.load(AtomicOrdering::SeqCst),
+        );
+
+        // Give the reader a beat to park.
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            enqueued.load(AtomicOrdering::SeqCst),
+            0,
+            "reader must not enqueue while pending is saturated"
+        );
+
+        // Release: drop fake pending below high-water.
+        fake_pending.store(0, AtomicOrdering::SeqCst);
+        released.store(true, AtomicOrdering::SeqCst);
+        handle.join();
+
+        assert_eq!(
+            enqueued.load(AtomicOrdering::SeqCst),
+            50,
+            "every file must reach the embedder once backpressure lifts"
+        );
+    }
+
+    /// #201 PR-D — the reader must submit work in bulks, not per-file.
+    /// A regression to per-file `enqueue` (one closure call per md) would
+    /// make the bulk API worthless and dramatically slow reindex on
+    /// hardware where ORT inference isn't the bottleneck.
+    #[test]
+    fn reader_flushes_in_bulks_not_per_file() {
+        let vault = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        // Enough files to guarantee at least one full batch plus a tail.
+        let n_files = REINDEX_BATCH_SIZE + 5;
+        for i in 0..n_files {
+            write_md(vault.path(), &format!("n-{i:04}.md"), &format!("body {i}"));
+        }
+
+        let batch_sizes = Arc::new(Mutex::new(Vec::<usize>::new()));
+        let batch_sizes_cb = Arc::clone(&batch_sizes);
+        let handle = start_reindex(
+            vault.path().to_path_buf(),
+            ckpt.path().to_path_buf(),
+            move |batch| {
+                batch_sizes_cb.lock().unwrap().push(batch.len());
+                true
+            },
+            |_p| {},
+        );
+        handle.join();
+
+        let sizes = batch_sizes.lock().unwrap();
+        assert!(
+            !sizes.is_empty(),
+            "enqueue_bulk must be called at least once"
+        );
+        // Full-size batch appears at least once (the head of the run).
+        assert!(
+            sizes.iter().any(|&s| s == REINDEX_BATCH_SIZE),
+            "expected at least one full-size batch, got sizes {sizes:?}"
+        );
+        // Total items across calls equals the file count.
+        let total: usize = sizes.iter().sum();
+        assert_eq!(total, n_files);
+        // No call has more than REINDEX_BATCH_SIZE items.
+        assert!(sizes.iter().all(|&s| s <= REINDEX_BATCH_SIZE));
+    }
+
+    /// #201 PR-D — throughput bench. Generates a synthetic vault of N
+    /// files (~500 words each) and measures end-to-end wall-clock to
+    /// embed them all via the real `EmbeddingService` + `Chunker` +
+    /// `HnswSink` + `EmbedCoordinator`. Asserts a files-per-second floor.
+    ///
+    /// Two sizes:
+    /// - default: 200 files (runs in ~30-60s on a modern laptop)
+    /// - `LARGE_REINDEX_BENCH=1`: 2000 files (~5-10 min), predictive for
+    ///   the 100k AC via linear extrapolation.
+    ///
+    /// `#[ignore]` so `cargo test` never picks it up. Run with:
+    /// `cargo test --features embeddings -- --ignored bench_reindex_throughput --nocapture`
+    ///
+    /// Throughput is bounded by ORT inference at intra=2/inter=1 (#197);
+    /// this bench measures the *wrapping* pipeline overhead, not ORT
+    /// itself. The floor is set to catch regressions in the reader loop,
+    /// chunking, enqueue path, and sink store. Do NOT raise the ORT
+    /// thread caps to "improve" this number.
+    #[test]
+    #[ignore]
+    fn bench_reindex_throughput() {
+        use crate::embeddings::{Chunker, EmbedCoordinator, EmbeddingService, HnswSink, VectorSink};
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        let Some(svc) = EmbeddingService::load(None).ok() else {
+            eprintln!("SKIP: embeddings not bundled");
+            return;
+        };
+        let Some(chk) = Chunker::load(None).ok() else {
+            eprintln!("SKIP: chunker assets not bundled");
+            return;
+        };
+
+        let n_files: usize = if std::env::var("LARGE_REINDEX_BENCH").is_ok() {
+            2000
+        } else {
+            200
+        };
+
+        let vault = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+        let sink_dir = tempfile::tempdir().unwrap();
+
+        // ~500 word markdown body — realistic note size. Vary seeds so
+        // embeddings aren't identical (would short-circuit HNSW).
+        let body_template: String = (0..500).map(|i| format!("word{} ", i)).collect();
+        let gen_start = Instant::now();
+        for i in 0..n_files {
+            let body = format!("# Note {i}\n\n{body_template} unique-{i}\n");
+            write_md(vault.path(), &format!("n-{i:05}.md"), &body);
+        }
+        eprintln!("generated {n_files} files in {:?}", gen_start.elapsed());
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let processed = Arc::new(AtomicUsize::new(0));
+        let sink_processed = Arc::clone(&processed);
+
+        rt.block_on(async move {
+            // Counting wrapper around HnswSink so we can wait for all N
+            // files to actually reach the sink (not just the enqueue).
+            struct CountingHnswSink {
+                inner: HnswSink,
+                counter: Arc<AtomicUsize>,
+            }
+            impl VectorSink for CountingHnswSink {
+                fn store(&self, path: &Path, pairs: Vec<(crate::embeddings::Chunk, Vec<f32>)>) {
+                    self.inner.store(path, pairs);
+                    self.counter.fetch_add(1, AtomicOrdering::SeqCst);
+                }
+                fn delete(&self, path: &Path) {
+                    self.inner.delete(path);
+                }
+            }
+
+            let sink: Arc<dyn VectorSink> = Arc::new(CountingHnswSink {
+                inner: HnswSink::open(sink_dir.path().to_path_buf(), n_files),
+                counter: Arc::clone(&sink_processed),
+            });
+            let coord = Arc::new(EmbedCoordinator::spawn(svc, chk, sink));
+            let coord_enq = Arc::clone(&coord);
+
+            let total_start = Instant::now();
+            let handle = start_reindex(
+                vault.path().to_path_buf(),
+                ckpt.path().to_path_buf(),
+                move |batch| match coord_enq.enqueue_bulk(batch) {
+                    Ok(_) => true,
+                    Err(_) => false,
+                },
+                |_p| {},
+            );
+            handle.join();
+
+            // Wait for the embedder to drain every file into the sink.
+            let timeout = std::time::Duration::from_secs(600);
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if processed.load(AtomicOrdering::SeqCst) >= n_files {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let done = processed.load(AtomicOrdering::SeqCst);
+            let elapsed = total_start.elapsed();
+            let per_sec = done as f64 / elapsed.as_secs_f64();
+            eprintln!(
+                "\n=== #201 PR-D bench ===\n\
+                 files:      {done} / {n_files}\n\
+                 wall-clock: {:?}\n\
+                 throughput: {per_sec:.1} files/sec\n\
+                 extrap. 100k: {:.1} min\n",
+                elapsed,
+                (100_000.0 / per_sec) / 60.0,
+            );
+
+            assert_eq!(done, n_files, "every file must reach the sink");
+            // Floor: 3.0 files/sec. On the 100k target this would be
+            // ~9.3 hours — far above the 60 min AC — so any run passing
+            // this floor leaves generous headroom. Tighter floor post-
+            // tuning in a follow-up.
+            const FLOOR_FILES_PER_SEC: f64 = 3.0;
+            assert!(
+                per_sec >= FLOOR_FILES_PER_SEC,
+                "throughput regression: {per_sec:.2} files/sec < floor {FLOOR_FILES_PER_SEC}"
+            );
+        });
+    }
+
     /// Lost-enqueue guard: if the caller's enqueue closure returns false
     /// (simulating `EmbedCoordinator::enqueue` → `Closed`), the checkpoint
     /// must NOT record that file, so the next run retries it.
@@ -648,12 +975,11 @@ mod tests {
         let handle = start_reindex(
             vault.path().to_path_buf(),
             ckpt.path().to_path_buf(),
-            move |path, content| {
-                enqueue_rec
-                    .enqueued
-                    .lock()
-                    .unwrap()
-                    .push((path.to_path_buf(), content));
+            move |batch| {
+                let mut g = enqueue_rec.enqueued.lock().unwrap();
+                for (p, c) in batch {
+                    g.push((p, c));
+                }
                 false // simulate Closed
             },
             move |p| progress_rec.progress.lock().unwrap().push(p),
