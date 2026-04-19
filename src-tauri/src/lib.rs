@@ -5,6 +5,9 @@ pub mod watcher;
 pub mod merge;
 pub mod indexer;
 
+#[cfg(feature = "embeddings")]
+pub mod embeddings;
+
 #[cfg(test)]
 mod tests;
 
