@@ -138,4 +138,43 @@ describe("settingsStore", () => {
     expect(state.dailyNotesDateFormat).toBe("YYYY-MM-DD");
     expect(state.dailyNotesTemplate).toBe("");
   });
+
+  // ─── Semantic search (#201) ──────────────────────────────────────────────
+  it("Test 13: enableSemanticSearch defaults to false", async () => {
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    expect(get(settingsStore).enableSemanticSearch).toBe(false);
+  });
+
+  it("Test 14: setEnableSemanticSearch persists 'true' / 'false' to localStorage", async () => {
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    settingsStore.setEnableSemanticSearch(true);
+    expect(get(settingsStore).enableSemanticSearch).toBe(true);
+    expect(localStorage.getItem("vaultcore-semantic-search")).toBe("true");
+    settingsStore.setEnableSemanticSearch(false);
+    expect(get(settingsStore).enableSemanticSearch).toBe(false);
+    expect(localStorage.getItem("vaultcore-semantic-search")).toBe("false");
+  });
+
+  it("Test 15: init reads stored 'true' value and applies it; only exact 'true' counts", async () => {
+    // Part A: stored "true" → enabled
+    localStorage.setItem("vaultcore-semantic-search", "true");
+    const { settingsStore } = await import("../../store/settingsStore");
+    const { get } = await import("svelte/store");
+    settingsStore.init();
+    expect(get(settingsStore).enableSemanticSearch).toBe(true);
+
+    // Part B: any other value (including typo "TRUE" or empty) → disabled.
+    // Guards against a tampered localStorage flipping the flag on via
+    // a truthy-but-non-canonical string.
+    vi.resetModules();
+    setupLocalStorage();
+    localStorage.setItem("vaultcore-semantic-search", "TRUE");
+    const { settingsStore: s2 } = await import("../../store/settingsStore");
+    s2.init();
+    expect(get(s2).enableSemanticSearch).toBe(false);
+  });
 });

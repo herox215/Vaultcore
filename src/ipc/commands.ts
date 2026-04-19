@@ -520,3 +520,33 @@ export async function renderNoteHtml(
     throw normalizeError(e);
   }
 }
+
+// ── Semantic search (#201) ───────────────────────────────────────────────────
+
+/**
+ * Kick off the resumable initial-embed pass over the currently-open vault.
+ * The backend runs a background worker that walks every `.md` file, hashes
+ * it, and enqueues stale/new files through the embed pipeline. Progress is
+ * emitted via the `embed://reindex_progress` Tauri event — subscribe with
+ * {@link listenReindexProgress}.
+ *
+ * Returns immediately (the command just parks the worker thread). No-op if
+ * the backend was built without the embeddings feature or the bundled
+ * model is missing.
+ */
+export async function reindexVault(): Promise<void> {
+  try {
+    await invoke<void>("reindex_vault");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/** Cancel the in-flight reindex (no-op if none is running). */
+export async function cancelReindex(): Promise<void> {
+  try {
+    await invoke<void>("cancel_reindex");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
