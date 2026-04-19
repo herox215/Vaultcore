@@ -1,9 +1,10 @@
 // Unit tests for the tag_index module (Tasks 1 + 2, Plan 05-01).
 //
-// Tests 1–11: extract_inline_tags, extract_yaml_tags, TagIndex update/remove/list.
-// Tests 12–15 (Task 2): watcher dispatch + serde shape.
+// Tests 1–5: extract_inline_tags (YAML tests live in `indexer::frontmatter`).
+// Tests 10–11: TagIndex update/remove/list semantics.
+// Tests 12–15: watcher dispatch + serde shape.
 
-use crate::indexer::tag_index::{extract_inline_tags, extract_yaml_tags, TagIndex, TagUsage};
+use crate::indexer::tag_index::{extract_inline_tags, TagIndex, TagUsage};
 
 // ── Test 1: inline flat tags ───────────────────────────────────────────────────
 
@@ -48,40 +49,30 @@ fn test_inline_case_fold_dedupe() {
     assert_eq!(tags, vec!["rust"]);
 }
 
-// ── Test 6: YAML list tags ─────────────────────────────────────────────────────
+// Tests 6–9 (pure `extract_yaml_tags`) moved to `src-tauri/src/indexer/frontmatter.rs`
+// (same assertions live in that module's `#[cfg(test)] mod tests`) — the wrapper in
+// `tag_index.rs` was removed per BUG-05.1 so the duplicate assertions no longer
+// have a stable import path here.
+
+// ── Test 9a: TagIndex ignores YAML frontmatter tags (BUG-05.1 regression guard) ─
 
 #[test]
-fn test_yaml_list_tags() {
-    let content = "---\ntags: [a, b, nested/tag]\n---\nbody";
-    let tags = extract_yaml_tags(content);
-    assert_eq!(tags, vec!["a", "b", "nested/tag"]);
-}
+fn test_tag_index_does_not_surface_yaml_tags() {
+    // Content has BOTH a YAML `tags:` list AND an inline #hash tag. Per BUG-05.1
+    // the YAML tags must NOT be reflected in list_tags(); only the inline tag
+    // should surface.
+    let mut idx = TagIndex::new();
+    idx.update_file(
+        "note.md",
+        "---\ntags: [yaml_one, yaml_two]\n---\nbody with #inline_only",
+    );
 
-// ── Test 7: YAML scalar tag ────────────────────────────────────────────────────
-
-#[test]
-fn test_yaml_scalar_tag() {
-    let content = "---\ntags: single\n---\n...";
-    let tags = extract_yaml_tags(content);
-    assert_eq!(tags, vec!["single"]);
-}
-
-// ── Test 8: YAML absent tags key ──────────────────────────────────────────────
-
-#[test]
-fn test_yaml_absent_tags() {
-    let content = "---\ntitle: foo\n---\n...";
-    let tags = extract_yaml_tags(content);
-    assert_eq!(tags, Vec::<String>::new());
-}
-
-// ── Test 9: no frontmatter ────────────────────────────────────────────────────
-
-#[test]
-fn test_yaml_no_frontmatter() {
-    let content = "no dashes\ntags: [a]";
-    let tags = extract_yaml_tags(content);
-    assert_eq!(tags, Vec::<String>::new());
+    let names: Vec<String> = idx.list_tags().into_iter().map(|u| u.tag).collect();
+    assert_eq!(
+        names,
+        vec!["inline_only".to_string()],
+        "YAML frontmatter tags must not leak into TagIndex (BUG-05.1)"
+    );
 }
 
 // ── Test 10: TagIndex update + remove ─────────────────────────────────────────

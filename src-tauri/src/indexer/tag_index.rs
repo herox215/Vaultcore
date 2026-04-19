@@ -87,23 +87,13 @@ pub fn extract_inline_tag_occurrences(content: &str) -> Vec<String> {
         .collect()
 }
 
-// ── extract_yaml_tags ──────────────────────────────────────────────────────────
-
-/// Extract YAML frontmatter `tags` (list OR scalar).
-///
-/// Returns `[]` if:
-/// - The document has no frontmatter (`---` header)
-/// - Frontmatter has no `tags` key
-/// - The YAML is malformed (T-05-01-01 mitigation: `from_str` returns Err → `[]`)
-///
-/// Delegates to the shared frontmatter reader (`super::frontmatter`). Public
-/// contract is semantically identical to the pre-refactor implementation —
-/// existing tag tests still exercise this code path.
-pub fn extract_yaml_tags(content: &str) -> Vec<String> {
-    super::frontmatter::extract_yaml_tags(content)
-}
-
 // ── TagIndex ───────────────────────────────────────────────────────────────────
+//
+// YAML frontmatter tag extraction was descoped per user UAT (BUG-05.1). The
+// implementation lives in `super::frontmatter` — `parse_frontmatter().tags` /
+// `extract_yaml_tags()` — where aliases also come from; it is deliberately
+// not called from this module, and there is no wrapper here to re-enable it
+// by accident. See `TagIndex::update_file` below for the rationale.
 
 /// In-memory tag adjacency index.
 ///
@@ -130,8 +120,9 @@ impl TagIndex {
     /// Idempotent: calling twice for the same file replaces the previous entries.
     /// BUG-05.1 FIXES:
     /// - YAML frontmatter tag extraction (TAG-02) descoped per user UAT feedback.
-    ///   Only inline `#tag` / `#parent/child` tags are collected. `extract_yaml_tags`
-    ///   remains in the module as dead code for future re-enablement.
+    ///   Only inline `#tag` / `#parent/child` tags are collected. The YAML helper
+    ///   lives in `super::frontmatter`; re-enabling it here would require an
+    ///   explicit follow-up ticket (see tests/tag_index.rs regression guard).
     /// - Counts are now total-occurrence (not per-file unique). Writing `#test` three
     ///   times in one file yields `test (3)` in the tag panel — matches user expectation.
     pub fn update_file(&mut self, rel_path: &str, content: &str) {
