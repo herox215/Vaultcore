@@ -148,9 +148,11 @@ fn ensure_model(
         }
     }
 
-    // Bundle Apache-2.0 LICENSE + NOTICE next to the model files. Both are
-    // required to satisfy the upstream Apache-2.0 attribution clause.
-    write_if_missing(&dest_dir.join("LICENSE"), APACHE_2_0_LICENSE)?;
+    // Bundle model LICENSE + NOTICE. e5-small is MIT (different from the
+    // Apache-2.0 MiniLM predecessor); ship the MIT text verbatim next to the
+    // binary so the copyright + permission notice travel with the model as
+    // the license requires.
+    write_if_missing(&dest_dir.join("LICENSE"), MIT_LICENSE)?;
     write_if_missing(&dest_dir.join("NOTICE"), MODEL_NOTICE)?;
     Ok(())
 }
@@ -183,17 +185,19 @@ fn write_if_missing(path: &Path, contents: &str) -> Result<(), AssetError> {
     write_atomic(path, |f| f.write_all(contents.as_bytes()))
 }
 
-const MODEL_NOTICE: &str = "all-MiniLM-L6-v2 (sentence-transformers)\n\
-Copyright sentence-transformers contributors\n\
-Licensed under the Apache License, Version 2.0.\n\
+const MODEL_NOTICE: &str = "multilingual-e5-small\n\
+Copyright (c) 2023 Liang Wang, Nan Yang, Xiaolong Huang, Linjun Yang,\n\
+Rangan Majumder, Furu Wei (Microsoft / intfloat).\n\
+Licensed under the MIT License.\n\
 \n\
-Source: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2\n\
+Source (upstream):   https://huggingface.co/intfloat/multilingual-e5-small\n\
+Source (ONNX INT8):  https://huggingface.co/Xenova/multilingual-e5-small\n\
 \n\
-This product bundles the architecture-specific INT8 / UINT8 ONNX export\n\
-of the model (`model_quint8_avx2.onnx` for x86_64,\n`model_qint8_arm64.onnx`\n\
-for aarch64). The original model card and license live upstream.\n";
+This product bundles the portable INT8 ONNX export (`model_quantized.onnx`)\n\
+from Xenova's repackaging, which runs on every VaultCore target CPU\n\
+(x86_64 + aarch64). The original model card and license live upstream.\n";
 
-const APACHE_2_0_LICENSE: &str = include_str!("resources/LICENSE-APACHE-2.0");
+const MIT_LICENSE: &str = include_str!("resources/LICENSE-MIT");
 
 fn http_get(url: &str) -> Result<Vec<u8>, AssetError> {
     let resp = ureq::get(url)
