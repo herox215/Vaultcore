@@ -214,6 +214,66 @@ fn embed_hook_does_not_regress_save_rtt() {
     });
 }
 
+/// AC for #197 ("Bulk-Write-Stresstest, 100 Saves in 10 s, no p99
+/// keystroke-latency regression"). Spreads 100 saves over ~10 s with a
+/// **real** EmbeddingService so the ORT thread-pool cap (`intra=2,
+/// inter=1`) is genuinely exercised under sustained inference load. The
+/// assertion is a comfortable absolute p99 bound rather than a delta —
+/// 50 ms is well below the spec's 100 ms "open note" budget and gives
+/// CI noise plenty of headroom while still tripping on a real
+/// regression (e.g. fastembed defaulting back to per-session unbounded
+/// threads).
+///
+/// `#[ignore]` because real ML inference is slow and CPU-heavy — opt
+/// into it explicitly with `cargo test -- --ignored`.
+#[cfg(feature = "embeddings")]
+#[test]
+#[ignore]
+fn save_rtt_p99_under_bulk_embed_pressure() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    tokio_test_block_on(async {
+        let Some(svc) = crate::embeddings::EmbeddingService::load(None).ok() else {
+            eprintln!("SKIP: embeddings not bundled");
+            return;
+        };
+        let Some(chk) = crate::embeddings::Chunker::load(None).ok() else {
+            eprintln!("SKIP: tokenizer not bundled");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let state = state_with_vault(dir.path());
+        {
+            let sink: Arc<dyn crate::embeddings::VectorSink> =
+                Arc::new(crate::embeddings::NoopSink);
+            let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
+            *state.embed_coordinator.lock().unwrap() = Some(coord);
+        }
+
+        const N: usize = 100;
+        const TOTAL: Duration = Duration::from_secs(10);
+        let inter_save = TOTAL / N as u32;
+        let mut samples = Vec::with_capacity(N);
+        for i in 0..N {
+            let path = dir.path().join(format!("bulk-{i}.md"));
+            let body = format!("bulk save {i}\n").repeat(40);
+            let t0 = Instant::now();
+            write_file_impl(&state, path.to_string_lossy().into_owned(), body)
+                .await
+                .unwrap();
+            samples.push(t0.elapsed());
+            tokio::time::sleep(inter_save).await;
+        }
+        samples.sort();
+        let p99 = samples[(N as f64 * 0.99) as usize - 1];
+        assert!(
+            p99 < Duration::from_millis(50),
+            "save RTT p99 = {p99:?} exceeded 50 ms budget under sustained embed pressure",
+        );
+    });
+}
+
 // --- _impl helpers: mirror the tauri::command bodies ---------------------
 //
 // Keep these byte-for-byte logically identical to commands/files.rs.
