@@ -40,14 +40,17 @@ pub enum EmbeddingError {
 const ENV_DYLIB: &str = "ORT_DYLIB_PATH";
 const ENV_MODEL_DIR: &str = "VAULTCORE_MODEL_DIR";
 
-/// Platform-specific dylib filename. Bundled under `resources/onnxruntime/`.
+/// Platform-specific dylib filename as bundled by build.rs into
+/// `resources/onnxruntime/`. Versioned suffixes are kept so we can
+/// dlopen via absolute path and bypass SONAME / install-name resolution.
+/// Must stay in sync with `resources/checksums.toml`.
 fn dylib_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "onnxruntime.dll"
     } else if cfg!(target_os = "macos") {
-        "libonnxruntime.dylib"
+        "libonnxruntime.1.23.2.dylib"
     } else {
-        "libonnxruntime.so"
+        "libonnxruntime.so.1.23.2"
     }
 }
 
@@ -74,6 +77,16 @@ pub fn runtime_path(resource_dir: Option<&Path>) -> Result<PathBuf, EmbeddingErr
         return Ok(dev);
     }
     Err(EmbeddingError::RuntimeMissing)
+}
+
+/// Wire the embeddings runtime into a Tauri AppHandle's setup hook.
+/// Idempotent and non-fatal — failures only emit a `log::warn!`, so the
+/// rest of the app still launches when no dylib is bundled (dev builds,
+/// CI without resources, etc.).
+pub fn bootstrap(app: &tauri::AppHandle) -> Result<(), EmbeddingError> {
+    use tauri::Manager;
+    let resource_dir = app.path().resource_dir().ok();
+    ensure_runtime_initialized(resource_dir.as_deref())
 }
 
 /// Resolve the bundled model directory. Same resolution semantics as

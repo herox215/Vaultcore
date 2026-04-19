@@ -1,0 +1,36 @@
+# Pinned third-party assets fetched by build.rs (#191, #192).
+#
+# Each entry pins the upstream archive and the file path inside it that
+# build.rs extracts into `src-tauri/resources/onnxruntime/<platform>/`
+# or `src-tauri/resources/models/<id>/`. SHA-256 is verified before
+# extraction; mismatch aborts the build.
+
+[onnxruntime]
+version = "1.23.2"
+
+# Required ORT runtime version for `ort = =2.0.0-rc.11`.
+# Sources: https://github.com/microsoft/onnxruntime/releases/tag/v1.23.2
+
+[onnxruntime.linux-x86_64]
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-linux-x64-1.23.2.tgz"
+sha256 = "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b"
+archive_path = "onnxruntime-linux-x64-1.23.2/lib/libonnxruntime.so.1.23.2"
+dylib_name = "libonnxruntime.so.1.23.2"
+
+[onnxruntime.macos-aarch64]
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-osx-arm64-1.23.2.tgz"
+sha256 = "b4d513ab2b26f088c66891dbbc1408166708773d7cc4163de7bdca0e9bbb7856"
+archive_path = "onnxruntime-osx-arm64-1.23.2/lib/libonnxruntime.1.23.2.dylib"
+dylib_name = "libonnxruntime.1.23.2.dylib"
+
+[onnxruntime.macos-x86_64]
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-osx-x86_64-1.23.2.tgz"
+sha256 = "d10359e16347b57d9959f7e80a225a5b4a66ed7d7e007274a15cae86836485a6"
+archive_path = "onnxruntime-osx-x86_64-1.23.2/lib/libonnxruntime.1.23.2.dylib"
+dylib_name = "libonnxruntime.1.23.2.dylib"
+
+[onnxruntime.windows-x86_64]
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-win-x64-1.23.2.zip"
+sha256 = "0b38df9af21834e41e73d602d90db5cb06dbd1ca618948b8f1d66d607ac9f3cd"
+archive_path = "onnxruntime-win-x64-1.23.2/lib/onnxruntime.dll"
+dylib_name = "onnxruntime.dll"

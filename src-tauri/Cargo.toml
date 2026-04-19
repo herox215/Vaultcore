@@ -16,6 +16,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5.6", features = [] }
+# Used by build.rs to fetch + verify the bundled libonnxruntime (#191) and
+# MiniLM model (#192). Kept lean: blocking ureq, manual TOML parse, sha2,
+# flate2/tar for .tgz, zip for Windows .zip.
+ureq = { version = "2", features = ["tls"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+fs2 = "0.4"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }

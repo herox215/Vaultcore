@@ -86,6 +86,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(VaultState::default())
+        .setup(|_app| {
+            #[cfg(feature = "embeddings")]
+            {
+                if let Err(e) = embeddings::bootstrap(&_app.handle()) {
+                    log::warn!("embeddings bootstrap failed: {e}");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::vault::open_vault,
             commands::vault::get_recent_vaults,
