@@ -607,6 +607,13 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
+    /// Optional similarity weight in `[0, 1]`. Link-graph edges leave
+    /// this `None`; embedding-graph edges (#235) set it to the max
+    /// chunk-pair cosine similarity between the two notes. Skipped in
+    /// the serialized payload when absent so the link-graph JSON shape
+    /// is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
 }
 
 /// Result payload returned by `get_local_graph`.
@@ -618,7 +625,7 @@ pub struct LocalGraph {
 }
 
 /// Derive a filename stem from a vault-relative path (strip folder + `.md`).
-fn file_stem_label(rel_path: &str) -> String {
+pub(crate) fn file_stem_label(rel_path: &str) -> String {
     let base = rel_path.rsplit('/').next().unwrap_or(rel_path);
     base.strip_suffix(".md").unwrap_or(base).to_string()
 }
@@ -766,7 +773,7 @@ pub fn compute_local_graph(
 
     let mut edge_list: Vec<GraphEdge> = edges
         .into_iter()
-        .map(|(from, to)| GraphEdge { from, to })
+        .map(|(from, to)| GraphEdge { from, to, weight: None })
         .collect();
     edge_list.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
 
@@ -885,7 +892,7 @@ pub fn compute_link_graph(
 
     let mut edge_list: Vec<GraphEdge> = edges
         .into_iter()
-        .map(|(from, to)| GraphEdge { from, to })
+        .map(|(from, to)| GraphEdge { from, to, weight: None })
         .collect();
     edge_list.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
 

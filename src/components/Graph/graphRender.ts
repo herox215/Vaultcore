@@ -64,7 +64,12 @@ interface SimNode extends SimulationNodeDatum {
   radius: number;
 }
 
-type SimLink = SimulationLinkDatum<SimNode>;
+/** Link datum handed to d3-force. `weight` carries the edge similarity
+ *  (cosine in the 0..1 range) for the embedding-mode graph. Link-mode
+ *  edges leave it undefined — callers fall back to the scalar strength. */
+interface SimLink extends SimulationLinkDatum<SimNode> {
+  weight?: number;
+}
 
 /** Options accepted by `mountGraph` — future-proofed for the #32 global view.
  *  The `| undefined` on every optional member is deliberate: svelte-check runs
@@ -200,8 +205,42 @@ function populateGraph(graph: Graph, data: LocalGraph): void {
   for (const edge of data.edges) {
     if (!graph.hasNode(edge.from) || !graph.hasNode(edge.to)) continue;
     if (graph.hasEdge(edge.from, edge.to)) continue;
-    graph.addEdge(edge.from, edge.to);
+    const attrs: Record<string, unknown> = {};
+    if (typeof edge.weight === "number" && Number.isFinite(edge.weight)) {
+      attrs.weight = edge.weight;
+    }
+    graph.addEdge(edge.from, edge.to, attrs);
   }
+}
+
+// ── Weight-driven visual mapping ───────────────────────────────────────────────
+//
+// Edge weight (cosine similarity) flows through three visuals in embedding
+// mode: d3-force link strength/distance for spatial clustering, and edge
+// thickness/alpha for the rendered line. Link-mode edges carry no weight,
+// so the helpers fall back to a neutral 1.0 multiplier and the original
+// scalar strength/distance stay in effect.
+
+/** Normalize a weight into 0..1. Inputs outside the range clamp. */
+function normalizeWeight(weight: number | undefined): number | null {
+  if (typeof weight !== "number" || !Number.isFinite(weight)) return null;
+  if (weight <= 0) return 0;
+  if (weight >= 1) return 1;
+  return weight;
+}
+
+/** Edge rest length scales inversely with weight — stronger similarity pulls
+ *  nodes closer. Link-mode (weight=null) keeps the historical 80-unit default. */
+function edgeDistanceForWeight(weight: number | null): number {
+  if (weight === null) return 80;
+  return 120 - 80 * weight;
+}
+
+/** Edge pull strength multiplier. Link-mode passes through unchanged (1);
+ *  embedding-mode scales with weight so weak edges barely tug. */
+function edgeStrengthScaleForWeight(weight: number | null): number {
+  if (weight === null) return 1;
+  return 0.25 + 0.75 * weight;
 }
 
 /** Build the d3-force node/link datum arrays from the current graphology
@@ -229,9 +268,12 @@ function buildSimState(
     index.set(id, sim);
   });
   const links: SimLink[] = [];
-  graph.forEachEdge((_edge, _attrs, source, target) => {
+  graph.forEachEdge((_edge, attrs, source, target) => {
     if (index.has(source) && index.has(target)) {
-      links.push({ source, target });
+      const link: SimLink = { source, target };
+      const w = normalizeWeight(attrs.weight as number | undefined);
+      if (w !== null) link.weight = w;
+      links.push(link);
     }
   });
   return { nodes, links, index };
@@ -265,12 +307,21 @@ function applyForceSettings(
     | ReturnType<typeof forceLink<SimNode, SimLink>>
     | undefined;
   if (link) {
-    const strength = Math.min(1, Math.max(0, settings.edgeWeightInfluence));
-    link.strength(strength);
-    // Shorter rest length pulls linked nodes closer — combined with the
-    // capped repulsion range above this produces visible clusters instead
-    // of an evenly-spread globe.
-    link.distance(80);
+    const base = Math.min(1, Math.max(0, settings.edgeWeightInfluence));
+    // Per-edge strength: link-mode edges (no weight) keep the scalar `base`;
+    // embedding-mode edges fold in their cosine similarity so strong pairs
+    // pull hard and weak pairs barely register.
+    link.strength((l) => {
+      const w = normalizeWeight((l as SimLink).weight);
+      return base * edgeStrengthScaleForWeight(w);
+    });
+    // Shorter rest length pulls linked nodes closer. Embedding-mode edges
+    // shrink the rest length with weight so clusters of highly-similar
+    // notes visibly collapse toward each other.
+    link.distance((l) => {
+      const w = normalizeWeight((l as SimLink).weight);
+      return edgeDistanceForWeight(w);
+    });
   }
 
   const center = simulation.force("center") as
@@ -310,7 +361,7 @@ function buildSimulation(
       "link",
       forceLink<SimNode, SimLink>(links)
         .id((n) => n.id)
-        .distance(80),
+        .distance((l) => edgeDistanceForWeight(normalizeWeight((l as SimLink).weight))),
     )
     .force("charge", forceManyBody<SimNode>())
     .force("center", forceCenter<SimNode>(0, 0))
@@ -483,17 +534,30 @@ export function mountGraph(
     return result;
   });
 
-  // Edge reducer — hover dim for non-adjacent edges.
+  // Edge reducer — hover dim + weight-driven thickness/alpha.
+  //
+  // In embedding mode each edge carries a `weight` attr (cosine similarity
+  // in 0..1). Map it to:
+  //   size  : 1  → 3.5  (thicker line for stronger relations)
+  //   alpha : 0.45 → 1.0 (fade weak edges into the background)
+  //
+  // Link-mode edges have no weight — they render with the historical
+  // size=1 / full-opacity color, so the link graph is visually unchanged.
   renderer.setSetting("edgeReducer", (e, attrs) => {
+    const weight = normalizeWeight(attrs.weight as number | undefined);
+    const baseSize = weight === null ? 1 : 1 + weight * 2.5;
+    const baseAlpha = weight === null ? 1 : 0.45 + weight * 0.55;
+    const weightedEdgeColor = baseAlpha < 1 ? applyAlpha(edge, baseAlpha) : edge;
+
     if (!handle.hoveredNode) {
-      return { ...attrs, color: edge, size: 1 };
+      return { ...attrs, color: weightedEdgeColor, size: baseSize };
     }
     const [source, target] = graph.extremities(e);
     const adjacent = source === handle.hoveredNode || target === handle.hoveredNode;
     return {
       ...attrs,
-      color: adjacent ? edge : applyAlpha(edge, 0.2),
-      size: 1,
+      color: adjacent ? weightedEdgeColor : applyAlpha(edge, 0.2),
+      size: baseSize,
     };
   });
 

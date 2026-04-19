@@ -63,6 +63,9 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;
   to: string;
+  /** Similarity weight in `[0, 1]`. Populated by the embedding-graph
+   * mode (#235); absent on link-graph edges. */
+  weight?: number;
 }
 
 /** Result returned by `get_local_graph`. */
