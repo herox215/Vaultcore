@@ -265,6 +265,7 @@
 
   {#each orderedNodes as node (node.id)}
     {#if node.type === "text"}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (role and tabindex co-vary on `interactive`) -->
       <div
         class="vc-canvas-node vc-canvas-node-text"
         class:vc-canvas-node-selected={selectedNodeId === node.id}
@@ -360,6 +361,7 @@
     {:else if node.type === "file"}
       {@const fileNode = node as CanvasFileNode}
       {@const abs = vaultPath ? resolveVaultAbs(vaultPath, fileNode.file) : null}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (role and tabindex co-vary on `interactive`) -->
       <div
         class="vc-canvas-node vc-canvas-node-file"
         class:vc-canvas-node-selected={selectedNodeId === node.id}
@@ -456,6 +458,7 @@
       </div>
     {:else if node.type === "link"}
       {@const linkNode = node as CanvasLinkNode}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (role and tabindex co-vary on `interactive`) -->
       <div
         class="vc-canvas-node vc-canvas-node-link"
         class:vc-canvas-node-selected={selectedNodeId === node.id}
@@ -588,6 +591,7 @@
         {/if}
       </div>
     {:else}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (role and tabindex co-vary on `interactive`) -->
       <div
         class="vc-canvas-node vc-canvas-node-placeholder"
         class:vc-canvas-node-selected={selectedNodeId === node.id}
