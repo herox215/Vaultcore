@@ -13,6 +13,25 @@ export interface BacklinkEntry {
   lineNumber: number;
 }
 
+/**
+ * A single wiki-link parsed out of a Markdown document — the raw record
+ * produced by the Rust indexer (mirrors `src-tauri/src/indexer/link_graph.rs::ParsedLink`).
+ *
+ * This is the per-occurrence form returned by `getOutgoingLinks`. It is
+ * distinct from `src/lib/outgoingLinks.ts#OutgoingLink`, which is the
+ * aggregated (deduplicated-by-target) shape the sidebar renders on top.
+ */
+export interface ParsedLink {
+  /** Raw link target as written (e.g. "Note", "Folder/Note", "Note.md"). */
+  targetRaw: string;
+  /** Optional alias text after `|` (e.g. `[[Note|alias]]` → `"alias"`). */
+  alias: string | null;
+  /** 0-based line number where the link appears. */
+  lineNumber: number;
+  /** Full line text (used as context in backlink-style UIs). */
+  context: string;
+}
+
 /** A wiki-link that could not be resolved to any file in the vault. */
 export interface UnresolvedLink {
   /** Vault-relative path of the file that contains the dangling link. */
