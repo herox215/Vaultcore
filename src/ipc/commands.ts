@@ -10,7 +10,7 @@ import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
-import type { SearchResult, FileMatch, SemanticHit } from "../types/search";
+import type { SearchResult, FileMatch, SemanticHit, HybridHit } from "../types/search";
 import type { BacklinkEntry, ParsedLink, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
 
@@ -227,6 +227,24 @@ export async function semanticSearch(
 ): Promise<SemanticHit[]> {
   try {
     return await invoke<SemanticHit[]>("semantic_search", { query, k });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Hybrid search (#203): fuses BM25 (Tantivy) and HNSW (vector) ranks via
+ * Reciprocal Rank Fusion (k=60). Both legs run in parallel on the Rust
+ * blocking pool. `k` is clamped to [1, 100]. Falls back to BM25-only when
+ * embeddings are disabled / not bundled, and to vec-only when the BM25
+ * index is unavailable.
+ */
+export async function hybridSearch(
+  query: string,
+  k: number = 10,
+): Promise<HybridHit[]> {
+  try {
+    return await invoke<HybridHit[]>("hybrid_search", { query, k });
   } catch (e) {
     throw normalizeError(e);
   }
