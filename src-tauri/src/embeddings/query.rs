@@ -38,6 +38,23 @@ pub struct SemanticHit {
     pub score: f32,
 }
 
+/// Minimum cosine similarity for a vec-leg hit to leave this module.
+/// HNSW always returns its k nearest neighbours regardless of how far
+/// away they are — on small vaults the nearest neighbour can still be
+/// near-orthogonal noise, which then rides into the RRF top-k on rank
+/// alone and confuses users ("why does my search for 'katze' surface a
+/// note that says 'test lol dasd'?"). 0.3 is a conservative floor on
+/// L2-normalised MiniLM: real semantic matches on English prose sit at
+/// 0.4–0.8, and anything below ~0.3 is near-orthogonal — dropping it
+/// loses nothing but noise.
+pub const MIN_SEMANTIC_SCORE: f32 = 0.3;
+
+fn drop_noise_hits(hits: Vec<SemanticHit>) -> Vec<SemanticHit> {
+    hits.into_iter()
+        .filter(|h| h.score >= MIN_SEMANTIC_SCORE)
+        .collect()
+}
+
 /// Embed `text`, query the index for the top `k` nearest chunks, and
 /// convert distances to similarity scores. Returns an empty vec for an
 /// empty query or empty index — never errors on either; that case is
@@ -68,14 +85,17 @@ pub fn semantic_search_query(
         )));
     }
     let hits = snap.query_with_paths(&vec, k);
-    Ok(hits
+    let mapped: Vec<SemanticHit> = hits
         .into_iter()
         .map(|(p, idx, dist)| SemanticHit {
             path: p.to_string_lossy().into_owned(),
             chunk_index: idx,
             score: 1.0 - dist,
         })
-        .collect())
+        .collect();
+    // Filter near-orthogonal noise BEFORE returning so both the direct
+    // `semantic_search` IPC and the hybrid fusion path see a clean list.
+    Ok(drop_noise_hits(mapped))
 }
 
 #[cfg(test)]
@@ -204,6 +224,30 @@ mod tests {
             let hits = semantic_search_query(&h, "note", k).unwrap();
             assert!(hits.len() <= k, "k={k} returned {} hits", hits.len());
         }
+    }
+
+    #[test]
+    fn drop_noise_hits_removes_subthreshold_scores() {
+        // The filter drops hits below MIN_SEMANTIC_SCORE (noise-adjacent
+        // neighbours HNSW returns on small vaults) while keeping hits at
+        // the threshold and above. Order within the kept set is preserved
+        // because HNSW already hands them to us in rank order.
+        let hits = vec![
+            SemanticHit { path: "a.md".into(), chunk_index: 0, score: 0.82 },
+            SemanticHit { path: "b.md".into(), chunk_index: 0, score: MIN_SEMANTIC_SCORE - 0.01 },
+            SemanticHit { path: "c.md".into(), chunk_index: 0, score: MIN_SEMANTIC_SCORE },
+            SemanticHit { path: "d.md".into(), chunk_index: 0, score: 0.05 },
+            SemanticHit { path: "e.md".into(), chunk_index: 0, score: -0.2 },
+        ];
+        let kept = drop_noise_hits(hits);
+        let paths: Vec<&str> = kept.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths, vec!["a.md", "c.md"]);
+    }
+
+    #[test]
+    fn drop_noise_hits_empty_passthrough() {
+        let kept = drop_noise_hits(Vec::new());
+        assert!(kept.is_empty());
     }
 
     #[test]
