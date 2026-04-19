@@ -74,10 +74,20 @@ struct MappingFile {
     tombstones: Vec<u32>,
 }
 
-/// Bumped to 2 in #200 to add the `tombstones` field. v1 dumps still load
-/// (the field defaults to empty) and silently upgrade on next save.
-const MAPPING_VERSION: u32 = 2;
-const MAPPING_VERSION_MIN: u32 = 1;
+/// Mapping-dump wire version.
+///
+/// - v1: initial format.
+/// - v2: (#200) added `tombstones` field.
+/// - v3: (#233) model swap from MiniLM to multilingual-e5-small. The 384-d
+///   vector geometry is unchanged but the *embedding subspace* is
+///   incompatible — old vectors would retrieve nonsense against new
+///   queries. Bumping both `MAPPING_VERSION` and `MAPPING_VERSION_MIN` to
+///   3 forces `load()` to reject pre-e5 dumps, which `load_or_empty()`
+///   absorbs as a fresh rebuild from embeddings (AC #3). The orphaned
+///   `vectors.hnsw.{graph,data}` from the old run stay on disk briefly;
+///   the first save after the rebuild overwrites them by basename.
+const MAPPING_VERSION: u32 = 3;
+const MAPPING_VERSION_MIN: u32 = 3;
 
 /// Closure-backed `FilterT` with no allocation. Only kept as a doc anchor
 /// — actual call sites use a closure passed by reference, which the
@@ -905,34 +915,54 @@ mod tests {
     }
 
     #[test]
-    fn load_v1_mapping_silently_upgrades() {
-        // Hand-craft a v1 dump: save a v2 file then rewrite the mapping
-        // file to a v1-shaped JSON without the `tombstones` field.
+    fn load_pre_v3_mapping_is_rejected_so_caller_rebuilds() {
+        // #233 — when the embedding model swapped from MiniLM to e5, the
+        // existing 384-d vectors in v1/v2 dumps lived in an incompatible
+        // subspace. We bumped both `MAPPING_VERSION` and
+        // `MAPPING_VERSION_MIN` to 3 specifically so that pre-existing
+        // dumps are *rejected* on load — the caller (`load_or_empty`)
+        // then absorbs the error and rebuilds from the embedder. This
+        // test pins that rejection so a future "be lenient" patch doesn't
+        // silently start loading mismatched vectors.
         let tmp = tempfile::tempdir().expect("tempdir");
         let idx = VectorIndex::new(4);
         for i in 0..4u64 {
-            idx.insert(PathBuf::from(format!("v1-{i}.md")), 0, &unit_vec(i));
+            idx.insert(PathBuf::from(format!("legacy-{i}.md")), 0, &unit_vec(i));
         }
         idx.save(tmp.path()).expect("save");
 
-        let v1_json = serde_json::json!({
-            "version": 1,
-            "entries": [
-                ["v1-0.md", 0],
-                ["v1-1.md", 0],
-                ["v1-2.md", 0],
-                ["v1-3.md", 0],
-            ],
-        });
-        std::fs::write(
-            tmp.path().join("vectors.mapping.json"),
-            serde_json::to_vec(&v1_json).unwrap(),
-        )
-        .expect("write v1 mapping");
+        for legacy_version in [1u32, 2u32] {
+            let mapping = serde_json::json!({
+                "version": legacy_version,
+                "entries": [
+                    ["legacy-0.md", 0],
+                    ["legacy-1.md", 0],
+                    ["legacy-2.md", 0],
+                    ["legacy-3.md", 0],
+                ],
+            });
+            std::fs::write(
+                tmp.path().join("vectors.mapping.json"),
+                serde_json::to_vec(&mapping).unwrap(),
+            )
+            .expect("write legacy mapping");
 
-        let loaded = VectorIndex::load(tmp.path()).expect("v1 load");
-        assert_eq!(loaded.len(), 4);
-        assert_eq!(loaded.tombstone_count(), 0);
+            let err = match VectorIndex::load(tmp.path()) {
+                Err(e) => e,
+                Ok(_) => panic!(
+                    "pre-v3 mapping must be rejected so load_or_empty rebuilds"
+                ),
+            };
+            let msg = err.to_string();
+            assert!(
+                msg.contains("mapping version unsupported"),
+                "unexpected error for v{legacy_version}: {msg}"
+            );
+
+            // load_or_empty absorbs the rejection and yields a fresh empty index.
+            let recovered = VectorIndex::load_or_empty(tmp.path(), 4);
+            assert_eq!(recovered.len(), 0);
+        }
     }
 
     #[test]

@@ -19,12 +19,23 @@ use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, Tr
 use super::session::{build_minilm_session, register_cpu_arena_if_needed};
 use super::{ensure_runtime_initialized, model_dir, EmbeddingError};
 
-/// MiniLM-L6-v2 output dimensionality. Matches `embeddings::vector_index::DIM`.
+/// Embedding output dimensionality — 384 for both MiniLM-L6 and
+/// multilingual-e5-small. Matches `embeddings::vector_index::DIM`.
 const EMBED_DIM: usize = 384;
 
-/// Matches the tokenizer cap fastembed used via `with_max_length(256)` and
-/// MiniLM's training `max_seq_length`.
+/// Tokenizer cap. Both bundled models train at 512, but VaultCore notes
+/// rarely exceed 256 tokens per chunk and we keep the lower cap to bound
+/// peak memory + latency under bulk reindex (#205 budget). Chunking
+/// (`chunking.rs`) is sized accordingly.
 const MAX_SEQ_LEN: usize = 256;
+
+/// e5 prefix protocol (#233). The intfloat/multilingual-e5 family was
+/// trained with these literal prefixes — applying them lets the model put
+/// queries and passages in the same retrieval-friendly subspace. Stripping
+/// them, or using the same one for both, measurably degrades retrieval.
+/// See: https://huggingface.co/intfloat/multilingual-e5-small#faq
+const E5_QUERY_PREFIX: &str = "query: ";
+const E5_PASSAGE_PREFIX: &str = "passage: ";
 
 pub struct EmbeddingService {
     inner: Mutex<Inner>,
@@ -33,14 +44,15 @@ pub struct EmbeddingService {
 struct Inner {
     tokenizer: Tokenizer,
     session: Session,
-    /// Some MiniLM exports omit `token_type_ids` (all-MiniLM is BERT-style
-    /// and always has it, but we probe to stay portable to alternative
-    /// models bundled via `VAULTCORE_MODEL_DIR`).
+    /// Some exports omit `token_type_ids` (BERT-style models declare it,
+    /// XLM-RoBERTa-style — including e5 — does not). We probe the session
+    /// inputs to stay portable across both families and any future model
+    /// bundled via `VAULTCORE_MODEL_DIR`.
     need_token_type_ids: bool,
 }
 
 impl EmbeddingService {
-    /// Load the bundled MiniLM model. Triggers `ensure_runtime_initialized`
+    /// Load the bundled embedding model. Triggers `ensure_runtime_initialized`
     /// and registers the env-level CPU arena allocator before building the
     /// session — both are idempotent.
     pub fn load(resource_dir: Option<&Path>) -> Result<Arc<Self>, EmbeddingError> {
@@ -70,13 +82,26 @@ impl EmbeddingService {
                 direction: tokenizers::TruncationDirection::Right,
             }))
             .map_err(|e| EmbeddingError::Tokenizer(e.to_string()))?;
+        // Resolve pad token from the tokenizer's own vocab — XLM-RoBERTa
+        // (e5) uses `<pad>` (id 1), BERT-style (MiniLM) uses `[PAD]` (id 0).
+        // Hardcoding either silently corrupts attention on the other family
+        // by padding with a real content token. Probe both candidates and
+        // pick the first one the vocab knows.
+        let (pad_token, pad_id) = ["<pad>", "[PAD]"]
+            .iter()
+            .find_map(|t| tokenizer.token_to_id(t).map(|id| ((*t).to_string(), id)))
+            .ok_or_else(|| {
+                EmbeddingError::Tokenizer(
+                    "tokenizer vocab declares neither <pad> nor [PAD]".into(),
+                )
+            })?;
         tokenizer.with_padding(Some(PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
             direction: tokenizers::PaddingDirection::Right,
             pad_to_multiple_of: None,
-            pad_id: 0,
+            pad_id,
             pad_type_id: 0,
-            pad_token: "[PAD]".to_string(),
+            pad_token,
         }));
 
         Ok(Arc::new(Self {
@@ -88,12 +113,51 @@ impl EmbeddingService {
         }))
     }
 
-    /// Embed a single string. Returns a 384-d L2-normalised vector.
+    /// Embed a single string verbatim — no e5 prefix is applied. Prefer
+    /// `embed_query` / `embed_passage` over this primitive: bare embeds
+    /// against e5 land in a different subspace than the indexed passages
+    /// and silently degrade retrieval quality. Kept public for benchmarks
+    /// and the smoke test, where the prefix is irrelevant.
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let mut batch = self.embed_batch(&[text])?;
         batch
             .pop()
             .ok_or_else(|| EmbeddingError::Inference("empty embedding batch".into()))
+    }
+
+    /// Embed a user query with the e5 `"query: "` prefix. Use this on the
+    /// query path (semantic search input). See module-level e5 prefix note.
+    pub fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed(&format!("{E5_QUERY_PREFIX}{text}"))
+    }
+
+    /// Embed an indexed passage with the e5 `"passage: "` prefix. Use this
+    /// on the indexing path (every chunk that lands in the vector index).
+    pub fn embed_passage(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed(&format!("{E5_PASSAGE_PREFIX}{text}"))
+    }
+
+    /// Batched query embed — same prefix semantics as `embed_query`.
+    pub fn embed_query_batch(
+        &self,
+        texts: &[&str],
+    ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        let prefixed: Vec<String> =
+            texts.iter().map(|t| format!("{E5_QUERY_PREFIX}{t}")).collect();
+        let refs: Vec<&str> = prefixed.iter().map(|s| s.as_str()).collect();
+        self.embed_batch(&refs)
+    }
+
+    /// Batched passage embed — same prefix semantics as `embed_passage`.
+    /// The indexing pipeline (`reindex.rs`) calls this for every batch.
+    pub fn embed_passage_batch(
+        &self,
+        texts: &[&str],
+    ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        let prefixed: Vec<String> =
+            texts.iter().map(|t| format!("{E5_PASSAGE_PREFIX}{t}")).collect();
+        let refs: Vec<&str> = prefixed.iter().map(|s| s.as_str()).collect();
+        self.embed_batch(&refs)
     }
 
     /// Embed a batch of strings in one inference pass. Returns one 384-d
@@ -161,10 +225,11 @@ impl EmbeddingService {
             .run(inputs)
             .map_err(|e| EmbeddingError::Inference(e.to_string()))?;
 
-        // MiniLM exports expose the token-level hidden states either as
+        // ONNX exports expose the token-level hidden states either as
         // `last_hidden_state` (standard HF export) or as `output_0` / the
         // first output (some quantised exports strip names). Pick the first
-        // 3-D float output to stay robust.
+        // 3-D float output to stay robust across both BERT-style (MiniLM)
+        // and XLM-RoBERTa-style (e5) graphs.
         let (_name, first) = outputs
             .iter()
             .find(|(_, v)| {
@@ -266,17 +331,23 @@ mod tests {
             eprintln!("SKIP: embeddings not bundled");
             return;
         };
-        let a = svc.embed("how do cats communicate").unwrap();
-        let b = svc.embed("feline body language").unwrap();
-        let c = svc.embed("rust async runtime internals").unwrap();
+        // Ask + passage prefixes — mirrors the production query path so we
+        // benchmark the actual subspace the index uses.
+        let a = svc.embed_query("how do cats communicate").unwrap();
+        let b = svc.embed_passage("feline body language").unwrap();
+        let c = svc.embed_passage("rust async runtime internals").unwrap();
         let cos = |x: &[f32], y: &[f32]| -> f32 {
             x.iter().zip(y).map(|(a, b)| a * b).sum()
         };
         let close = cos(&a, &b);
         let far = cos(&a, &c);
+        // Margin calibrated for multilingual-e5-small (#233): the model
+        // uses a tighter cosine range than MiniLM did — same *ordering*,
+        // smaller absolute gap. 0.05 keeps the semantic signal clear
+        // while not being miscalibrated for the current model.
         assert!(
-            close > far + 0.1,
-            "expected close > far + 0.1, got close={close}, far={far}"
+            close > far + 0.05,
+            "expected close > far + 0.05, got close={close}, far={far}"
         );
     }
 
@@ -332,11 +403,12 @@ mod tests {
         eprintln!("BENCH_JSON {{\"name\":\"single_embed\",\"p50_ms\":{:.3},\"p99_ms\":{:.3},\"n\":{N}}}",
             p50.as_secs_f64() * 1000.0,
             p99.as_secs_f64() * 1000.0);
-        // Loose ceiling: 20 ms p50 is well above warm ORT inference for
-        // MiniLM-L6-v2 on any modern CPU. The harness's regression check
-        // catches real drift against the committed baseline.
+        // Loose ceiling: 20 ms p50 was the MiniLM-era headroom; e5-small
+        // is ~5x larger so warm p50 climbs accordingly. We raise the cap
+        // to 100 ms as an absolute sanity ceiling — the real regression
+        // detector is `scripts/bench-regression.py` against `baseline.json`.
         assert!(
-            p50 < Duration::from_millis(20),
+            p50 < Duration::from_millis(100),
             "single_embed p50 too slow: {p50:?}"
         );
     }

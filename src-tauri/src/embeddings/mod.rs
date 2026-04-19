@@ -1,9 +1,11 @@
 //! Local embeddings stack — gated behind the `embeddings` Cargo feature.
 //!
 //! This module owns the dlopen'd ONNX Runtime lifecycle and the discovery of
-//! the bundled MiniLM model. Higher-level services (#194 EmbeddingService,
-//! #198 VectorIndex, #203 hybrid search) build on top of `init_runtime` +
-//! `model_dir`.
+//! the bundled embedding model (multilingual-e5-small INT8 since #233; was
+//! all-MiniLM-L6-v2 INT8 before — swapped because MiniLM is English-only and
+//! collapsed non-English queries onto a noise-floor band). Higher-level
+//! services (#194 EmbeddingService, #198 VectorIndex, #203 hybrid search)
+//! build on top of `init_runtime` + `model_dir`.
 //!
 //! Path resolution order for both the runtime dylib and the model directory:
 //!
@@ -147,7 +149,7 @@ pub fn model_dir(resource_dir: Option<&Path>) -> Result<PathBuf, EmbeddingError>
     if let Some(p) = std::env::var_os(ENV_MODEL_DIR) {
         return Ok(PathBuf::from(p));
     }
-    let leaf = Path::new("models").join("all-MiniLM-L6-v2-int8");
+    let leaf = Path::new("models").join("multilingual-e5-small-int8");
     if let Some(dir) = resource_dir {
         let p = dir.join(&leaf);
         if p.exists() {
@@ -218,13 +220,14 @@ pub fn ensure_runtime_initialized(
 }
 
 /// Smoke-test entry point used by tests/embeddings.rs. Loads the bundled
-/// MiniLM model, embeds a fixed string, and returns the raw 384-dim vector.
-///
-/// The caller (the test) asserts vector length and L2 norm. Returns
-/// `Err(ModelMissing)` cleanly if the model isn't bundled yet (#192 not
-/// done) so the test can skip rather than fail.
+/// embedding model, embeds a fixed string, and returns the raw 384-dim
+/// vector. Uses `embed_passage` so the e5 prefix protocol is exercised
+/// end-to-end — the smoke test then doubles as a "tokenizer accepts the
+/// `passage: ` prefix without choking" check. The caller (the test) asserts
+/// vector length and L2 norm. Returns `Err(ModelMissing)` cleanly if the
+/// model isn't bundled yet (#192 not done) so the test can skip.
 #[cfg(feature = "embeddings")]
 pub fn smoke_test(resource_dir: Option<&Path>) -> Result<Vec<f32>, EmbeddingError> {
     let svc = EmbeddingService::load(resource_dir)?;
-    svc.embed("VaultCore semantic search smoke test")
+    svc.embed_passage("VaultCore semantic search smoke test")
 }

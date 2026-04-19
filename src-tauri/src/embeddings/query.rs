@@ -76,7 +76,7 @@ pub fn semantic_search_query(
     if snap.is_empty() {
         return Ok(Vec::new());
     }
-    let vec = handles.service.embed(text)?;
+    let vec = handles.service.embed_query(text)?;
     if vec.len() != super::DIM {
         return Err(EmbeddingError::InvalidArgument(format!(
             "embedding dim mismatch: got {}, expected {}",
@@ -176,7 +176,11 @@ mod tests {
             ("math.md", "Eigenvalues of a symmetric matrix are always real numbers."),
         ];
         for (path, text) in docs {
-            let v = svc.embed(text).unwrap();
+            // Seed via the indexing path — same prefix semantics as
+            // `embed_coordinator::run_embed_batch` uses in production, so
+            // the subspace matches what `semantic_search_query` below
+            // produces from `embed_query`.
+            let v = svc.embed_passage(text).unwrap();
             snap.insert(PathBuf::from(path), 0, &v);
         }
         drop(snap);
@@ -214,7 +218,9 @@ mod tests {
         let sink = Arc::new(HnswSink::open(tmp.path().to_path_buf(), 8));
         let snap = sink.snapshot();
         for i in 0..5u64 {
-            let v = svc.embed(&format!("note number {i} with unique content")).unwrap();
+            let v = svc
+                .embed_passage(&format!("note number {i} with unique content"))
+                .unwrap();
             snap.insert(PathBuf::from(format!("n-{i}.md")), 0, &v);
         }
         drop(snap);

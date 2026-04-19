@@ -284,7 +284,10 @@ fn run_embed_batch(
     // reindex checkpoint / next save covers the re-queue).
     for (sub_start, sub_texts) in flat_texts.chunks(EMBED_BATCH_SIZE).enumerate() {
         let global_offset = sub_start * EMBED_BATCH_SIZE;
-        let vectors = match service.embed_batch(sub_texts) {
+        // Indexing path — every chunk gets the e5 "passage: " prefix so
+        // the index lives in the same subspace that `embed_query` targets.
+        // Dropping to bare `embed_batch` here silently halves recall.
+        let vectors = match service.embed_passage_batch(sub_texts) {
             Ok(v) => v,
             Err(e) => {
                 log::warn!(

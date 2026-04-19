@@ -31,10 +31,10 @@ use tokenizers::Tokenizer;
 
 use super::{model_dir, EmbeddingError};
 
-/// Maximum *content* tokens per chunk. Picked so that after fastembed
-/// re-tokenises and prepends [CLS] / appends [SEP] (2 special tokens),
-/// the on-wire sequence is exactly 256 — matching MiniLM-L6-v2's training
-/// `max_seq_length` and the cap configured in `EmbeddingService::load`.
+/// Maximum *content* tokens per chunk. Picked so that after the embedder
+/// re-tokenises and adds 2 special tokens (`[CLS]`/`[SEP]` on BERT-style
+/// MiniLM, `<s>`/`</s>` on XLM-RoBERTa-style e5), the on-wire sequence is
+/// exactly 256 — matching the cap configured in `EmbeddingService::load`.
 pub const MAX_CONTENT_TOKENS: usize = 254;
 
 /// Default sliding-window overlap. 32/254 ≈ 12 % is the standard RAG
@@ -59,7 +59,7 @@ pub struct Chunker {
 }
 
 impl Chunker {
-    /// Load the bundled MiniLM tokenizer with default caps
+    /// Load the bundled embedder's tokenizer with default caps
     /// (`MAX_CONTENT_TOKENS` / `DEFAULT_OVERLAP_TOKENS`). Reuses
     /// `model_dir()` for path resolution so it shares the resource-dir /
     /// env-override / dev-fallback story with `EmbeddingService`.
@@ -112,8 +112,9 @@ impl Chunker {
         }
 
         // Encode WITHOUT special tokens — we want only content tokens with
-        // byte offsets pointing into `input`. fastembed will re-add
-        // [CLS]/[SEP] when it embeds.
+        // byte offsets pointing into `input`. The embedder re-adds the
+        // model-specific bookends (`[CLS]/[SEP]` for BERT, `<s>/</s>` for
+        // XLM-RoBERTa) at inference time.
         let enc = self
             .tokenizer
             .encode(input, false)
@@ -182,15 +183,18 @@ mod tests {
     }
 
     /// Build an input that encodes to *exactly* `target` content tokens.
-    /// "hello" tokenises to a single WordPiece on MiniLM; we repeat it,
-    /// then trim.
+    /// `"the"` is a single token in both BERT WordPiece and XLM-RoBERTa
+    /// SentencePiece (id 70 in e5), so repeating it space-separated gives
+    /// us a 1-word == 1-token relationship that the synthesis loop can
+    /// rely on. (We previously used `"hello"`, which is 2 tokens in
+    /// XLM-R — broke the tests when #233 swapped MiniLM for e5.)
     fn synth_input(chunker: &Chunker, target: usize) -> String {
         let mut s = String::new();
         for _ in 0..target {
             if !s.is_empty() {
                 s.push(' ');
             }
-            s.push_str("hello");
+            s.push_str("the");
         }
         // Defensive: in case spacing affects pretokenisation, trim down or
         // pad up until token count matches.
@@ -199,7 +203,7 @@ mod tests {
             s.truncate(cut);
         }
         while chunker.token_count(&s) < target {
-            s.push_str(" hello");
+            s.push_str(" the");
         }
         s
     }

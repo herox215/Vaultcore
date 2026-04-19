@@ -56,8 +56,14 @@ use crate::hash::hash_bytes;
 /// Filename of the checkpoint JSON under `<vault>/.vaultcore/embeddings/`.
 pub const CHECKPOINT_FILE: &str = "reindex.checkpoint.json";
 /// Current on-disk layout version. Bumped when the schema changes in a
-/// breaking way; older versions load as empty (force full re-walk).
-pub const CHECKPOINT_VERSION: u32 = 1;
+/// breaking way or when the embedding model changes — older versions load
+/// as empty (force full re-walk).
+///
+/// - v1: initial format.
+/// - v2: (#233) model swap from MiniLM to multilingual-e5-small. Hashes
+///   in the checkpoint refer to files whose embeddings are now in the
+///   wrong subspace; the only safe recovery is a full reindex.
+pub const CHECKPOINT_VERSION: u32 = 2;
 /// Flush cadence: every N successful enqueues we atomically write the
 /// checkpoint. Trades worst-case re-work (≤ N files) against disk churn.
 const FLUSH_EVERY: usize = 100;
