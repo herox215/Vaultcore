@@ -223,6 +223,13 @@ pub async fn open_vault(
                 .map_err(|_| VaultError::LockPoisoned)?;
             *guard = None;
         }
+        {
+            let mut guard = state
+                .query_handles
+                .lock()
+                .map_err(|_| VaultError::LockPoisoned)?;
+            *guard = None;
+        }
         let resource_dir = app.path().resource_dir().ok();
         let svc = crate::embeddings::EmbeddingService::load(resource_dir.as_deref());
         let chk = crate::embeddings::Chunker::load(resource_dir.as_deref());
@@ -236,14 +243,31 @@ pub async fn open_vault(
                 // growth past it is supported.
                 let embed_dir = canonical.join(".vaultcore").join("embeddings");
                 let cap = vault_info.file_count.saturating_mul(4).max(64);
+                // #202: keep a concrete `Arc<HnswSink>` alongside the
+                // `Arc<dyn VectorSink>` handed to the coordinator so the
+                // `semantic_search` IPC handler can call `snapshot()`
+                // without widening the trait. Both Arcs share one alloc.
+                let sink_concrete = Arc::new(crate::embeddings::HnswSink::open(embed_dir, cap));
                 let sink: Arc<dyn crate::embeddings::VectorSink> =
-                    Arc::new(crate::embeddings::HnswSink::open(embed_dir, cap));
+                    Arc::clone(&sink_concrete) as Arc<dyn crate::embeddings::VectorSink>;
+                let svc_for_query = Arc::clone(&svc);
                 let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
+                {
+                    let mut guard = state
+                        .embed_coordinator
+                        .lock()
+                        .map_err(|_| VaultError::LockPoisoned)?;
+                    *guard = Some(coord);
+                }
+                let handles = Arc::new(crate::embeddings::QueryHandles {
+                    service: svc_for_query,
+                    sink: sink_concrete,
+                });
                 let mut guard = state
-                    .embed_coordinator
+                    .query_handles
                     .lock()
                     .map_err(|_| VaultError::LockPoisoned)?;
-                *guard = Some(coord);
+                *guard = Some(handles);
             }
             (Err(e), _) | (_, Err(e)) => {
                 log::warn!("embed-on-save disabled: {e}");
