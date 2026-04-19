@@ -14,7 +14,7 @@ import { tick } from "svelte";
 
 vi.mock("../../../ipc/commands", () => ({
   searchFilename: vi.fn(),
-  searchFulltext: vi.fn(),
+  hybridSearch: vi.fn(),
   rebuildIndex: vi.fn(),
 }));
 vi.mock("../../../ipc/events", () => ({
@@ -23,7 +23,7 @@ vi.mock("../../../ipc/events", () => ({
 
 import {
   searchFilename,
-  searchFulltext,
+  hybridSearch,
   rebuildIndex,
 } from "../../../ipc/commands";
 import { vaultStore } from "../../../store/vaultStore";
@@ -87,7 +87,7 @@ describe("OmniSearch (#174)", () => {
 
   it("clicking the content tab switches mode and re-routes the active query", async () => {
     (searchFilename as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const { container } = mountOpen({ initialMode: "filename" });
     await tick();
 
@@ -103,7 +103,7 @@ describe("OmniSearch (#174)", () => {
     await fireEvent.click(contentTab);
     await tick();
     await Promise.resolve();
-    expect(searchFulltext).toHaveBeenCalled();
+    expect(hybridSearch).toHaveBeenCalled();
   });
 
   // ── Backend dispatch per mode ─────────────────────────────────────────
@@ -119,11 +119,11 @@ describe("OmniSearch (#174)", () => {
     await tick();
     await Promise.resolve();
     expect(searchFilename).toHaveBeenCalledWith("alpha", 20);
-    expect(searchFulltext).not.toHaveBeenCalled();
+    expect(hybridSearch).not.toHaveBeenCalled();
   });
 
-  it("content mode dispatches searchFulltext on input", async () => {
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  it("content mode dispatches hybridSearch on input (#204)", async () => {
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const { container } = mountOpen({ initialMode: "content" });
     await tick();
     const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
@@ -133,7 +133,7 @@ describe("OmniSearch (#174)", () => {
     // Content mode is debounced (same 200ms as the old SearchPanel) —
     // verify it eventually fires.
     await new Promise((r) => setTimeout(r, 250));
-    expect(searchFulltext).toHaveBeenCalled();
+    expect(hybridSearch).toHaveBeenCalled();
     expect(searchFilename).not.toHaveBeenCalled();
   });
 
@@ -168,7 +168,7 @@ describe("OmniSearch (#174)", () => {
 
   it("clears the rebuild status line on success and flips indexStale off", async () => {
     (rebuildIndex as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     searchStore.setIndexStale(true);
     const { container } = mountOpen({ initialMode: "content" });
     await tick();
@@ -204,7 +204,7 @@ describe("OmniSearch (#174)", () => {
   // ── Tag-prefill ───────────────────────────────────────────────────────
 
   it("initialQuery in content mode is placed in the input and runs the search", async () => {
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const { container } = mountOpen({
       initialMode: "content",
       initialQuery: "#todo",
@@ -215,8 +215,8 @@ describe("OmniSearch (#174)", () => {
 
     const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
     expect(input.value).toBe("#todo");
-    expect(searchFulltext).toHaveBeenCalled();
-    const args = (searchFulltext as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(hybridSearch).toHaveBeenCalled();
+    const args = (hybridSearch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(args?.[0]).toBe("#todo");
   });
 
@@ -289,9 +289,9 @@ describe("OmniSearch (#174)", () => {
   // debounce fire — the caret must stay where the user left it.
 
   it("preserves the caret position across a debounced content-mode search", async () => {
-    let resolveFulltext!: (v: SearchResult[]) => void;
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise<SearchResult[]>((r) => { resolveFulltext = r; }),
+    let resolveFulltext!: (v: HybridHit[]) => void;
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<HybridHit[]>((r) => { resolveFulltext = r; }),
     );
     const { container } = mountOpen({ initialMode: "content" });
     await tick();
@@ -308,7 +308,7 @@ describe("OmniSearch (#174)", () => {
     // the IPC promise. This is exactly the window where storeState updates
     // used to cascade into a bind:value re-sync that moved the caret.
     await new Promise((r) => setTimeout(r, 260));
-    expect(searchFulltext).toHaveBeenCalled();
+    expect(hybridSearch).toHaveBeenCalled();
     resolveFulltext([]);
     await Promise.resolve();
     await tick();
@@ -321,4 +321,4 @@ describe("OmniSearch (#174)", () => {
 });
 
 // Type re-import so the mock type cast above compiles.
-import type { SearchResult } from "../../../types/search";
+import type { HybridHit } from "../../../types/search";

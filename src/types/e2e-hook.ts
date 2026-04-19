@@ -16,6 +16,12 @@ export interface E2eHook {
   finishProgress: () => void;
   typeInActiveEditor: (text: string) => Promise<void>;
   getActiveDocText: () => Promise<string>;
+  /** #204: trigger `reindex_vault` and resolve once the reindex worker
+   *  emits a terminal `done` progress event. Used by the hybrid-search
+   *  E2E spec to wait for embeddings to be queryable before running a
+   *  semantic-only query. Rejects on `cancelled` or if the coordinator
+   *  isn't available (embeddings feature off / model failed to load). */
+  reindexAndWaitDone: () => Promise<void>;
 }
 
 declare global {

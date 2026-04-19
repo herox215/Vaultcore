@@ -12,6 +12,7 @@
     openVault,
     pickVaultFolder,
     repairVaultIndex,
+    reindexVault,
   } from "./ipc/commands";
   import { listenIndexProgress, listenReindexProgress } from "./ipc/events";
   import { reindexStore } from "./store/reindexStore";
@@ -246,6 +247,26 @@
         if (!view) return "";
         return view.state.doc.toString();
       };
+      // #204: subscribe once to the reindex-done signal so E2E specs can
+      // wait for embeddings to be queryable before running a semantic-only
+      // search. We keep a single listener for the lifetime of the window
+      // and broadcast the terminal phase to any pending waiter.
+      const { listenReindexProgress: listenReindex } = await import("./ipc/events");
+      const waiters: Array<(result: "done" | "cancelled") => void> = [];
+      await listenReindex((payload) => {
+        if (payload.phase === "done" || payload.phase === "cancelled") {
+          const pending = waiters.splice(0);
+          for (const resolve of pending) resolve(payload.phase);
+        }
+      });
+      const reindexAndWaitDone = (): Promise<void> =>
+        new Promise((resolve, reject) => {
+          waiters.push((phase) => {
+            if (phase === "done") resolve();
+            else reject(new Error(`reindex ended with phase=${phase}`));
+          });
+          reindexVault().catch(reject);
+        });
       window.__e2e__ = {
         loadVault,
         switchVault,
@@ -256,6 +277,7 @@
         finishProgress,
         typeInActiveEditor,
         getActiveDocText,
+        reindexAndWaitDone,
       };
     }
 
