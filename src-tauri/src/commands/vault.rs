@@ -554,23 +554,23 @@ pub async fn reindex_vault(
 
     let checkpoint_dir = vault_root.join(".vaultcore").join("embeddings");
     let app_for_progress = app.clone();
+    let pending_for_bp = std::sync::Arc::clone(&pending);
 
-    let handle = crate::embeddings::start_reindex(
+    let handle = crate::embeddings::start_reindex_with_backpressure(
         vault_root,
         checkpoint_dir,
-        move |path, content| {
+        move |batch| {
             let probe = crate::embeddings::EmbedCoordinator {
                 tx: tx.clone(),
                 pending: std::sync::Arc::clone(&pending),
             };
-            match probe.enqueue(path.to_path_buf(), content) {
-                Ok(()) => true,
-                // QueueFull is benign: the content already lives in the
-                // pending map and the next successful signal drains it.
-                // The file is "on its way" — record the checkpoint.
-                Err(crate::embeddings::EnqueueError::QueueFull) => true,
+            // PR-D: a full batch arrives as a single bulk insert so the
+            // embedder drains many files per wake-up instead of one.
+            // Closed → checkpoint not advanced; next reindex retries.
+            match probe.enqueue_bulk(batch) {
+                Ok(_) => true,
                 Err(e) => {
-                    log::warn!("reindex enqueue: {e}");
+                    log::warn!("reindex enqueue_bulk: {e}");
                     false
                 }
             }
@@ -579,6 +579,12 @@ pub async fn reindex_vault(
             if let Err(e) = app_for_progress.emit("embed://reindex_progress", progress) {
                 log::debug!("reindex_progress emit dropped: {e}");
             }
+        },
+        move || {
+            pending_for_bp
+                .lock()
+                .map(|g| g.len())
+                .unwrap_or(0)
         },
     );
 
