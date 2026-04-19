@@ -142,6 +142,7 @@ pub fn run() {
             commands::search::search_fulltext,
             commands::search::search_filename,
             commands::search::semantic_search,
+            commands::search::hybrid_search,
             commands::search::rebuild_index,
             commands::links::get_backlinks,
             commands::links::get_outgoing_links,
