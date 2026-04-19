@@ -28,6 +28,11 @@ mod service;
 #[cfg(feature = "embeddings")]
 pub use service::EmbeddingService;
 
+#[cfg(feature = "embeddings")]
+mod chunking;
+#[cfg(feature = "embeddings")]
+pub use chunking::{Chunk, Chunker, DEFAULT_OVERLAP_TOKENS, MAX_CONTENT_TOKENS};
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]
@@ -38,6 +43,10 @@ pub enum EmbeddingError {
     OrtInit(String),
     #[error("fastembed error: {0}")]
     Fastembed(String),
+    #[error("tokenizer error: {0}")]
+    Tokenizer(String),
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
