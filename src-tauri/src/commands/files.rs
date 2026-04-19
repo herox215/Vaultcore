@@ -122,9 +122,28 @@ pub async fn write_file(
     // Dispatch the updates directly here so the in-memory indexes stay in sync.
     dispatch_index_updates(&state, &final_path, &content).await;
 
+    // Embed-on-save (#196): non-blocking enqueue to the EmbedCoordinator.
+    // Sync, returns immediately; a `QueueFull` outcome is benign because
+    // the latest content already lives in the coordinator's pending map.
+    #[cfg(feature = "embeddings")]
+    dispatch_embed_update(&state, final_path.clone(), &content);
+
     // Return hash so the frontend can track the last-known disk state
     // (EDIT-10 groundwork — Phase 5 will compare against this).
     Ok(hash_bytes(bytes))
+}
+
+#[cfg(feature = "embeddings")]
+fn dispatch_embed_update(state: &VaultState, abs_path: PathBuf, content: &str) {
+    let coord_handles = {
+        let Ok(guard) = state.embed_coordinator.lock() else { return };
+        guard.as_ref().map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
+    };
+    let Some((tx, pending)) = coord_handles else { return };
+    let probe = crate::embeddings::EmbedCoordinator { tx, pending };
+    if let Err(e) = probe.enqueue(abs_path, content.to_string()) {
+        log::warn!("embed enqueue: {e}");
+    }
 }
 
 /// Dispatch IndexCmd::UpdateLinks and IndexCmd::UpdateTags for a path we just
