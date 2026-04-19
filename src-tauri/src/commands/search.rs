@@ -277,6 +277,69 @@ pub async fn search_filename(
     Ok(matches)
 }
 
+// ── semantic_search ───────────────────────────────────────────────────────────
+
+/// Semantic (vector) search over the HNSW index (#202).
+///
+/// Returns up to `k` nearest chunks to `query` as `SemanticHit`s sorted
+/// by descending similarity. Feature-gated: when the `embeddings` crate
+/// feature is disabled, the bundled model is missing, or the coordinator
+/// failed to initialise, the command returns an empty list rather than
+/// erroring — matches the tolerant contract of the existing full-text
+/// commands.
+///
+/// `k` is clamped to `[1, 100]` at the boundary to bound worst-case query
+/// cost; the HNSW overshoot for tombstone filtering (#200) scales with `k`.
+///
+/// The embed + ANN search is wrapped in `spawn_blocking` so it does not
+/// stall the tokio runtime thread — a typical MiniLM embed is ~15 ms,
+/// which would block other async IPC traffic otherwise.
+#[cfg(feature = "embeddings")]
+#[tauri::command]
+pub async fn semantic_search(
+    query: String,
+    k: usize,
+    state: tauri::State<'_, crate::VaultState>,
+) -> Result<Vec<crate::embeddings::SemanticHit>, VaultError> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let k = k.clamp(1, 100);
+
+    let handles = {
+        let guard = state
+            .query_handles
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        match guard.as_ref() {
+            Some(h) => std::sync::Arc::clone(h),
+            None => return Ok(Vec::new()),
+        }
+    };
+
+    tokio::task::spawn_blocking(move || {
+        crate::embeddings::semantic_search_query(&handles, &query, k)
+    })
+    .await
+    .map_err(|_| VaultError::IndexCorrupt)?
+    .map_err(|e| {
+        log::warn!("semantic_search failed: {e}");
+        VaultError::IndexCorrupt
+    })
+}
+
+/// Stub command exposed when the `embeddings` feature is off so the
+/// frontend IPC call always resolves. Returns an empty list.
+#[cfg(not(feature = "embeddings"))]
+#[tauri::command]
+pub async fn semantic_search(
+    _query: String,
+    _k: usize,
+    _state: tauri::State<'_, crate::VaultState>,
+) -> Result<Vec<serde_json::Value>, VaultError> {
+    Ok(Vec::new())
+}
+
 // ── rebuild_index ─────────────────────────────────────────────────────────────
 
 /// Trigger a full index rebuild.
