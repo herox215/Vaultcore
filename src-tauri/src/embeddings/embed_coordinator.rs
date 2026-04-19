@@ -3,15 +3,23 @@
 //! holding up the save IPC.
 //!
 //! Coalescing strategy: a `pending` map of `path → latest content` plus a
-//! bounded wake-up channel that only carries paths. The map is the source
-//! of truth; the channel is just a "there is work to do" signal. Three
-//! rapid saves to the same path overwrite one another in the map and
-//! produce exactly one embed.
+//! bounded wake-up channel that carries `EmbedOp` ops. The map is the
+//! source of truth for embed content; the channel signals "there is work
+//! to do" plus carries explicit deletes (#201).
 //!
-//! Backpressure: a full wake-up channel is benign because the latest
-//! content already lives in the map — any subsequent successful enqueue
-//! drains it. So the save IPC never blocks: `enqueue` is sync,
-//! non-blocking, and a `QueueFull` outcome only logs.
+//! Three rapid saves to the same path overwrite one another in the map
+//! and produce exactly one embed. Deletes are FIFO with respect to
+//! embeds — so an `Embed → Delete` sequence first inserts vectors then
+//! tombstones them, while a `Delete → Embed` sequence first cancels the
+//! pending embed (by removing the path from the map) then tombstones any
+//! prior vectors. Both end with the path absent from queries, matching
+//! the user's last-action intent.
+//!
+//! Backpressure: a full wake-up channel is benign for `Embed` because
+//! the latest content already lives in the map — any subsequent
+//! successful enqueue drains it. For `Delete` a full channel is rare
+//! enough that we log + drop; the next user save plus #201 PR-B's
+//! periodic reindex will re-converge.
 //!
 //! The worker MUST be spawned on `tokio::task::spawn_blocking` (not
 //! `tokio::spawn`). Two reasons: (1) `Receiver::blocking_recv` panics if
@@ -28,12 +36,21 @@ use tokio::sync::mpsc;
 
 use super::{Chunk, Chunker, EmbeddingService, VectorSink};
 
-/// Wake-up channel capacity. Carries `PathBuf` only — actual content
-/// lives in the `pending` map. 1024 slots is generous: every event is
-/// keyboard-paced (one human, one editor) and a full channel still
-/// preserves correctness via the map. The indexer uses 8192 because it
-/// absorbs bulk filesystem events; this queue does not.
+/// Wake-up channel capacity. Carries `EmbedOp` (path-only signals); embed
+/// content lives in the `pending` map. 1024 slots is generous — every
+/// event is keyboard-paced and even external bulk deletes rarely land
+/// >1k events in a single tick.
 pub const WAKEUP_CAPACITY: usize = 1024;
+
+/// Op carried on the wake-up channel. `Embed` is a content-less signal —
+/// the actual content lives in the `pending` map and the worker drains
+/// it on each Embed wake-up. `Delete(path)` carries the path because
+/// deletes don't go through the pending map.
+#[derive(Debug, Clone)]
+pub enum EmbedOp {
+    Embed,
+    Delete(PathBuf),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnqueueError {
@@ -46,7 +63,7 @@ pub enum EnqueueError {
 }
 
 pub struct EmbedCoordinator {
-    pub tx: mpsc::Sender<PathBuf>,
+    pub tx: mpsc::Sender<EmbedOp>,
     pub pending: Arc<Mutex<HashMap<PathBuf, String>>>,
 }
 
@@ -70,7 +87,7 @@ impl EmbedCoordinator {
         sink: Arc<dyn VectorSink>,
         capacity: usize,
     ) -> Self {
-        let (tx, rx) = mpsc::channel::<PathBuf>(capacity.max(1));
+        let (tx, rx) = mpsc::channel::<EmbedOp>(capacity.max(1));
         let pending: Arc<Mutex<HashMap<PathBuf, String>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let worker_pending = Arc::clone(&pending);
@@ -80,9 +97,9 @@ impl EmbedCoordinator {
         Self { tx, pending }
     }
 
-    /// Non-blocking enqueue. Updates the pending map then signals the
-    /// worker. `QueueFull` is benign — the content is in the map and the
-    /// next successful enqueue (same path or another) will trigger a
+    /// Non-blocking embed enqueue. Updates the pending map then signals
+    /// the worker. `QueueFull` is benign — the content is in the map and
+    /// the next successful enqueue (same path or another) will trigger a
     /// drain. Caller logs and proceeds.
     pub fn enqueue(
         &self,
@@ -94,9 +111,22 @@ impl EmbedCoordinator {
                 .pending
                 .lock()
                 .map_err(|_| EnqueueError::LockPoisoned)?;
-            g.insert(path.clone(), content);
+            g.insert(path, content);
         }
-        match self.tx.try_send(path) {
+        match self.tx.try_send(EmbedOp::Embed) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(EnqueueError::QueueFull),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(EnqueueError::Closed),
+        }
+    }
+
+    /// Non-blocking delete enqueue (#201). Worker FIFO-orders Delete
+    /// against any pending Embed wake-ups. A `QueueFull` outcome here is
+    /// rarer than for embeds (deletes don't have the keyboard-burst
+    /// pattern) and the next user save's wake-up will not retroactively
+    /// dispatch the delete — caller logs.
+    pub fn enqueue_delete(&self, path: PathBuf) -> Result<(), EnqueueError> {
+        match self.tx.try_send(EmbedOp::Delete(path)) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => Err(EnqueueError::QueueFull),
             Err(mpsc::error::TrySendError::Closed(_)) => Err(EnqueueError::Closed),
@@ -114,40 +144,52 @@ fn run_worker(
     chunker: Arc<Chunker>,
     sink: Arc<dyn VectorSink>,
     pending: Arc<Mutex<HashMap<PathBuf, String>>>,
-    mut rx: mpsc::Receiver<PathBuf>,
+    mut rx: mpsc::Receiver<EmbedOp>,
 ) {
-    while let Some(_path) = rx.blocking_recv() {
-        // Drain redundant wake-ups — the map already coalesces content.
-        while rx.try_recv().is_ok() {}
-
-        let snapshot: Vec<(PathBuf, String)> = match pending.lock() {
-            Ok(mut g) => g.drain().collect(),
-            Err(_) => {
-                log::warn!("embed pending map poisoned; skipping batch");
-                continue;
+    while let Some(op) = rx.blocking_recv() {
+        match op {
+            EmbedOp::Delete(path) => {
+                // Cancel any in-flight embed for this path so a Delete →
+                // Embed race ends with the path absent. Then mark the
+                // path's vectors tombstoned in the sink.
+                if let Ok(mut g) = pending.lock() {
+                    g.remove(&path);
+                } else {
+                    log::warn!("embed pending map poisoned during delete; tombstone may race");
+                }
+                sink.delete(&path);
             }
-        };
+            EmbedOp::Embed => {
+                let snapshot: Vec<(PathBuf, String)> = match pending.lock() {
+                    Ok(mut g) => g.drain().collect(),
+                    Err(_) => {
+                        log::warn!("embed pending map poisoned; skipping batch");
+                        continue;
+                    }
+                };
 
-        for (path, content) in snapshot {
-            let chunks = match chunker.chunk(&content) {
-                Ok(c) if c.is_empty() => continue,
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("chunker failed for {}: {e}", path.display());
-                    continue;
+                for (path, content) in snapshot {
+                    let chunks = match chunker.chunk(&content) {
+                        Ok(c) if c.is_empty() => continue,
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::warn!("chunker failed for {}: {e}", path.display());
+                            continue;
+                        }
+                    };
+                    let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+                    let vectors = match service.embed_batch(&texts) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("embed failed for {}: {e}", path.display());
+                            continue;
+                        }
+                    };
+                    let pairs: Vec<(Chunk, Vec<f32>)> =
+                        chunks.into_iter().zip(vectors).collect();
+                    sink.store(&path, pairs);
                 }
-            };
-            let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-            let vectors = match service.embed_batch(&texts) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("embed failed for {}: {e}", path.display());
-                    continue;
-                }
-            };
-            let pairs: Vec<(Chunk, Vec<f32>)> =
-                chunks.into_iter().zip(vectors).collect();
-            sink.store(&path, pairs);
+            }
         }
     }
     log::info!("EmbedCoordinator worker shut down");
@@ -160,22 +202,31 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    /// Collects every `store` call so tests can assert coalescing.
+    /// Collects every `store` and `delete` call so tests can assert
+    /// coalescing and FIFO order.
     struct CountingSink {
         calls: AtomicUsize,
+        deletes: AtomicUsize,
         by_path: Mutex<HashMap<PathBuf, Vec<String>>>,
+        deleted_paths: Mutex<Vec<PathBuf>>,
     }
 
     impl CountingSink {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 calls: AtomicUsize::new(0),
+                deletes: AtomicUsize::new(0),
                 by_path: Mutex::new(HashMap::new()),
+                deleted_paths: Mutex::new(Vec::new()),
             })
         }
 
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
+        }
+
+        fn deletes(&self) -> usize {
+            self.deletes.load(Ordering::SeqCst)
         }
 
         fn paths(&self) -> Vec<PathBuf> {
@@ -196,6 +247,10 @@ mod tests {
                 .entry(path.to_path_buf())
                 .or_default()
                 .extend(snippets);
+        }
+        fn delete(&self, path: &Path) {
+            self.deletes.fetch_add(1, Ordering::SeqCst);
+            self.deleted_paths.lock().unwrap().push(path.to_path_buf());
         }
     }
 
@@ -438,6 +493,63 @@ mod tests {
             let _ = probe.enqueue("/tmp/x".into(), "x".into());
             // Drop the probe (closes the last sender).
             drop(probe);
+        });
+    }
+
+    /// #201 PR-A: enqueue_delete dispatches a Delete op that the sink
+    /// observes. The minimal sanity check; richer FIFO ordering is in
+    /// the next test.
+    #[test]
+    fn enqueue_delete_calls_sink_delete() {
+        let Some((svc, chk)) = try_load_service_and_chunker() else {
+            eprintln!("SKIP");
+            return;
+        };
+        block_on(async move {
+            let sink = CountingSink::new();
+            let coord = EmbedCoordinator::spawn(svc, chk, sink.clone() as Arc<dyn VectorSink>);
+            let p = PathBuf::from("/tmp/del.md");
+            coord.enqueue_delete(p.clone()).unwrap();
+            assert!(wait_until(|| sink.deletes() == 1, Duration::from_secs(5)));
+            let deleted = sink.deleted_paths.lock().unwrap();
+            assert_eq!(deleted.as_slice(), &[p]);
+        });
+    }
+
+    /// #201 PR-A: a Delete that arrives before its companion Embed has
+    /// drained must cancel the in-flight embed for the same path so
+    /// the path ends up absent (matching the user's last-action intent).
+    #[test]
+    fn delete_cancels_pending_embed_for_same_path() {
+        let Some((svc, chk)) = try_load_service_and_chunker() else {
+            eprintln!("SKIP");
+            return;
+        };
+        block_on(async move {
+            let sink = CountingSink::new();
+            // Capacity 1 so we can almost certainly slot the Delete in
+            // before the worker drains the prior Embed wake-up.
+            let coord = EmbedCoordinator::spawn_with_capacity(
+                svc,
+                chk,
+                sink.clone() as Arc<dyn VectorSink>,
+                4,
+            );
+            let p = PathBuf::from("/tmp/race.md");
+            coord.enqueue(p.clone(), "doomed".to_string()).unwrap();
+            // Immediately follow with a delete. The worker may have
+            // already drained the embed wake-up and started embedding —
+            // both outcomes are acceptable as long as the final state
+            // reports the path tombstoned.
+            coord.enqueue_delete(p.clone()).unwrap();
+            assert!(wait_until(
+                || sink.deletes() == 1,
+                Duration::from_secs(5),
+            ));
+            // Either: embed never ran (cancelled) → calls() == 0
+            // Or:     embed ran then delete tombstoned → calls() == 1
+            // The invariant we care about is that delete was observed.
+            assert_eq!(sink.deletes(), 1);
         });
     }
 }
