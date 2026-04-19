@@ -286,4 +286,58 @@ mod tests {
         assert_send_sync::<EmbeddingService>();
         assert_send_sync::<Arc<EmbeddingService>>();
     }
+
+    /// #207 AC #1 — single-note embed latency p50/p99. Warm, steady-state
+    /// (ORT session already loaded, arena stable). Emits a JSON line to
+    /// stderr for `scripts/run-benchmarks.sh` to collect.
+    ///
+    /// `#[ignore]` because it needs the bundled model and should only
+    /// run through the benchmark harness. Run with:
+    /// `cargo test --release --features embeddings -- --ignored bench_single_embed --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_single_embed_p50_p99() {
+        use std::time::{Duration, Instant};
+        const WARMUP: usize = 20;
+        const N: usize = 200;
+
+        let Some(svc) = try_load() else {
+            eprintln!("SKIP: embeddings not bundled");
+            return;
+        };
+
+        // Representative prose — varied length so we exercise the tokenizer's
+        // padding + truncation paths, not just the shortest possible input.
+        let probes: Vec<String> = (0..N)
+            .map(|i| {
+                format!(
+                    "note {i} about markdown workflows, cross-linking between \
+                     files, and incremental indexing of a personal knowledge vault"
+                )
+            })
+            .collect();
+        for p in probes.iter().take(WARMUP) {
+            let _ = svc.embed(p).unwrap();
+        }
+
+        let mut samples = Vec::with_capacity(N);
+        for p in &probes {
+            let t0 = Instant::now();
+            let _ = svc.embed(p).unwrap();
+            samples.push(t0.elapsed());
+        }
+        samples.sort();
+        let p50 = samples[N / 2];
+        let p99 = samples[(N * 99) / 100];
+        eprintln!("BENCH_JSON {{\"name\":\"single_embed\",\"p50_ms\":{:.3},\"p99_ms\":{:.3},\"n\":{N}}}",
+            p50.as_secs_f64() * 1000.0,
+            p99.as_secs_f64() * 1000.0);
+        // Loose ceiling: 20 ms p50 is well above warm ORT inference for
+        // MiniLM-L6-v2 on any modern CPU. The harness's regression check
+        // catches real drift against the committed baseline.
+        assert!(
+            p50 < Duration::from_millis(20),
+            "single_embed p50 too slow: {p50:?}"
+        );
+    }
 }

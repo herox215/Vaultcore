@@ -305,4 +305,45 @@ mod tests {
             "expected mostly two-source hits in top 50, got {overlap_top}",
         );
     }
+
+    /// #207 AC #1 — RRF fusion p50/p99 at hybrid-search's realistic
+    /// working size (each leg returns top_n = 200 per search.rs). This is
+    /// the only hybrid-specific time on top of the component legs; the
+    /// end-to-end embed + HNSW + BM25 times are captured by their own
+    /// benches and summed by the harness.
+    #[test]
+    #[ignore]
+    fn bench_rrf_fuse_p50_p99() {
+        use std::time::Instant;
+        const WARMUP: usize = 50;
+        const N: usize = 1000;
+        const PER_LEG: usize = 200;
+
+        // Deterministic synthetic legs: 50% overlap between BM25 and vec,
+        // mimicking search.rs's top_n after a realistic dual-retrieval.
+        let bm25: Vec<(String, f32)> = (0..PER_LEG)
+            .map(|i| (format!("doc-{i}.md"), (PER_LEG - i) as f32))
+            .collect();
+        let vec_hits: Vec<(String, f32)> = (0..PER_LEG)
+            .map(|i| (format!("doc-{}.md", i + PER_LEG / 2), 1.0 - (i as f32 / PER_LEG as f32)))
+            .collect();
+
+        for _ in 0..WARMUP {
+            let _ = rrf_fuse(&bm25, &vec_hits, RRF_K);
+        }
+        let mut samples = Vec::with_capacity(N);
+        for _ in 0..N {
+            let t0 = Instant::now();
+            let _ = rrf_fuse(&bm25, &vec_hits, RRF_K);
+            samples.push(t0.elapsed());
+        }
+        samples.sort();
+        let p50 = samples[N / 2];
+        let p99 = samples[(N * 99) / 100];
+        eprintln!(
+            "BENCH_JSON {{\"name\":\"rrf_fuse\",\"p50_ms\":{:.4},\"p99_ms\":{:.4},\"n\":{N},\"per_leg\":{PER_LEG}}}",
+            p50.as_secs_f64() * 1000.0,
+            p99.as_secs_f64() * 1000.0,
+        );
+    }
 }
