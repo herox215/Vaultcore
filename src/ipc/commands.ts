@@ -11,7 +11,7 @@ import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
 import type { SearchResult, FileMatch } from "../types/search";
-import type { BacklinkEntry, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
+import type { BacklinkEntry, ParsedLink, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
 
 function normalizeError(err: unknown): VaultError {
@@ -242,11 +242,13 @@ export async function getBacklinks(path: string): Promise<BacklinkEntry[]> {
 }
 
 /**
- * Return all outgoing wiki-links from a vault-relative source path.
+ * Return all outgoing wiki-links from a vault-relative source path — one
+ * `ParsedLink` per occurrence (duplicates preserved; deduplication, if any,
+ * is the caller's job).
  */
-export async function getOutgoingLinks(path: string): Promise<any[]> {
+export async function getOutgoingLinks(path: string): Promise<ParsedLink[]> {
   try {
-    return await invoke<any[]>("get_outgoing_links", { path });
+    return await invoke<ParsedLink[]>("get_outgoing_links", { path });
   } catch (e) {
     throw normalizeError(e);
   }
