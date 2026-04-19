@@ -215,8 +215,15 @@ pub async fn open_vault(
         match (svc, chk) {
             (Ok(svc), Ok(chk)) => {
                 use std::sync::Arc;
+                // #201 PR-A: HNSW-backed sink under <vault>/.vaultcore/embeddings/.
+                // capacity_hint of 4×file_count assumes the average note
+                // produces ~4 chunks (#195 splits at 254 content tokens
+                // ≈ 800 words). It only sizes initial allocations — real
+                // growth past it is supported.
+                let embed_dir = canonical.join(".vaultcore").join("embeddings");
+                let cap = vault_info.file_count.saturating_mul(4).max(64);
                 let sink: Arc<dyn crate::embeddings::VectorSink> =
-                    Arc::new(crate::embeddings::NoopSink);
+                    Arc::new(crate::embeddings::HnswSink::open(embed_dir, cap));
                 let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
                 let mut guard = state
                     .embed_coordinator
@@ -239,12 +246,27 @@ pub async fn open_vault(
         guard.as_ref().map(|c| c.tx.clone())
     };
 
+    // #201 PR-A: snapshot the embed coordinator's Sender so the watcher
+    // can dispatch EmbedOp::Delete for externally-initiated file
+    // removes / renames. None when embeddings are disabled or the
+    // coordinator didn't spawn (no bundled model / ORT init failed).
+    #[cfg(feature = "embeddings")]
+    let embed_tx = {
+        let guard = state
+            .embed_coordinator
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        guard.as_ref().map(|c| c.tx.clone())
+    };
+
     let debouncer = watcher::spawn_watcher(
         app.clone(),
         canonical.clone(),
         state.write_ignore.clone(),
         state.vault_reachable.clone(),
         index_tx,
+        #[cfg(feature = "embeddings")]
+        embed_tx,
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::LockPoisoned)? = Some(debouncer);
 

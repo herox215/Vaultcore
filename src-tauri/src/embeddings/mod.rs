@@ -36,12 +36,12 @@ pub use chunking::{Chunk, Chunker, DEFAULT_OVERLAP_TOKENS, MAX_CONTENT_TOKENS};
 #[cfg(feature = "embeddings")]
 mod sink;
 #[cfg(feature = "embeddings")]
-pub use sink::{NoopSink, VectorSink};
+pub use sink::{HnswSink, NoopSink, VectorSink};
 
 #[cfg(feature = "embeddings")]
 mod embed_coordinator;
 #[cfg(feature = "embeddings")]
-pub use embed_coordinator::{EmbedCoordinator, EnqueueError, WAKEUP_CAPACITY};
+pub use embed_coordinator::{EmbedCoordinator, EmbedOp, EnqueueError, WAKEUP_CAPACITY};
 
 #[cfg(feature = "embeddings")]
 mod vector_index;
