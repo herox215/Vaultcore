@@ -29,6 +29,9 @@ mod service;
 pub use service::EmbeddingService;
 
 #[cfg(feature = "embeddings")]
+mod session;
+
+#[cfg(feature = "embeddings")]
 mod chunking;
 #[cfg(feature = "embeddings")]
 pub use chunking::{Chunk, Chunker, DEFAULT_OVERLAP_TOKENS, MAX_CONTENT_TOKENS};
@@ -74,8 +77,8 @@ pub enum EmbeddingError {
     ModelMissing,
     #[error("ONNX Runtime init failed: {0}")]
     OrtInit(String),
-    #[error("fastembed error: {0}")]
-    Fastembed(String),
+    #[error("inference error: {0}")]
+    Inference(String),
     #[error("tokenizer error: {0}")]
     Tokenizer(String),
     #[error("invalid argument: {0}")]
@@ -181,11 +184,9 @@ pub fn ensure_runtime_initialized(
                 Err(e) => return Err(format!("ort::init_from failed: {e}")),
             };
             // #197: cap ORT inference at 2 intra-op + 1 inter-op threads
-            // and route through a dedicated ORT-managed pool. Once the
-            // env owns a global thread pool, fastembed's per-session
-            // `with_intra_threads(available_parallelism())` is silently
-            // overridden (`DisablePerSessionThreads` runs in the session
-            // commit path), so we get the cap without patching fastembed.
+            // via a dedicated ORT-managed pool. Installing this on the
+            // env triggers `DisablePerSessionThreads` in every session's
+            // commit path, so no per-session thread config is needed.
             // The cap keeps embed-on-save from contending with Tantivy's
             // rayon pool for cores under bulk-save bursts.
             let pool_opts = match GlobalThreadPoolOptions::default()
@@ -224,31 +225,6 @@ pub fn ensure_runtime_initialized(
 /// done) so the test can skip rather than fail.
 #[cfg(feature = "embeddings")]
 pub fn smoke_test(resource_dir: Option<&Path>) -> Result<Vec<f32>, EmbeddingError> {
-    use fastembed::{
-        InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
-    };
-
-    ensure_runtime_initialized(resource_dir)?;
-    let dir = model_dir(resource_dir)?;
-    let read = |name: &str| std::fs::read(dir.join(name));
-    let model = UserDefinedEmbeddingModel::new(
-        read("model.onnx")?,
-        TokenizerFiles {
-            tokenizer_file: read("tokenizer.json")?,
-            config_file: read("config.json")?,
-            special_tokens_map_file: read("special_tokens_map.json")?,
-            tokenizer_config_file: read("tokenizer_config.json")?,
-        },
-    );
-    let mut embedder = TextEmbedding::try_new_from_user_defined(
-        model,
-        InitOptionsUserDefined::default(),
-    )
-    .map_err(|e| EmbeddingError::Fastembed(e.to_string()))?;
-    let mut out = embedder
-        .embed(vec!["VaultCore semantic search smoke test"], None)
-        .map_err(|e| EmbeddingError::Fastembed(e.to_string()))?;
-    out.pop().ok_or_else(|| {
-        EmbeddingError::Fastembed("empty embedding batch".into())
-    })
+    let svc = EmbeddingService::load(resource_dir)?;
+    svc.embed("VaultCore semantic search smoke test")
 }
