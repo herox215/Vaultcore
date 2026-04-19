@@ -61,6 +61,11 @@ mod query;
 #[cfg(feature = "embeddings")]
 pub use query::{semantic_search_query, QueryHandles, SemanticHit};
 
+#[cfg(feature = "embeddings")]
+mod hybrid;
+#[cfg(feature = "embeddings")]
+pub use hybrid::{rrf_fuse, FusedHit, RRF_K};
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]
