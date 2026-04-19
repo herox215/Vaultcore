@@ -39,5 +39,18 @@ pulldown-cmark = "0.13"
 serde_yml = "0.0.12"
 base64 = "0.22"
 
+# Embeddings stack — gated behind `embeddings` feature.
+# fastembed re-exports `ort` with the `load-dynamic` feature, so libonnxruntime
+# is dlopen'd at runtime from a Tauri-bundled resource (#191) instead of being
+# linked statically. Default features are disabled to suppress the binary
+# downloader (`ort-download-binaries-native-tls`) and unused candle backends.
+fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic"], optional = true }
+# Pin must match fastembed's exact `ort` requirement — fastembed 5.13.2 needs rc.11.
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
+
+[features]
+default = ["embeddings"]
+embeddings = ["dep:fastembed", "dep:ort"]
+
 [dev-dependencies]
 tempfile = "3"
