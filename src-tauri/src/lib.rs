@@ -153,6 +153,10 @@ pub fn run() {
             commands::links::get_resolved_attachments,
             commands::links::get_local_graph,
             commands::links::get_link_graph,
+            #[cfg(feature = "embeddings")]
+            commands::embedding_graph::get_embedding_graph,
+            #[cfg(not(feature = "embeddings"))]
+            commands::embedding_graph_stub::get_embedding_graph,
             commands::tags::list_tags,
             commands::tags::get_tag_occurrences,
             commands::bookmarks::load_bookmarks,

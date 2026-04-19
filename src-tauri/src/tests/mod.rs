@@ -20,3 +20,5 @@ mod vault_walk;
 mod embeddings;
 #[cfg(feature = "embeddings")]
 mod semantic_quality;
+#[cfg(feature = "embeddings")]
+mod embedding_graph;
