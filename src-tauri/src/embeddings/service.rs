@@ -36,9 +36,13 @@ impl EmbeddingService {
                 tokenizer_config_file: read("tokenizer_config.json")?,
             },
         );
+        // Cap fastembed's tokenizer at 256 to match MiniLM-L6-v2's training
+        // sequence length and the chunker's window size (#195). The crate
+        // default is 512, which would let oversized inputs through and
+        // silently degrade embedding quality.
         let embedder = TextEmbedding::try_new_from_user_defined(
             model,
-            InitOptionsUserDefined::default(),
+            InitOptionsUserDefined::default().with_max_length(256),
         )
         .map_err(|e| EmbeddingError::Fastembed(e.to_string()))?;
         Ok(Arc::new(Self {
