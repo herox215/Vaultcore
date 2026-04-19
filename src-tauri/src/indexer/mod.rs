@@ -591,9 +591,16 @@ async fn acquire_writer_with_retry(index: &Index) -> Result<IndexWriter, VaultEr
 
 // ── Walk helper ───────────────────────────────────────────────────────────────
 
-/// Collect all `.md` paths under `vault_path`, skipping dot-directories
-/// (including `.obsidian`, `.vaultcore`, `.trash`).
-fn collect_md_paths(vault_path: &Path) -> Vec<PathBuf> {
+/// Walk all `.md` files under `vault_path`, skipping every dot-prefixed
+/// directory (`.obsidian`, `.vaultcore`, `.trash`, `sub/.nested/…`, …).
+///
+/// Shared by the indexer's cold-start + rebuild paths and by the
+/// user-interactive rename / count-wiki-links commands (#180).
+///
+/// Contract — keep the `filter_entry` *before* `filter_map(Result::ok)`:
+/// that ordering is what prunes the whole dot-subtree rather than walking
+/// into it and surfacing errors per entry.
+pub(crate) fn walk_md_files(vault_path: &Path) -> impl Iterator<Item = PathBuf> {
     walkdir::WalkDir::new(vault_path)
         .follow_links(false)
         .into_iter()
@@ -613,7 +620,13 @@ fn collect_md_paths(vault_path: &Path) -> Vec<PathBuf> {
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         })
         .map(|e| e.into_path())
-        .collect()
+}
+
+/// Convenience: `walk_md_files(p).collect()`. Kept for call sites that want
+/// an owned `Vec` — the indexer's cold-start pass needs the total count up
+/// front for progress throttling.
+fn collect_md_paths(vault_path: &Path) -> Vec<PathBuf> {
+    walk_md_files(vault_path).collect()
 }
 
 /// Collect all `.canvas` relative paths (forward-slash, vault-relative) under
