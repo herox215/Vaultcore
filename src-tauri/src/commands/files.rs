@@ -21,11 +21,10 @@
 
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
-use crate::indexer::IndexCmd;
+use crate::indexer::{walk_md_files, IndexCmd};
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// T-02 mitigation: canonicalize `target` and confirm it sits inside the
 /// currently-open vault.
@@ -250,23 +249,6 @@ fn find_available_dir_name(dir: &Path, base_name: &str) -> PathBuf {
         }
         n += 1;
     }
-}
-
-/// Helper: walk all .md files in vault, excluding dot-prefixed directories.
-fn walk_md_files(vault: &Path) -> impl Iterator<Item = PathBuf> {
-    WalkDir::new(vault)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_str().unwrap_or("");
-            e.depth() == 0 || !name.starts_with('.')
-        })
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().is_file()
-                && e.path().extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        })
-        .map(|e| e.path().to_path_buf())
 }
 
 // ─── create_file ─────────────────────────────────────────────────────────────
