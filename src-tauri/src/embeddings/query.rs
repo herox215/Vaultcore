@@ -351,7 +351,12 @@ mod tests {
         }
         samples.sort();
         let p50 = samples[Q / 2];
-        eprintln!("semantic_search p50 over {Q} queries @ {N} vectors: {p50:?}");
+        let p99 = samples[(Q * 99) / 100];
+        eprintln!(
+            "BENCH_JSON {{\"name\":\"semantic_search_100k\",\"p50_ms\":{:.3},\"p99_ms\":{:.3},\"n\":{Q},\"vectors\":{N}}}",
+            p50.as_secs_f64() * 1000.0,
+            p99.as_secs_f64() * 1000.0,
+        );
         assert!(
             p50 < Duration::from_millis(5),
             "p50 latency too slow: {p50:?}",

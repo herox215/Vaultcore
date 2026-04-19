@@ -946,6 +946,13 @@ mod tests {
                 elapsed,
                 (100_000.0 / per_sec) / 60.0,
             );
+            // #207: the reindex bench is a total-wall-clock measurement;
+            // we publish files/sec instead of p50 so the harness can
+            // compare against a baseline throughput floor.
+            eprintln!(
+                "BENCH_JSON {{\"name\":\"reindex_throughput\",\"files_per_sec\":{per_sec:.3},\"files\":{done},\"elapsed_ms\":{:.1}}}",
+                elapsed.as_secs_f64() * 1000.0,
+            );
 
             assert_eq!(done, n_files, "every file must reach the sink");
             // Floor: 3.0 files/sec. On the 100k target this would be
