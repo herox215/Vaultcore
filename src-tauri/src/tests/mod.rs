@@ -18,3 +18,5 @@ mod file_index_contention;
 mod vault_walk;
 #[cfg(feature = "embeddings")]
 mod embeddings;
+#[cfg(feature = "embeddings")]
+mod semantic_quality;
