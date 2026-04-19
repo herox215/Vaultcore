@@ -1,8 +1,11 @@
 # Binary assets fetched by build.rs are pinned via checksums.toml and
-# kept out of git. Only this file, checksums.toml, and the upstream
-# Apache-2.0 LICENSE template (used by build.rs to populate model
-# resource directories) are tracked.
+# kept out of git. Only this file, checksums.toml, and the LICENSE
+# templates (used by build.rs to populate model resource directories)
+# are tracked. LICENSE-APACHE-2.0 is kept for historical bundles and any
+# future Apache-2.0 model; LICENSE-MIT is the active one for the bundled
+# multilingual-e5-small model (#233).
 *
 !.gitignore
 !checksums.toml
 !LICENSE-APACHE-2.0
+!LICENSE-MIT
