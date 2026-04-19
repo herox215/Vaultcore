@@ -56,6 +56,11 @@ pub use reindex::{
     ReindexProgress, CHECKPOINT_FILE, CHECKPOINT_VERSION,
 };
 
+#[cfg(feature = "embeddings")]
+mod query;
+#[cfg(feature = "embeddings")]
+pub use query::{semantic_search_query, QueryHandles, SemanticHit};
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]
