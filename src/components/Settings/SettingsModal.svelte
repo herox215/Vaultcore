@@ -12,6 +12,8 @@
   import { DEFAULT_DAILY_DATE_FORMAT } from "../../lib/dailyNotes";
   import { vaultStore } from "../../store/vaultStore";
   import { snippetsStore } from "../../store/snippetsStore";
+  import { reindexVault, cancelReindex } from "../../ipc/commands";
+  import { reindexStore, isActive as isReindexActive } from "../../store/reindexStore";
   import { formatShortcut } from "../../lib/shortcuts";
   import { commandRegistry, hotkeysEqual, type Command, type HotKey } from "../../lib/commands/registry";
   import { DEFAULT_COMMAND_SPECS } from "../../lib/commands/defaultCommands";
@@ -63,6 +65,8 @@
   let snippetsEnabled = $state<string[]>([]);
   let snippetsLoaded = $state<boolean>(false);
   let refreshingSnippets = $state<boolean>(false);
+  let semanticEnabled = $state<boolean>(false);
+  let reindexActive = $state<boolean>(false);
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
   const unsubSettings = settingsStore.subscribe((s) => {
@@ -72,6 +76,10 @@
     dailyFolder = s.dailyNotesFolder;
     dailyFormat = s.dailyNotesDateFormat;
     dailyTemplate = s.dailyNotesTemplate;
+    semanticEnabled = s.enableSemanticSearch;
+  });
+  const unsubReindex = reindexStore.subscribe((r) => {
+    reindexActive = isReindexActive(r);
   });
   const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
   const unsubCommands = commandRegistry.subscribe((list) => {
@@ -227,7 +235,25 @@
     }
   }
 
-  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); });
+  /** #201: master toggle for semantic search. Enabling fires the
+   *  background reindex against the open vault; disabling cancels it.
+   *  Both calls are fire-and-forget — the statusbar listens for the
+   *  `embed://reindex_progress` event and surfaces progress. */
+  async function onToggleSemantic(e: Event): Promise<void> {
+    const enabled = (e.target as HTMLInputElement).checked;
+    settingsStore.setEnableSemanticSearch(enabled);
+    try {
+      if (enabled) {
+        if (currentVaultPath) await reindexVault();
+      } else {
+        await cancelReindex();
+      }
+    } catch (err) {
+      console.warn("semantic toggle ipc failed", err);
+    }
+  }
+
+  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); unsubReindex(); });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -409,6 +435,38 @@
         <p class="vc-settings-hint">
           Unterstützte Tokens: <code>YYYY</code>, <code>MM</code>, <code>DD</code>.
           Fehlender Ordner wird beim ersten Öffnen erstellt.
+        </p>
+      </section>
+
+      <!-- Section — Semantische Suche (#201) -->
+      <section class="vc-settings-section" data-testid="settings-semantic">
+        <h3 class="vc-settings-section-title">SEMANTISCHE SUCHE</h3>
+        <div class="vc-settings-row">
+          <label for="semantic-toggle">Semantische Suche aktivieren</label>
+          <label class="vc-snippets-toggle">
+            <input
+              id="semantic-toggle"
+              data-testid="settings-semantic-toggle"
+              type="checkbox"
+              checked={semanticEnabled}
+              onchange={onToggleSemantic}
+              disabled={!currentVaultPath}
+              aria-label="Semantische Suche aktivieren"
+            />
+            <span class="vc-snippets-toggle-track" aria-hidden="true">
+              <span class="vc-snippets-toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+        <p class="vc-settings-hint">
+          Erster Index-Lauf kann bei großen Vaults einige Minuten dauern und
+          läuft im Hintergrund. Fortschritt wird in der Statusleiste angezeigt.
+          {#if reindexActive}
+            <strong> Indexierung läuft …</strong>
+          {/if}
+          {#if !currentVaultPath}
+            <br />Öffne zuerst einen Vault, um die semantische Suche zu aktivieren.
+          {/if}
         </p>
       </section>
 

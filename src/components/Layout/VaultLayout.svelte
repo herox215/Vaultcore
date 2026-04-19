@@ -8,6 +8,7 @@
   import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
+  import ReindexStatusbar from "../Statusbar/ReindexStatusbar.svelte";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
@@ -813,6 +814,9 @@
   onClose={() => { settingsOpen = false; }}
   {onSwitchVault}
 />
+
+<!-- #201: reindex progress overlay. Self-hides while idle. -->
+<ReindexStatusbar />
 
 <style>
   .vc-vault-layout {
