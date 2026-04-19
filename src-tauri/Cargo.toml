@@ -57,10 +57,15 @@ base64 = "0.22"
 fastembed = { version = "5", default-features = false, features = ["ort-load-dynamic"], optional = true }
 # Pin must match fastembed's exact `ort` requirement — fastembed 5.13.2 needs rc.11.
 ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
+# Direct dep on the same `tokenizers` crate fastembed pulls in transitively
+# (Cargo.lock pins 0.22.2). Same feature set so cargo unifies to one copy.
+# Used by the embedding chunker (#195) to split notes into overlapping
+# ≤256-token windows before they reach the embedder.
+tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
 
 [features]
 default = ["embeddings"]
-embeddings = ["dep:fastembed", "dep:ort"]
+embeddings = ["dep:fastembed", "dep:ort", "dep:tokenizers"]
 
 [dev-dependencies]
 tempfile = "3"
