@@ -388,6 +388,50 @@ impl VectorIndex {
         Ok(fresh)
     }
 
+    /// #235 — yield every live (non-tombstoned) chunk via callback. Used
+    /// by the embedding-graph builder to enumerate source vectors
+    /// without copying the whole index.
+    ///
+    /// Walks HNSW layers one at a time and drops each layer's iterator
+    /// before stepping to the next — same pattern as `compact_into_fresh`,
+    /// for the same reason: holding a single iterator across all layers
+    /// would pin the `points_by_layer` read lock for the full walk and
+    /// stall concurrent inserts from the embed worker.
+    ///
+    /// Tombstones are snapshotted once at entry; ids tombstoned during
+    /// the walk continue to be yielded (consistent snapshot semantics).
+    /// Mapping is read once per yield to resolve `(path, chunk_index)`.
+    pub fn for_each_live<F>(&self, mut f: F)
+    where
+        F: FnMut(u32, &Path, usize, &[f32]),
+    {
+        let tomb_snapshot: HashSet<u32> = self
+            .tombstones
+            .read()
+            .expect("tombstones lock")
+            .clone();
+        let mapping_snapshot = self.mapping.read().expect("mapping lock").clone();
+
+        let indexation = self.hnsw.get_point_indexation();
+        let nb_layers = indexation.get_max_level_observed() as usize + 1;
+        for l in 0..nb_layers {
+            let iter = indexation.get_layer_iterator(l);
+            for point in iter {
+                let origin_id = point.get_origin_id() as u32;
+                if tomb_snapshot.contains(&origin_id) {
+                    continue;
+                }
+                let Some((path, chunk_idx)) =
+                    mapping_snapshot.get(origin_id as usize)
+                else {
+                    continue;
+                };
+                f(origin_id, path.as_path(), *chunk_idx, point.get_v());
+            }
+            // iterator drops here — read lock released before next layer.
+        }
+    }
+
     /// Persist the index to `dir` (created if missing). Writes three files:
     /// `vectors.hnsw.graph`, `vectors.hnsw.data`, `vectors.mapping.json`.
     /// Mapping is written atomically (tmp + rename); the hnsw_rs dump is not

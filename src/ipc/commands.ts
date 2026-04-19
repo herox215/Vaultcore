@@ -381,6 +381,35 @@ export async function getLinkGraph(): Promise<LocalGraph> {
   }
 }
 
+/**
+ * #235 — embedding-similarity graph for the whole vault. Same payload
+ * shape as `getLinkGraph()` so the renderer can swap data sources
+ * without restructuring; only `edge.weight` is populated (cosine
+ * similarity in [0, 1]).
+ *
+ * `topK` caps neighbours per source note; `threshold` drops edges whose
+ * max chunk-pair cosine falls below it. The backend snapshots the
+ * VectorIndex once and runs the build inside `spawn_blocking`, so the
+ * call is safe to issue from the UI without blocking other IPC traffic.
+ *
+ * Returns an empty payload when the embeddings subsystem is not
+ * initialised; the caller distinguishes "embeddings not ready" from
+ * "no edges over threshold" by checking whether `nodes.length === 0`.
+ */
+export async function getEmbeddingGraph(
+  topK: number,
+  threshold: number,
+): Promise<LocalGraph> {
+  try {
+    return await invoke<LocalGraph>("get_embedding_graph", {
+      topK,
+      threshold,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 export async function getResolvedAttachments(): Promise<Map<string, string>> {
   try {
     const record = await invoke<Record<string, string>>("get_resolved_attachments");
