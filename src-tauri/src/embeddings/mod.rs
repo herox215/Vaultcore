@@ -152,14 +152,36 @@ pub fn ensure_runtime_initialized(
         };
         #[cfg(feature = "embeddings")]
         {
+            use ort::environment::GlobalThreadPoolOptions;
             let builder = match ort::init_from(path.to_string_lossy().into_owned()) {
                 Ok(b) => b,
                 Err(e) => return Err(format!("ort::init_from failed: {e}")),
             };
+            // #197: cap ORT inference at 2 intra-op + 1 inter-op threads
+            // and route through a dedicated ORT-managed pool. Once the
+            // env owns a global thread pool, fastembed's per-session
+            // `with_intra_threads(available_parallelism())` is silently
+            // overridden (`DisablePerSessionThreads` runs in the session
+            // commit path), so we get the cap without patching fastembed.
+            // The cap keeps embed-on-save from contending with Tantivy's
+            // rayon pool for cores under bulk-save bursts.
+            let pool_opts = match GlobalThreadPoolOptions::default()
+                .with_intra_threads(2)
+                .and_then(|o| o.with_inter_threads(1))
+            {
+                Ok(o) => o,
+                Err(e) => return Err(format!("ORT thread-pool config failed: {e}")),
+            };
+            let builder = builder.with_global_thread_pool(pool_opts);
             // `commit` returns `false` if a global environment already exists.
             // That is not a hard error for us (idempotent init across tests
-            // and Tauri setup callbacks), so we don't fail the OnceLock.
-            let _ = builder.commit();
+            // and Tauri setup callbacks), so we don't fail the OnceLock —
+            // the cached config still applies for the env that did win.
+            if !builder.commit() {
+                log::warn!(
+                    "ORT environment already committed; #197 thread-pool caps may not apply"
+                );
+            }
             Ok(())
         }
         #[cfg(not(feature = "embeddings"))]
