@@ -13,6 +13,7 @@
 //! safely share `Arc<VectorIndex>` between the embed worker (writes)
 //! and the query IPC handlers (reads).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -21,6 +22,7 @@ use std::sync::RwLock;
 // distance values are mathematically identical (1 - dot product) for unit
 // inputs, which `EmbeddingService` always produces (#194).
 use hnsw_rs::api::AnnT;
+use hnsw_rs::filter::FilterT;
 use hnsw_rs::hnswio::{HnswIo, ReloadOptions};
 use hnsw_rs::prelude::{DistDot, Hnsw};
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,24 @@ const NB_LAYER: usize = 16; // hard cap; the graph picks its own per insert
 /// Default `ef_search` — quality/latency knob exposed per query.
 pub const DEFAULT_EF_SEARCH: usize = 64;
 
+/// #200 — compaction trigger thresholds (read by the embed coordinator
+/// in #201; constants live here so callers and tests share one source).
+/// Compact when *both* conditions hold: ratio of tombstoned to total ids
+/// exceeds `COMPACTION_RATIO_THRESHOLD` AND absolute count exceeds
+/// `COMPACTION_MIN_TOMBSTONES`. The absolute floor avoids pathological
+/// rebuilds on tiny vaults (1 of 4 deletes shouldn't trigger a rebuild).
+pub const COMPACTION_RATIO_THRESHOLD: f32 = 0.20;
+pub const COMPACTION_MIN_TOMBSTONES: usize = 64;
+
+/// Tombstone-aware overshoot for `query_with_ef` (#200): when tombstones
+/// are present we ask hnsw for `k + min(tombstones, OVERSHOOT_CAP * k)`
+/// candidates and let the `FilterT` pass drop tombstoned ids. Uses
+/// hnsw_rs's native `search_filter` so the filter runs inside the graph
+/// walk; the overshoot is what guarantees we still return up to `k`
+/// surviving hits. Cap keeps cost bounded when tombstone ratio is huge
+/// — compaction should already be running by then.
+const TOMBSTONE_OVERSHOOT_CAP: usize = 4;
+
 /// Filename stem used by `Hnsw::file_dump` — emits `<DUMP_BASENAME>.hnsw.graph`
 /// and `<DUMP_BASENAME>.hnsw.data` next to a sibling `<DUMP_MAPPING>` file.
 const DUMP_BASENAME: &str = "vectors";
@@ -48,9 +68,27 @@ struct MappingFile {
     /// Bumped if the on-disk layout changes incompatibly.
     version: u32,
     entries: Vec<(PathBuf, usize)>,
+    /// #200 — tombstoned ids. Optional in the wire format so v1 dumps
+    /// (which predate tombstones) still load with an implicit empty set.
+    #[serde(default)]
+    tombstones: Vec<u32>,
 }
 
-const MAPPING_VERSION: u32 = 1;
+/// Bumped to 2 in #200 to add the `tombstones` field. v1 dumps still load
+/// (the field defaults to empty) and silently upgrade on next save.
+const MAPPING_VERSION: u32 = 2;
+const MAPPING_VERSION_MIN: u32 = 1;
+
+/// Closure-backed `FilterT` with no allocation. Only kept as a doc anchor
+/// — actual call sites use a closure passed by reference, which the
+/// blanket `impl<F: Fn(&DataId)->bool> FilterT for F` covers.
+struct TombstoneFilter<'a>(&'a HashSet<u32>);
+impl FilterT for TombstoneFilter<'_> {
+    fn hnsw_filter(&self, id: &usize) -> bool {
+        // FilterT keeps ids that return true.
+        !self.0.contains(&(*id as u32))
+    }
+}
 
 /// Magic bytes hnsw_rs writes at the start of the data file (`MAGICDATAP`)
 /// and the graph file (`MAGICDESCR_*`). We re-check them before delegating
@@ -77,6 +115,16 @@ pub struct VectorIndex {
     /// from the `mapping` length. Behind a `RwLock` so concurrent reads
     /// during insert don't block beyond the brief lookup.
     mapping: RwLock<Vec<(PathBuf, usize)>>,
+    /// #200 — reverse index `path → ids`, kept in sync with `mapping`
+    /// so `mark_deleted(path)` is O(chunks-per-file) instead of O(N).
+    /// Locked separately because deletes only touch this + tombstones,
+    /// not the mapping table itself.
+    path_to_ids: RwLock<HashMap<PathBuf, Vec<u32>>>,
+    /// #200 — tombstoned ids; filtered out of every `query` and dropped
+    /// during `compact_into_fresh`. `RwLock<HashSet>` (not DashSet) since
+    /// reads dominate and writers are rare and serialised through the
+    /// embed coordinator's delete path.
+    tombstones: RwLock<HashSet<u32>>,
 }
 
 impl VectorIndex {
@@ -94,6 +142,8 @@ impl VectorIndex {
         Self {
             hnsw,
             mapping: RwLock::new(Vec::with_capacity(capacity_hint)),
+            path_to_ids: RwLock::new(HashMap::new()),
+            tombstones: RwLock::new(HashSet::new()),
         }
     }
 
@@ -104,9 +154,15 @@ impl VectorIndex {
         let id = {
             let mut m = self.mapping.write().expect("mapping lock");
             let id = m.len();
-            m.push((path, chunk_index));
+            m.push((path.clone(), chunk_index));
             id
         };
+        self.path_to_ids
+            .write()
+            .expect("path_to_ids lock")
+            .entry(path)
+            .or_default()
+            .push(id as u32);
         self.hnsw.insert((vec, id));
         u32::try_from(id).expect("vector index overflowed u32")
     }
@@ -121,10 +177,13 @@ impl VectorIndex {
         }
         let first_id = {
             let mut m = self.mapping.write().expect("mapping lock");
+            let mut p2i = self.path_to_ids.write().expect("path_to_ids lock");
             let first = m.len();
-            for (p, c, v) in items.iter() {
+            for (off, (p, c, v)) in items.iter().enumerate() {
                 assert_eq!(v.len(), DIM, "vector dim mismatch: got {}", v.len());
+                let id = (first + off) as u32;
                 m.push((p.clone(), *c));
+                p2i.entry(p.clone()).or_default().push(id);
             }
             first
         };
@@ -147,11 +206,27 @@ impl VectorIndex {
     /// Like `query` but with an explicit `ef_search` knob. Higher = more
     /// recall, more cost. Useful for the upcoming hybrid-search tuning
     /// in #208.
+    ///
+    /// When tombstones are present the call goes through hnsw_rs's
+    /// `search_filter` so the per-id check runs inside the graph walk;
+    /// `k` is overshot by `min(tombstones, k * TOMBSTONE_OVERSHOOT_CAP)`
+    /// because `search_filter` itself does not back-fill — without
+    /// overshoot a query whose top-k are all tombstoned would return
+    /// fewer than `k` hits even when survivors exist further out (#200).
     pub fn query_with_ef(&self, vec: &[f32], k: usize, ef_search: usize) -> Vec<(u32, f32)> {
         assert_eq!(vec.len(), DIM, "vector dim mismatch: got {}", vec.len());
-        self.hnsw
-            .search(vec, k, ef_search.max(k))
-            .into_iter()
+        let tomb = self.tombstones.read().expect("tombstones lock");
+        let raw = if tomb.is_empty() {
+            self.hnsw.search(vec, k, ef_search.max(k))
+        } else {
+            let overshoot = tomb.len().min(k.saturating_mul(TOMBSTONE_OVERSHOOT_CAP));
+            let k_eff = k.saturating_add(overshoot);
+            let filter = TombstoneFilter(&tomb);
+            self.hnsw
+                .search_filter(vec, k_eff, ef_search.max(k_eff), Some(&filter))
+        };
+        raw.into_iter()
+            .take(k)
             .map(|n| (n.d_id as u32, n.distance))
             .collect()
     }
@@ -183,6 +258,126 @@ impl VectorIndex {
         self.len() == 0
     }
 
+    /// #200 — count of inserted (non-tombstoned) vectors. Use over
+    /// `len()` when callers care about *live* vectors (e.g. ratio
+    /// calculations).
+    pub fn live_len(&self) -> usize {
+        self.len().saturating_sub(self.tombstone_count())
+    }
+
+    /// #200 — number of tombstoned ids. O(1).
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstones.read().expect("tombstones lock").len()
+    }
+
+    /// #200 — `tombstones / total`. Returns 0 on an empty index.
+    /// Read by the embed coordinator (#201) to decide when to compact.
+    pub fn tombstone_ratio(&self) -> f32 {
+        let total = self.len();
+        if total == 0 {
+            return 0.0;
+        }
+        self.tombstone_count() as f32 / total as f32
+    }
+
+    /// #200 — true if compaction's gating conditions are met. Pulled out
+    /// so callers (and tests) don't have to duplicate the AND of ratio
+    /// and absolute-floor.
+    pub fn should_compact(&self) -> bool {
+        self.tombstone_count() >= COMPACTION_MIN_TOMBSTONES
+            && self.tombstone_ratio() > COMPACTION_RATIO_THRESHOLD
+    }
+
+    /// #200 — mark every chunk-id for `path` as deleted. Returns the
+    /// number of new tombstones added (already-tombstoned ids are not
+    /// double-counted). O(chunks-per-file) thanks to `path_to_ids`.
+    ///
+    /// HNSW data is not removed; queries filter via `FilterT` and a
+    /// future `compact_into_fresh` rebuilds the graph without the
+    /// tombstoned points.
+    pub fn mark_deleted(&self, path: &Path) -> usize {
+        let p2i = self.path_to_ids.read().expect("path_to_ids lock");
+        let Some(ids) = p2i.get(path) else { return 0 };
+        let mut added = 0;
+        let mut ts = self.tombstones.write().expect("tombstones lock");
+        for &id in ids {
+            if ts.insert(id) {
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// #200 — true if `id` has been tombstoned. Used by hybrid-search
+    /// callers (#203) that already have ids and want to skip extra work.
+    pub fn is_tombstoned(&self, id: u32) -> bool {
+        self.tombstones.read().expect("tombstones lock").contains(&id)
+    }
+
+    /// #200 — rebuild the index without tombstoned points. Walks every
+    /// HNSW layer one at a time to avoid pinning a long-lived read lock
+    /// against `points_by_layer` (which would block concurrent inserts
+    /// from the embed worker for the whole rebuild). Returns a fresh
+    /// `VectorIndex` with dense ids `0..live_len`; the caller is
+    /// responsible for atomically swapping it in (#201 wires this to an
+    /// `Arc<RwLock<Arc<VectorIndex>>>` handover).
+    ///
+    /// New ids are *not* the old ids: callers that cache id-keyed state
+    /// outside the index must invalidate after compaction. Path/chunk
+    /// identity is preserved.
+    pub fn compact_into_fresh(&self) -> Result<Self, EmbeddingError> {
+        // Snapshot tombstones once. The embed worker can still tombstone
+        // mid-rebuild; those new tombstones land in the new index's
+        // `tombstones` set on the next coordinator tick (post-swap).
+        let tomb_snapshot: HashSet<u32> = self
+            .tombstones
+            .read()
+            .expect("tombstones lock")
+            .clone();
+        let mapping_snapshot: Vec<(PathBuf, usize)> = self
+            .mapping
+            .read()
+            .expect("mapping lock")
+            .clone();
+
+        let live_capacity = mapping_snapshot.len().saturating_sub(tomb_snapshot.len());
+        let fresh = Self::new(live_capacity.max(16));
+
+        // Walk layers one at a time. `get_layer_iterator` holds a read
+        // lock on `points_by_layer` for the iterator's lifetime — by
+        // dropping the iterator between layers we let any concurrent
+        // `insert` from the embed worker make progress.
+        let indexation = self.hnsw.get_point_indexation();
+        let nb_layers = indexation.get_max_level_observed() as usize + 1;
+        // (origin_id, vector) buffer reused across layers.
+        let mut survivors: Vec<(u32, Vec<f32>)> =
+            Vec::with_capacity(live_capacity);
+        for l in 0..nb_layers {
+            let iter = indexation.get_layer_iterator(l);
+            for point in iter {
+                let origin_id = point.get_origin_id() as u32;
+                if tomb_snapshot.contains(&origin_id) {
+                    continue;
+                }
+                survivors.push((origin_id, point.get_v().to_vec()));
+            }
+            // iterator drops here — read lock released before next layer.
+        }
+
+        // Re-insert in original-id order so the new dense ids are stable
+        // across multiple compactions of the same content.
+        survivors.sort_by_key(|(id, _)| *id);
+        let items: Vec<(PathBuf, usize, Vec<f32>)> = survivors
+            .into_iter()
+            .map(|(old_id, vec)| {
+                let (p, c) = mapping_snapshot[old_id as usize].clone();
+                (p, c, vec)
+            })
+            .collect();
+        fresh.bulk_insert(items);
+        Ok(fresh)
+    }
+
     /// Persist the index to `dir` (created if missing). Writes three files:
     /// `vectors.hnsw.graph`, `vectors.hnsw.data`, `vectors.mapping.json`.
     /// Mapping is written atomically (tmp + rename); the hnsw_rs dump is not
@@ -195,9 +390,18 @@ impl VectorIndex {
                 "hnsw file_dump failed: {e}"
             ))))?;
         let m = self.mapping.read().expect("mapping lock");
+        let mut tomb: Vec<u32> = self
+            .tombstones
+            .read()
+            .expect("tombstones lock")
+            .iter()
+            .copied()
+            .collect();
+        tomb.sort_unstable();
         let payload = MappingFile {
             version: MAPPING_VERSION,
             entries: m.clone(),
+            tombstones: tomb,
         };
         let json = serde_json::to_vec(&payload).map_err(|e| {
             EmbeddingError::Io(std::io::Error::other(format!("mapping serialize: {e}")))
@@ -230,10 +434,10 @@ impl VectorIndex {
         let mapping: MappingFile = serde_json::from_slice(&mapping_bytes).map_err(|e| {
             EmbeddingError::Io(std::io::Error::other(format!("mapping parse: {e}")))
         })?;
-        if mapping.version != MAPPING_VERSION {
+        if mapping.version < MAPPING_VERSION_MIN || mapping.version > MAPPING_VERSION {
             return Err(EmbeddingError::Io(std::io::Error::other(format!(
-                "mapping version mismatch: got {}, want {}",
-                mapping.version, MAPPING_VERSION
+                "mapping version unsupported: got {}, supported {}..={}",
+                mapping.version, MAPPING_VERSION_MIN, MAPPING_VERSION
             ))));
         }
 
@@ -265,9 +469,19 @@ impl VectorIndex {
             EmbeddingError::Io(std::io::Error::other(format!("hnsw load: {e}")))
         })?;
 
+        // Rebuild path_to_ids from the loaded mapping. Tombstones come
+        // straight from the dump (or empty on a v1 file).
+        let mut p2i: HashMap<PathBuf, Vec<u32>> = HashMap::new();
+        for (id, (path, _chunk)) in mapping.entries.iter().enumerate() {
+            p2i.entry(path.clone()).or_default().push(id as u32);
+        }
+        let tombstones: HashSet<u32> = mapping.tombstones.into_iter().collect();
+
         Ok(Self {
             hnsw,
             mapping: RwLock::new(mapping.entries),
+            path_to_ids: RwLock::new(p2i),
+            tombstones: RwLock::new(tombstones),
         })
     }
 
@@ -587,5 +801,214 @@ mod tests {
             took < Duration::from_millis(1500),
             "load too slow: {took:?} for {N} vectors",
         );
+    }
+
+    // ---- #200: tombstones + compaction --------------------------------------
+
+    #[test]
+    fn mark_deleted_filters_id_from_query() {
+        let idx = VectorIndex::new(16);
+        for i in 0..16u64 {
+            idx.insert(PathBuf::from(format!("v-{i}.md")), 0, &unit_vec(i));
+        }
+        // Tombstone the exact path we'll probe for; the self-match must
+        // disappear from the result set.
+        let target = PathBuf::from("v-7.md");
+        let added = idx.mark_deleted(&target);
+        assert_eq!(added, 1, "expected one chunk tombstoned for v-7.md");
+        let hits = idx.query_with_paths(&unit_vec(7), 5);
+        assert!(
+            hits.iter().all(|(p, _, _)| p != &target),
+            "tombstoned path leaked into query results: {hits:?}",
+        );
+    }
+
+    #[test]
+    fn mark_deleted_handles_multi_chunk_paths() {
+        let idx = VectorIndex::new(8);
+        // Three chunks of one note plus two unrelated notes.
+        idx.insert(PathBuf::from("multi.md"), 0, &unit_vec(1));
+        idx.insert(PathBuf::from("multi.md"), 1, &unit_vec(2));
+        idx.insert(PathBuf::from("multi.md"), 2, &unit_vec(3));
+        idx.insert(PathBuf::from("other-a.md"), 0, &unit_vec(4));
+        idx.insert(PathBuf::from("other-b.md"), 0, &unit_vec(5));
+        let added = idx.mark_deleted(Path::new("multi.md"));
+        assert_eq!(added, 3, "all 3 chunks of multi.md must be tombstoned");
+        // Re-marking is a no-op (idempotent).
+        assert_eq!(idx.mark_deleted(Path::new("multi.md")), 0);
+        // Probing each multi-chunk seed must never return multi.md.
+        for seed in 1..=3u64 {
+            let hits = idx.query_with_paths(&unit_vec(seed), 5);
+            assert!(
+                hits.iter().all(|(p, _, _)| p != Path::new("multi.md")),
+                "seed {seed} returned tombstoned path: {hits:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn tombstone_count_and_ratio_track_deletes() {
+        let idx = VectorIndex::new(10);
+        for i in 0..10u64 {
+            idx.insert(PathBuf::from(format!("n-{i}.md")), 0, &unit_vec(i));
+        }
+        assert_eq!(idx.tombstone_count(), 0);
+        assert!((idx.tombstone_ratio() - 0.0).abs() < 1e-6);
+        idx.mark_deleted(Path::new("n-1.md"));
+        idx.mark_deleted(Path::new("n-2.md"));
+        assert_eq!(idx.tombstone_count(), 2);
+        assert!((idx.tombstone_ratio() - 0.2).abs() < 1e-6);
+        assert_eq!(idx.live_len(), 8);
+    }
+
+    #[test]
+    fn should_compact_requires_both_ratio_and_floor() {
+        // Tiny vault: 4 inserts, 1 delete = 25% ratio but only 1 tombstone
+        // — under the absolute floor. should_compact must be false.
+        let small = VectorIndex::new(4);
+        for i in 0..4u64 {
+            small.insert(PathBuf::from(format!("s-{i}.md")), 0, &unit_vec(i));
+        }
+        small.mark_deleted(Path::new("s-0.md"));
+        assert!(!small.should_compact(), "small vault must not trigger compaction");
+
+        // Bigger vault: cross both bars.
+        let big = VectorIndex::new(400);
+        for i in 0..400u64 {
+            big.insert(PathBuf::from(format!("b-{i}.md")), 0, &unit_vec(i));
+        }
+        // 100 deletes / 400 = 25% > 20% threshold; 100 > 64 floor.
+        for i in 0..100 {
+            big.mark_deleted(&PathBuf::from(format!("b-{i}.md")));
+        }
+        assert!(big.should_compact(), "big vault crossed both gates");
+    }
+
+    #[test]
+    fn tombstones_persist_across_save_load() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let idx = VectorIndex::new(8);
+        for i in 0..8u64 {
+            idx.insert(PathBuf::from(format!("p-{i}.md")), 0, &unit_vec(i));
+        }
+        idx.mark_deleted(Path::new("p-2.md"));
+        idx.mark_deleted(Path::new("p-5.md"));
+        idx.save(tmp.path()).expect("save");
+
+        let loaded = VectorIndex::load(tmp.path()).expect("load");
+        assert_eq!(loaded.tombstone_count(), 2);
+        assert!(loaded.is_tombstoned(2));
+        assert!(loaded.is_tombstoned(5));
+        // And the post-reload query honors them.
+        let hits = loaded.query_with_paths(&unit_vec(2), 5);
+        assert!(hits.iter().all(|(p, _, _)| p != Path::new("p-2.md")));
+    }
+
+    #[test]
+    fn load_v1_mapping_silently_upgrades() {
+        // Hand-craft a v1 dump: save a v2 file then rewrite the mapping
+        // file to a v1-shaped JSON without the `tombstones` field.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let idx = VectorIndex::new(4);
+        for i in 0..4u64 {
+            idx.insert(PathBuf::from(format!("v1-{i}.md")), 0, &unit_vec(i));
+        }
+        idx.save(tmp.path()).expect("save");
+
+        let v1_json = serde_json::json!({
+            "version": 1,
+            "entries": [
+                ["v1-0.md", 0],
+                ["v1-1.md", 0],
+                ["v1-2.md", 0],
+                ["v1-3.md", 0],
+            ],
+        });
+        std::fs::write(
+            tmp.path().join("vectors.mapping.json"),
+            serde_json::to_vec(&v1_json).unwrap(),
+        )
+        .expect("write v1 mapping");
+
+        let loaded = VectorIndex::load(tmp.path()).expect("v1 load");
+        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded.tombstone_count(), 0);
+    }
+
+    #[test]
+    fn compact_drops_tombstoned_and_preserves_others() {
+        let idx = VectorIndex::new(20);
+        for i in 0..20u64 {
+            idx.insert(PathBuf::from(format!("c-{i}.md")), 0, &unit_vec(i));
+        }
+        // Tombstone every odd id.
+        for i in (1..20u64).step_by(2) {
+            idx.mark_deleted(&PathBuf::from(format!("c-{i}.md")));
+        }
+        let surviving_paths: Vec<PathBuf> = (0..20u64)
+            .step_by(2)
+            .map(|i| PathBuf::from(format!("c-{i}.md")))
+            .collect();
+
+        let fresh = idx.compact_into_fresh().expect("compact");
+        assert_eq!(fresh.len(), 10, "compacted size must equal live count");
+        assert_eq!(fresh.tombstone_count(), 0);
+        // Every survivor's path must be queryable; tombstoned paths must
+        // be unreachable (not just hidden).
+        for seed in (0..20u64).step_by(2) {
+            let hits = fresh.query_with_paths(&unit_vec(seed), 1);
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].0, PathBuf::from(format!("c-{seed}.md")));
+        }
+        // Sanity: every fresh entry maps to a surviving path.
+        let fresh_paths: Vec<PathBuf> = (0..fresh.len() as u64)
+            .map(|seed| fresh.query_with_paths(&unit_vec(seed * 2), 1)[0].0.clone())
+            .collect();
+        for p in fresh_paths {
+            assert!(surviving_paths.contains(&p), "stray path after compact: {p:?}");
+        }
+    }
+
+    /// AC test for #200: tombstone half of a 10k-vector index, run
+    /// queries, assert no tombstoned ids leak. `#[ignore]` because the
+    /// HNSW build is the slow part (~1 s in release, much more in debug)
+    /// — run via `cargo test --release -- --ignored`.
+    #[test]
+    #[ignore]
+    fn delete_50pct_of_10k_returns_no_tombstoned_results() {
+        const N: usize = 10_000;
+        const Q: usize = 100;
+        let items: Vec<(PathBuf, usize, Vec<f32>)> = (0..N as u64)
+            .map(|i| (PathBuf::from(format!("/v/{i}.md")), 0, unit_vec(i)))
+            .collect();
+        let idx = VectorIndex::new(N);
+        idx.bulk_insert(items);
+        // Tombstone every even id by path.
+        for i in (0..N as u64).step_by(2) {
+            idx.mark_deleted(&PathBuf::from(format!("/v/{i}.md")));
+        }
+        assert!(idx.tombstone_count() >= N / 2);
+
+        let probes: Vec<Vec<f32>> = (0..Q as u64)
+            .map(|i| unit_vec(i + 9_000_000))
+            .collect();
+        for p in &probes {
+            let hits = idx.query(p, 10);
+            for (id, _) in &hits {
+                assert!(
+                    !idx.is_tombstoned(*id),
+                    "tombstoned id {id} leaked into query results",
+                );
+            }
+        }
+
+        // And after compaction the index must be half-sized and usable.
+        let fresh = idx.compact_into_fresh().expect("compact");
+        assert_eq!(fresh.len(), N / 2);
+        assert_eq!(fresh.tombstone_count(), 0);
+        for p in probes.iter().take(10) {
+            let hits = fresh.query(p, 10);
+            assert!(hits.len() <= 10);
+        }
     }
 }
