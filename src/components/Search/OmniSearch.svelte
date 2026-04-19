@@ -22,10 +22,10 @@
   import { scrollStore } from "../../store/scrollStore";
   import {
     searchFilename,
-    searchFulltext,
+    hybridSearch,
     rebuildIndex,
   } from "../../ipc/commands";
-  import type { FileMatch, SearchResult } from "../../types/search";
+  import type { FileMatch, HybridHit } from "../../types/search";
   import { isVaultError } from "../../types/errors";
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import QuickSwitcherRow from "./QuickSwitcherRow.svelte";
@@ -109,7 +109,7 @@
   // Content-mode results + counts flow through searchStore so the
   // cross-vault reset + indexStale event subscription keep working.
   let storeState = $state({
-    results: [] as SearchResult[],
+    results: [] as HybridHit[],
     totalFiles: 0,
     isRebuilding: false,
   });
@@ -205,7 +205,10 @@
     }
     searchStore.setSearching(true);
     try {
-      const results = await searchFulltext(trimmed, 100);
+      // #204 — hybrid_search fuses BM25 + HNSW via RRF. Falls back to
+      // BM25-only transparently when embeddings aren't ready, so the UX
+      // stays identical while embeddings bootstrap.
+      const results = await hybridSearch(trimmed, 100);
       if (myGen !== contentSearchGen) return;
       const uniqueFiles = new Set(results.map((r) => r.path)).size;
       searchStore.setResults(results, uniqueFiles);
@@ -275,7 +278,7 @@
     onClose();
   }
 
-  function openContentResult(r: SearchResult) {
+  function openContentResult(r: HybridHit) {
     onOpenFile(r.path);
     const searchText =
       extractSnippetMatch(r.snippet) ?? query.split(" ")[0] ?? "";
@@ -291,7 +294,7 @@
       const hit = activeList[idx] as FileMatch | undefined;
       if (hit) openFileResult(hit);
     } else {
-      const hit = activeList[idx] as SearchResult | undefined;
+      const hit = activeList[idx] as HybridHit | undefined;
       if (hit) openContentResult(hit);
     }
   }
@@ -438,10 +441,10 @@
             <p class="vc-search-results-counter">
               {storeState.results.length} Treffer in {storeState.totalFiles} Dateien
             </p>
-            {#each activeList as result, i (`${(result as SearchResult).path}|${i}`)}
+            {#each activeList as result, i (`${(result as HybridHit).path}|${i}`)}
               <SearchResultRow
-                result={result as SearchResult}
-                onclick={() => openContentResult(result as SearchResult)}
+                result={result as HybridHit}
+                onclick={() => openContentResult(result as HybridHit)}
               />
             {/each}
             {#if storeState.results.length >= 100}

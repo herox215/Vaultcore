@@ -1,14 +1,22 @@
 <script lang="ts">
-  import type { SearchResult as SearchResultType } from "../../types/search";
+  import { Sparkles } from "lucide-svelte";
+  import type { HybridHit } from "../../types/search";
 
   interface Props {
-    result: SearchResultType;
+    result: HybridHit;
     onclick: () => void;
   }
 
   let { result, onclick }: Props = $props();
 
   const filename = $derived(result.path.split("/").pop() ?? result.path);
+  // #204 — a hit surfaced only by the semantic leg of hybrid_search gets a
+  // subtle badge so users can tell the result came in via embedding
+  // similarity rather than keyword match. Hits present in both legs are
+  // already explained by the existing snippet highlighting, so no badge.
+  const semanticOnly = $derived(
+    result.vecRank !== undefined && result.bm25Rank === undefined,
+  );
 </script>
 
 <div
@@ -19,7 +27,18 @@
   {onclick}
   onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onclick(); } }}
 >
-  <p class="vc-search-result-filename">{filename}</p>
+  <p class="vc-search-result-filename">
+    <span class="vc-search-result-filename-text">{filename}</span>
+    {#if semanticOnly}
+      <span
+        class="vc-search-result-semantic-indicator"
+        title="Semantischer Treffer"
+        aria-label="Nur semantisch gefunden"
+      >
+        <Sparkles size={12} strokeWidth={2} />
+      </span>
+    {/if}
+  </p>
   <p class="vc-search-result-snippet vc-search-snippet">{@html result.snippet}</p>
 </div>
 
@@ -43,9 +62,24 @@
     font-weight: 700;
     color: var(--color-text);
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .vc-search-result-filename-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+  }
+
+  .vc-search-result-semantic-indicator {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
   }
 
   .vc-search-result-snippet {
