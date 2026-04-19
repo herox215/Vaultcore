@@ -7,7 +7,7 @@
   import { DEFAULT_FORCE_SETTINGS, type ForceSettings } from "./graphRender";
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore, type Tab, GRAPH_TAB_PATH } from "../../store/tabStore";
-  import { getLinkGraph } from "../../ipc/commands";
+  import { getEmbeddingGraph, getLinkGraph } from "../../ipc/commands";
   import { listenFileChange } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import type { LocalGraph, GraphNode } from "../../types/links";
@@ -17,6 +17,20 @@
   const FILTER_KEY_PREFIX = "vaultcore-graph-filters-";
   const FORCES_KEY_PREFIX = "vaultcore-graph-forces-";
   const FROZEN_KEY_PREFIX = "vaultcore-graph-frozen-";
+  // #235 — embedding-mode persistence keys.
+  const MODE_KEY_PREFIX = "vaultcore-graph-mode-";
+  const THRESHOLD_KEY_PREFIX = "vaultcore-graph-threshold-";
+
+  // #235 — embedding-mode constants. `top_k` is fixed in v1; widen the
+  // slider to 0.30 so users can deliberately surface looser relations
+  // (multilingual-e5-small real semantic matches sit at 0.4–0.8 per the
+  // semantic-search noise floor in `query.rs`).
+  type GraphMode = "link" | "embedding";
+  const EMBEDDING_TOP_K = 10;
+  const EMBEDDING_THRESHOLD_MIN = 0.3;
+  const EMBEDDING_THRESHOLD_MAX = 0.95;
+  const EMBEDDING_THRESHOLD_DEFAULT = 0.7;
+  const EMBEDDING_THRESHOLD_STEP = 0.05;
 
   /**
    * Small synchronous string hash — used to key per-vault localStorage slots.
@@ -129,6 +143,43 @@
     }
   }
 
+  function loadMode(vaultPath: string): GraphMode {
+    try {
+      const raw = localStorage.getItem(MODE_KEY_PREFIX + hashVaultPath(vaultPath));
+      return raw === "embedding" ? "embedding" : "link";
+    } catch {
+      return "link";
+    }
+  }
+
+  function saveMode(vaultPath: string, m: GraphMode): void {
+    try {
+      localStorage.setItem(MODE_KEY_PREFIX + hashVaultPath(vaultPath), m);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function loadThreshold(vaultPath: string): number {
+    try {
+      const raw = localStorage.getItem(THRESHOLD_KEY_PREFIX + hashVaultPath(vaultPath));
+      if (!raw) return EMBEDDING_THRESHOLD_DEFAULT;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return EMBEDDING_THRESHOLD_DEFAULT;
+      return Math.min(EMBEDDING_THRESHOLD_MAX, Math.max(EMBEDDING_THRESHOLD_MIN, n));
+    } catch {
+      return EMBEDDING_THRESHOLD_DEFAULT;
+    }
+  }
+
+  function saveThreshold(vaultPath: string, t: number): void {
+    try {
+      localStorage.setItem(THRESHOLD_KEY_PREFIX + hashVaultPath(vaultPath), String(t));
+    } catch {
+      /* ignore */
+    }
+  }
+
   // ── State ───────────────────────────────────────────────────────────────────
   let vaultPath = $state<string | null>(null);
   let tabs = $state<Tab[]>([]);
@@ -145,9 +196,30 @@
   let frozen = $state<boolean>(false);
   let forcesPanelOpen = $state<boolean>(false);
 
+  // #235 — embedding-mode state.
+  let mode = $state<GraphMode>("link");
+  let embeddingThreshold = $state<number>(EMBEDDING_THRESHOLD_DEFAULT);
+  // Discriminator for "embeddings not initialised" vs "no edges over
+  // threshold": the backend returns an empty payload for the former
+  // (vault not open, embeddings subsystem missing, sink empty). When in
+  // embedding mode and the response has zero nodes, we surface that as
+  // a distinct empty state so users know to wait for indexing rather
+  // than lower the threshold.
+  let embeddingsUnavailable = $state<boolean>(false);
+
   let unlistenFileChange: UnlistenFn | null = null;
   let refetchTimer: ReturnType<typeof setTimeout> | null = null;
   const REFETCH_DEBOUNCE_MS = 300;
+  // Threshold-slider drag → debounce IPC re-queries so dragging doesn't
+  // spam the backend. 200ms is the smallest debounce that feels
+  // responsive while still coalescing typical drag traffic.
+  const THRESHOLD_DEBOUNCE_MS = 200;
+  let thresholdTimer: ReturnType<typeof setTimeout> | null = null;
+  // Monotonic request id — only the latest in-flight refetch is allowed
+  // to commit its response to `data`. Without this, a slow link-graph
+  // load racing a fast embedding-graph swap would overwrite the newer
+  // result with the stale one.
+  let inflightRequestId = 0;
 
   const unsubVault = vaultStore.subscribe((s) => {
     if (s.currentPath !== vaultPath) {
@@ -156,6 +228,8 @@
         filters = loadFilters(vaultPath);
         forces = loadForces(vaultPath);
         frozen = loadFrozen(vaultPath);
+        mode = loadMode(vaultPath);
+        embeddingThreshold = loadThreshold(vaultPath);
       }
       // Vault identity changed → refetch with full relayout.
       datasetVersion += 1;
@@ -292,21 +366,64 @@
   async function refetch(): Promise<void> {
     if (!vaultPath) {
       data = { nodes: [], edges: [] };
+      embeddingsUnavailable = false;
       return;
     }
+    inflightRequestId += 1;
+    const requestId = inflightRequestId;
     loading = true;
     errorMessage = null;
+    const currentMode = mode;
+    const currentThreshold = embeddingThreshold;
     try {
-      data = await getLinkGraph();
+      const result =
+        currentMode === "embedding"
+          ? await getEmbeddingGraph(EMBEDDING_TOP_K, currentThreshold)
+          : await getLinkGraph();
+      // Stale-response guard: a newer refetch superseded this one.
+      if (requestId !== inflightRequestId) return;
+      data = result;
+      // In embedding mode, an empty-node payload is the backend's
+      // signal that embeddings aren't ready (sink missing, vault not
+      // open for embeddings yet, etc.). Link mode hits the same empty
+      // state only for truly empty vaults, which has its own message.
+      embeddingsUnavailable =
+        currentMode === "embedding" && result.nodes.length === 0;
     } catch (err) {
+      if (requestId !== inflightRequestId) return;
       errorMessage =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
           : "Graph konnte nicht geladen werden.";
       data = { nodes: [], edges: [] };
+      embeddingsUnavailable = false;
     } finally {
-      loading = false;
+      if (requestId === inflightRequestId) loading = false;
     }
+  }
+
+  function onModeChange(next: GraphMode): void {
+    if (next === mode) return;
+    mode = next;
+    if (vaultPath) saveMode(vaultPath, next);
+    // Full dataset swap — force a layout re-seed so nodes don't animate
+    // from link-graph positions into embedding-graph positions.
+    datasetVersion += 1;
+    scheduleRefetch();
+  }
+
+  function onThresholdChange(next: number): void {
+    const clamped = Math.min(
+      EMBEDDING_THRESHOLD_MAX,
+      Math.max(EMBEDDING_THRESHOLD_MIN, next),
+    );
+    embeddingThreshold = clamped;
+    if (vaultPath) saveThreshold(vaultPath, clamped);
+    if (thresholdTimer) clearTimeout(thresholdTimer);
+    thresholdTimer = setTimeout(() => {
+      thresholdTimer = null;
+      void refetch();
+    }, THRESHOLD_DEBOUNCE_MS);
   }
 
   function onCameraChange(cam: SavedCamera): void {
@@ -391,17 +508,60 @@
     unsubTabsContent();
     unlistenFileChange?.();
     if (refetchTimer) clearTimeout(refetchTimer);
+    if (thresholdTimer) clearTimeout(thresholdTimer);
   });
 </script>
 
 <svelte:document onkeydown={handleKeydown} />
 
 <div class="vc-graph-view" role="region" aria-label="Graph-Ansicht">
+  <div class="vc-graph-mode-toolbar" role="group" aria-label="Graph-Modus">
+    <div class="vc-graph-mode-pills">
+      <button
+        type="button"
+        class="vc-graph-mode-pill"
+        class:vc-graph-mode-pill--active={mode === "link"}
+        onclick={() => onModeChange("link")}
+        aria-pressed={mode === "link"}
+        title="Link-basierter Graph (Wiki-Links)"
+      >Links</button>
+      <button
+        type="button"
+        class="vc-graph-mode-pill"
+        class:vc-graph-mode-pill--active={mode === "embedding"}
+        onclick={() => onModeChange("embedding")}
+        aria-pressed={mode === "embedding"}
+        title="Semantischer Graph (Embedding-Ähnlichkeit)"
+      >Semantisch</button>
+    </div>
+    {#if mode === "embedding"}
+      <label class="vc-graph-threshold">
+        <span class="vc-graph-threshold-label">Schwellwert</span>
+        <input
+          type="range"
+          min={EMBEDDING_THRESHOLD_MIN}
+          max={EMBEDDING_THRESHOLD_MAX}
+          step={EMBEDDING_THRESHOLD_STEP}
+          value={embeddingThreshold}
+          oninput={(e) =>
+            onThresholdChange(Number((e.target as HTMLInputElement).value))}
+          aria-label="Cosine-Schwellwert"
+        />
+        <span class="vc-graph-threshold-value">{embeddingThreshold.toFixed(2)}</span>
+      </label>
+    {/if}
+  </div>
   {#if errorMessage}
     <div class="vc-graph-empty">{errorMessage}</div>
   {:else if !data || data.nodes.length === 0}
     <div class="vc-graph-empty">
-      {loading ? "Graph wird geladen..." : "Keine Notizen im Vault."}
+      {#if loading}
+        Graph wird geladen...
+      {:else if mode === "embedding" && embeddingsUnavailable}
+        Semantischer Graph nicht verfügbar — Embeddings sind noch nicht erstellt.
+      {:else}
+        Keine Notizen im Vault.
+      {/if}
     </div>
   {:else}
     <GraphCanvas
@@ -503,5 +663,63 @@
     color: var(--color-accent);
     border-color: var(--color-accent);
     background: var(--color-accent-bg);
+  }
+  .vc-graph-mode-toolbar {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 8px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+  }
+  .vc-graph-mode-pills {
+    display: inline-flex;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .vc-graph-mode-pill {
+    padding: 4px 10px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .vc-graph-mode-pill + .vc-graph-mode-pill {
+    border-left: 1px solid var(--color-border);
+  }
+  .vc-graph-mode-pill:hover {
+    color: var(--color-accent);
+  }
+  .vc-graph-mode-pill--active {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+  }
+  .vc-graph-threshold {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+  .vc-graph-threshold-label {
+    user-select: none;
+  }
+  .vc-graph-threshold input[type="range"] {
+    width: 110px;
+    accent-color: var(--color-accent);
+  }
+  .vc-graph-threshold-value {
+    width: 28px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text);
   }
 </style>
