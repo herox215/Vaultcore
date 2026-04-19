@@ -10,7 +10,7 @@ import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
-import type { SearchResult, FileMatch } from "../types/search";
+import type { SearchResult, FileMatch, SemanticHit } from "../types/search";
 import type { BacklinkEntry, ParsedLink, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
 
@@ -210,6 +210,23 @@ export async function searchFilename(
 ): Promise<FileMatch[]> {
   try {
     return await invoke<FileMatch[]>("search_filename", { query, limit });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Semantic (vector) search over the HNSW index (#202).
+ * Returns up to `k` nearest chunks to `query` by cosine similarity.
+ * `k` is clamped to [1, 100] on the Rust side. Returns an empty list
+ * when embeddings are disabled or the model is not bundled.
+ */
+export async function semanticSearch(
+  query: string,
+  k: number = 10,
+): Promise<SemanticHit[]> {
+  try {
+    return await invoke<SemanticHit[]>("semantic_search", { query, k });
   } catch (e) {
     throw normalizeError(e);
   }

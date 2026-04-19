@@ -76,6 +76,12 @@ pub struct VaultState {
     /// write to the freshly-replaced coordinator's checkpoint.
     #[cfg(feature = "embeddings")]
     pub reindex_handle: Arc<Mutex<Option<Arc<embeddings::ReindexHandle>>>>,
+    /// Embed service + HNSW sink pair (#202) used by the `semantic_search`
+    /// IPC command. The sink Arc here aliases the one held by
+    /// `embed_coordinator` (upcast as `Arc<dyn VectorSink>`), so queries
+    /// see the same live `VectorIndex` the embed worker writes to.
+    #[cfg(feature = "embeddings")]
+    pub query_handles: Arc<Mutex<Option<Arc<embeddings::QueryHandles>>>>,
 }
 
 impl Default for VaultState {
@@ -90,6 +96,8 @@ impl Default for VaultState {
             embed_coordinator: Arc::new(Mutex::new(None)),
             #[cfg(feature = "embeddings")]
             reindex_handle: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "embeddings")]
+            query_handles: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -133,6 +141,7 @@ pub fn run() {
             commands::vault::merge_external_change,
             commands::search::search_fulltext,
             commands::search::search_filename,
+            commands::search::semantic_search,
             commands::search::rebuild_index,
             commands::links::get_backlinks,
             commands::links::get_outgoing_links,
