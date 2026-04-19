@@ -23,6 +23,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+#[cfg(feature = "embeddings")]
+mod service;
+#[cfg(feature = "embeddings")]
+pub use service::EmbeddingService;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]
