@@ -48,6 +48,14 @@ mod vector_index;
 #[cfg(feature = "embeddings")]
 pub use vector_index::{VectorIndex, DEFAULT_EF_SEARCH, DIM};
 
+#[cfg(feature = "embeddings")]
+mod reindex;
+#[cfg(feature = "embeddings")]
+pub use reindex::{
+    start_reindex, ReindexHandle, ReindexPhase, ReindexProgress, CHECKPOINT_FILE,
+    CHECKPOINT_VERSION,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]
