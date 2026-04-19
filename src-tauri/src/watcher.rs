@@ -23,6 +23,8 @@ use tokio::time::sleep;
 
 use crate::WriteIgnoreList;
 use crate::indexer::IndexCmd;
+#[cfg(feature = "embeddings")]
+use crate::embeddings::EmbedOp;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -95,6 +97,7 @@ pub fn spawn_watcher(
     write_ignore: Arc<Mutex<WriteIgnoreList>>,
     vault_reachable: Arc<Mutex<bool>>,
     index_tx: Option<tokio::sync::mpsc::Sender<IndexCmd>>,
+    #[cfg(feature = "embeddings")] embed_tx: Option<tokio::sync::mpsc::Sender<EmbedOp>>,
 ) -> Debouncer<RecommendedWatcher, RecommendedCache> {
     let vault_path_clone = vault_path.clone();
     let vault_reachable_for_error = vault_reachable.clone();
@@ -106,7 +109,15 @@ pub fn spawn_watcher(
         None,
         move |result: DebounceEventResult| match result {
             Ok(events) => {
-                process_events(&app_for_events, &write_ignore, &vault_path_clone, &index_tx, events);
+                process_events(
+                    &app_for_events,
+                    &write_ignore,
+                    &vault_path_clone,
+                    &index_tx,
+                    #[cfg(feature = "embeddings")]
+                    &embed_tx,
+                    events,
+                );
             }
             Err(errors) => {
                 for error in errors {
@@ -209,6 +220,7 @@ fn process_events(
     write_ignore: &Arc<Mutex<WriteIgnoreList>>,
     vault_path: &Path,
     index_tx: &Option<tokio::sync::mpsc::Sender<IndexCmd>>,
+    #[cfg(feature = "embeddings")] embed_tx: &Option<tokio::sync::mpsc::Sender<EmbedOp>>,
     events: Vec<DebouncedEvent>,
 ) {
     // Step 1: Filter dot-prefixed paths
@@ -254,6 +266,16 @@ fn process_events(
             dispatch_link_graph_cmd(tx, vault_path, &ev);
             // Step 5b: Dispatch tag-index commands (TAG-01/02)
             dispatch_tag_index_cmd(tx, vault_path, &ev);
+        }
+
+        // Step 5c (#201 PR-A): Tombstone vectors for externally-deleted
+        // and externally-renamed markdown files. Internal deletes go via
+        // commands::files which dispatches its own EmbedOp::Delete (see
+        // delete_file / rename_file / move_file), so this catches only
+        // events that bypass the write-ignore list — i.e. external tools.
+        #[cfg(feature = "embeddings")]
+        if let Some(tx) = embed_tx {
+            dispatch_embed_delete_cmd(tx, vault_path, &ev);
         }
 
         if let Some(payload) = map_event_to_payload(vault_path, &ev) {
@@ -445,6 +467,48 @@ pub(crate) fn dispatch_tag_index_cmd(
         }
         EventKind::Remove(_) => {
             try_send_or_warn(tx, IndexCmd::RemoveTags { rel_path });
+        }
+        _ => {}
+    }
+}
+
+/// #201 PR-A — dispatch `EmbedOp::Delete` for Remove / rename-from events
+/// on markdown paths. We only tombstone; creates & modifies rely on the
+/// save path (write_file dispatches Embed) and the reindex worker (#201
+/// PR-B) to re-embed externally-touched content. `try_send` so a full
+/// channel just drops — the worker state stays consistent because a
+/// subsequent reindex pass will clean up any missed tombstones.
+#[cfg(feature = "embeddings")]
+fn dispatch_embed_delete_cmd(
+    tx: &tokio::sync::mpsc::Sender<EmbedOp>,
+    vault_path: &Path,
+    ev: &DebouncedEvent,
+) {
+    let primary_path = match ev.paths.first() {
+        Some(p) => p,
+        None => return,
+    };
+    if primary_path
+        .extension()
+        .map_or(true, |ext| !ext.eq_ignore_ascii_case("md"))
+    {
+        return;
+    }
+    // Only in-vault paths; same guard as map_event_to_payload.
+    if !primary_path.starts_with(vault_path) {
+        return;
+    }
+
+    match &ev.kind {
+        EventKind::Remove(_) => {
+            let _ = tx.try_send(EmbedOp::Delete(primary_path.clone()));
+        }
+        EventKind::Modify(ModifyKind::Name(_)) => {
+            // Rename — the OLD path's vectors must be tombstoned. The
+            // NEW path (paths[1]) doesn't need an embed here; the user
+            // will save it via write_file which embeds via the save
+            // dispatch.
+            let _ = tx.try_send(EmbedOp::Delete(primary_path.clone()));
         }
         _ => {}
     }
