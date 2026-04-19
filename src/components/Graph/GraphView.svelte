@@ -11,6 +11,7 @@
   import { listenFileChange } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import type { LocalGraph, GraphNode } from "../../types/links";
+  import { clusterGraph } from "./clusterGraph";
 
   // ── Persistence ─────────────────────────────────────────────────────────────
   const CAMERA_KEY_PREFIX = "vaultcore-graph-camera-";
@@ -20,6 +21,8 @@
   // #235 — embedding-mode persistence keys.
   const MODE_KEY_PREFIX = "vaultcore-graph-mode-";
   const THRESHOLD_KEY_PREFIX = "vaultcore-graph-threshold-";
+  // #237 — second embedding-mode slider: cluster-collapse threshold.
+  const CLUSTER_KEY_PREFIX = "vaultcore-graph-cluster-";
 
   // #235 — embedding-mode constants. `top_k` is fixed in v1; widen the
   // slider to 0.30 so users can deliberately surface looser relations
@@ -31,6 +34,16 @@
   const EMBEDDING_THRESHOLD_MAX = 0.95;
   const EMBEDDING_THRESHOLD_DEFAULT = 0.7;
   const EMBEDDING_THRESHOLD_STEP = 0.05;
+
+  // #237 — cluster slider. Right edge (= 1.0) disables clustering. Min
+  // value sits at 0.55 so the user never sees an effectively useless
+  // sub-edge-threshold range; the actual lower bound is clamped to the
+  // current edge threshold at runtime (clusterThresholdMin below).
+  const CLUSTER_THRESHOLD_ABS_MIN = 0.55;
+  const CLUSTER_THRESHOLD_MAX = 1.0;
+  const CLUSTER_THRESHOLD_DEFAULT = 1.0;
+  const CLUSTER_THRESHOLD_STEP = 0.05;
+  const CLUSTER_DEBOUNCE_MS = 200;
 
   /**
    * Small synchronous string hash — used to key per-vault localStorage slots.
@@ -180,6 +193,26 @@
     }
   }
 
+  function loadClusterThreshold(vaultPath: string): number {
+    try {
+      const raw = localStorage.getItem(CLUSTER_KEY_PREFIX + hashVaultPath(vaultPath));
+      if (!raw) return CLUSTER_THRESHOLD_DEFAULT;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return CLUSTER_THRESHOLD_DEFAULT;
+      return Math.min(CLUSTER_THRESHOLD_MAX, Math.max(CLUSTER_THRESHOLD_ABS_MIN, n));
+    } catch {
+      return CLUSTER_THRESHOLD_DEFAULT;
+    }
+  }
+
+  function saveClusterThreshold(vaultPath: string, t: number): void {
+    try {
+      localStorage.setItem(CLUSTER_KEY_PREFIX + hashVaultPath(vaultPath), String(t));
+    } catch {
+      /* ignore */
+    }
+  }
+
   // ── State ───────────────────────────────────────────────────────────────────
   let vaultPath = $state<string | null>(null);
   let tabs = $state<Tab[]>([]);
@@ -206,6 +239,14 @@
   // a distinct empty state so users know to wait for indexing rather
   // than lower the threshold.
   let embeddingsUnavailable = $state<boolean>(false);
+  // #237 — 1.0 = clustering off; any lower value collapses notes whose
+  // pairwise cosine similarity clears this threshold. Two values: the
+  // instant slider reading (shown on the UI) and the debounced applied
+  // value (fed into the render pipeline). Separating them keeps the
+  // thumb responsive while avoiding per-mousemove sim rebuilds.
+  let embeddingClusterThreshold = $state<number>(CLUSTER_THRESHOLD_DEFAULT);
+  let embeddingClusterThresholdApplied = $state<number>(CLUSTER_THRESHOLD_DEFAULT);
+  let clusterTimer: ReturnType<typeof setTimeout> | null = null;
 
   let unlistenFileChange: UnlistenFn | null = null;
   let refetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -230,6 +271,9 @@
         frozen = loadFrozen(vaultPath);
         mode = loadMode(vaultPath);
         embeddingThreshold = loadThreshold(vaultPath);
+        const loadedCluster = loadClusterThreshold(vaultPath);
+        embeddingClusterThreshold = loadedCluster;
+        embeddingClusterThresholdApplied = loadedCluster;
       }
       // Vault identity changed → refetch with full relayout.
       datasetVersion += 1;
@@ -253,6 +297,33 @@
       return t.filePath.slice(vaultPath.length + 1);
     }
     return null;
+  });
+
+  // Cluster slider's effective lower bound — clamped to the edge threshold
+  // so the user never gets a slider range that can't cluster anything
+  // (edges below `embeddingThreshold` are filtered out backend-side and
+  // therefore never union a cluster; with cluster_threshold < edge_threshold
+  // every surviving edge would collapse into a single mega-cluster).
+  const clusterThresholdMin = $derived.by<number>(() => {
+    return Math.max(CLUSTER_THRESHOLD_ABS_MIN, embeddingThreshold);
+  });
+
+  // Effective cluster threshold feeding the render pipeline. Uses the
+  // debounced `Applied` value and clamps it to the current edge threshold
+  // so a below-edge cluster_threshold doesn't accidentally collapse every
+  // surviving edge into a mega-cluster.
+  const effectiveClusterThreshold = $derived.by<number>(() => {
+    return Math.max(clusterThresholdMin, embeddingClusterThresholdApplied);
+  });
+
+  // #237 — clustered view handed to GraphCanvas. In link mode or when the
+  // slider is at the off position this is a reference passthrough so the
+  // canvas-side memo/equality checks don't see a new object per tick.
+  const renderedData = $derived.by<LocalGraph | null>(() => {
+    if (!data) return null;
+    if (mode !== "embedding") return data;
+    if (effectiveClusterThreshold >= CLUSTER_THRESHOLD_MAX) return data;
+    return clusterGraph(data, effectiveClusterThreshold).graph;
   });
 
   // Available tag/folder filter options derived from the current dataset.
@@ -426,6 +497,24 @@
     }, THRESHOLD_DEBOUNCE_MS);
   }
 
+  function onClusterChange(next: number): void {
+    const clamped = Math.min(
+      CLUSTER_THRESHOLD_MAX,
+      Math.max(CLUSTER_THRESHOLD_ABS_MIN, next),
+    );
+    embeddingClusterThreshold = clamped;
+    if (vaultPath) saveClusterThreshold(vaultPath, clamped);
+    // Debounce the render-feeding `Applied` value so rapid slider drags
+    // don't rebuild the force simulation on every mousemove. Clustering
+    // itself is a pure O(N+E) pass — the expensive downstream work is
+    // sigma + d3-force reacting to a new node/edge set.
+    if (clusterTimer) clearTimeout(clusterTimer);
+    clusterTimer = setTimeout(() => {
+      clusterTimer = null;
+      embeddingClusterThresholdApplied = clamped;
+    }, CLUSTER_DEBOUNCE_MS);
+  }
+
   function onCameraChange(cam: SavedCamera): void {
     if (vaultPath) saveCamera(vaultPath, cam);
   }
@@ -509,6 +598,7 @@
     unlistenFileChange?.();
     if (refetchTimer) clearTimeout(refetchTimer);
     if (thresholdTimer) clearTimeout(thresholdTimer);
+    if (clusterTimer) clearTimeout(clusterTimer);
   });
 </script>
 
@@ -549,6 +639,24 @@
         />
         <span class="vc-graph-threshold-value">{embeddingThreshold.toFixed(2)}</span>
       </label>
+      <label class="vc-graph-threshold" title="Fasst ähnliche Notizen zu einem Oberbegriff zusammen. Rechts (1.00) = aus.">
+        <span class="vc-graph-threshold-label">Cluster</span>
+        <input
+          type="range"
+          min={clusterThresholdMin}
+          max={CLUSTER_THRESHOLD_MAX}
+          step={CLUSTER_THRESHOLD_STEP}
+          value={Math.max(clusterThresholdMin, embeddingClusterThreshold)}
+          oninput={(e) =>
+            onClusterChange(Number((e.target as HTMLInputElement).value))}
+          aria-label="Cluster-Schwellwert"
+        />
+        <span class="vc-graph-threshold-value">
+          {embeddingClusterThreshold >= CLUSTER_THRESHOLD_MAX
+            ? "aus"
+            : Math.max(clusterThresholdMin, embeddingClusterThreshold).toFixed(2)}
+        </span>
+      </label>
     {/if}
   </div>
   {#if errorMessage}
@@ -565,7 +673,7 @@
     </div>
   {:else}
     <GraphCanvas
-      {data}
+      data={renderedData}
       activeId={activeRelPath}
       {savedCamera}
       dimForNode={(id) => dimForNode(id)}
