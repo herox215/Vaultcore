@@ -43,6 +43,11 @@ mod embed_coordinator;
 #[cfg(feature = "embeddings")]
 pub use embed_coordinator::{EmbedCoordinator, EnqueueError, WAKEUP_CAPACITY};
 
+#[cfg(feature = "embeddings")]
+mod vector_index;
+#[cfg(feature = "embeddings")]
+pub use vector_index::{VectorIndex, DEFAULT_EF_SEARCH, DIM};
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("ONNX Runtime dylib not found at any candidate path")]

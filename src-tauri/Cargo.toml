@@ -62,10 +62,11 @@ ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dy
 # Used by the embedding chunker (#195) to split notes into overlapping
 # ≤256-token windows before they reach the embedder.
 tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
+hnsw_rs = { version = "0.3.4", optional = true, features = ["simdeez_f"] }
 
 [features]
 default = ["embeddings"]
-embeddings = ["dep:fastembed", "dep:ort", "dep:tokenizers"]
+embeddings = ["dep:fastembed", "dep:ort", "dep:tokenizers", "dep:hnsw_rs"]
 
 [dev-dependencies]
 tempfile = "3"
