@@ -340,6 +340,277 @@ pub async fn semantic_search(
     Ok(Vec::new())
 }
 
+// ── hybrid_search ─────────────────────────────────────────────────────────────
+
+/// Per-source visibility for one fused hit. `None` on either side means
+/// the path was not in that source's top-N result list — the row was
+/// surfaced by the other source alone. Skipped from JSON when None so
+/// the wire shape stays clean for single-source hits.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HybridHit {
+    pub path: String,
+    pub title: String,
+    /// Fused RRF score (sum of `1 / (k + rank_i)` per source).
+    pub score: f32,
+    /// HTML snippet with `<b>highlighted</b>` BM25 terms; empty when
+    /// the path was vec-only and the title-only fallback fired.
+    pub snippet: String,
+    pub match_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_rank: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_score: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vec_rank: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vec_score: Option<f32>,
+}
+
+/// Hybrid search (#203): fuses BM25 (Tantivy) + HNSW (vector) ranks via
+/// Reciprocal Rank Fusion (k=60). Both sides run on the blocking pool
+/// in parallel via `tokio::join!`, so the embed (~15 ms) overlaps with
+/// the BM25 traversal.
+///
+/// `k` is clamped to `[1, 100]`. Each source is over-fetched to
+/// `max(k * 5, 50)` capped at 200, per Cormack 2009 + downstream
+/// production tuning — recall plateaus around 50.
+///
+/// Snippets: BM25-side hits keep their native highlighted snippet.
+/// Vec-only hits get a snippet by re-running `SnippetGenerator` against
+/// a `TermQuery(path:<path>)` lookup in the same searcher. Falls back
+/// to filename-only title with empty snippet when the doc is missing
+/// (race during initial indexing).
+#[cfg(feature = "embeddings")]
+#[tauri::command]
+pub async fn hybrid_search(
+    query: String,
+    k: usize,
+    state: tauri::State<'_, crate::VaultState>,
+) -> Result<Vec<HybridHit>, VaultError> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let k = k.clamp(1, 100);
+    let top_n = k.saturating_mul(5).clamp(50, 200);
+
+    // Extract Tantivy + embedding handles up front so the spawn_blocking
+    // closures own `Send + 'static` data — matches the existing pattern
+    // in search_fulltext (lock, clone Arcs, drop guard before work).
+    let bm25_handles = {
+        let guard = state
+            .index_coordinator
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        guard.as_ref().map(|c| (c.index.clone(), c.reader.clone()))
+    };
+    let query_handles = {
+        let guard = state
+            .query_handles
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        guard.as_ref().map(std::sync::Arc::clone)
+    };
+
+    // BM25 side returns top_n (path, score). Cheap to spawn even when
+    // the coordinator hasn't booted — empty result, no work.
+    let bm25_query = query.clone();
+    let bm25_task = tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32)>, VaultError> {
+        let Some((index, reader)) = bm25_handles.as_ref() else {
+            return Ok(Vec::new());
+        };
+        run_bm25_top_n(index, reader, &bm25_query, top_n)
+    });
+
+    let vec_query = query.clone();
+    let vec_task = tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32)>, VaultError> {
+        let Some(h) = query_handles.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let hits = crate::embeddings::semantic_search_query(h, &vec_query, top_n)
+            .map_err(|e| {
+                log::warn!("hybrid_search vec leg failed: {e}");
+                VaultError::IndexCorrupt
+            })?;
+        Ok(hits
+            .into_iter()
+            .map(|h| (h.path, h.score))
+            .collect())
+    });
+
+    let (bm25_res, vec_res) = tokio::join!(bm25_task, vec_task);
+    let bm25 = bm25_res.map_err(|_| VaultError::IndexCorrupt)??;
+    let vec_hits = vec_res.map_err(|_| VaultError::IndexCorrupt)??;
+
+    let fused = crate::embeddings::rrf_fuse(&bm25, &vec_hits, crate::embeddings::RRF_K);
+    let fused = fused.into_iter().take(k).collect::<Vec<_>>();
+
+    if fused.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Hydrate snippets + titles. We need a Tantivy searcher again — if
+    // the BM25 leg saw `None` (no coordinator) the fused result can only
+    // contain vec-only hits, so skip hydration and fall back to
+    // filename-only titles.
+    let bm25_handles2 = {
+        let guard = state
+            .index_coordinator
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        guard.as_ref().map(|c| (c.index.clone(), c.reader.clone()))
+    };
+    let hydrated = tokio::task::spawn_blocking(move || -> Result<Vec<HybridHit>, VaultError> {
+        hydrate_hits(bm25_handles2.as_ref(), &query, fused)
+    })
+    .await
+    .map_err(|_| VaultError::IndexCorrupt)??;
+
+    Ok(hydrated)
+}
+
+#[cfg(feature = "embeddings")]
+fn run_bm25_top_n(
+    index: &std::sync::Arc<tantivy::Index>,
+    reader: &std::sync::Arc<tantivy::IndexReader>,
+    query: &str,
+    top_n: usize,
+) -> Result<Vec<(String, f32)>, VaultError> {
+    let schema = index.schema();
+    let path_field = schema.get_field("path").map_err(|_| VaultError::IndexCorrupt)?;
+    let title_field = schema.get_field("title").map_err(|_| VaultError::IndexCorrupt)?;
+    let body_field = schema.get_field("body").map_err(|_| VaultError::IndexCorrupt)?;
+
+    let mut qp = QueryParser::for_index(index, vec![title_field, body_field]);
+    qp.set_conjunction_by_default();
+    let (parsed, _errors) = qp.parse_query_lenient(query);
+
+    let searcher = reader.searcher();
+    let docs = searcher
+        .search(&parsed, &TopDocs::with_limit(top_n).order_by_score())
+        .map_err(|_| VaultError::IndexCorrupt)?;
+
+    let mut out = Vec::with_capacity(docs.len());
+    for (score, addr) in docs {
+        let doc = searcher
+            .doc::<TantivyDocument>(addr)
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        let path = doc
+            .get_first(path_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !path.is_empty() {
+            out.push((path, score));
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "embeddings")]
+fn hydrate_hits(
+    bm25_handles: Option<&(std::sync::Arc<tantivy::Index>, std::sync::Arc<tantivy::IndexReader>)>,
+    query: &str,
+    fused: Vec<crate::embeddings::FusedHit>,
+) -> Result<Vec<HybridHit>, VaultError> {
+    use tantivy::query::TermQuery;
+    use tantivy::schema::IndexRecordOption;
+    use tantivy::Term;
+
+    let Some((index, reader)) = bm25_handles else {
+        // No Tantivy index → vec-only hits with filename-derived titles.
+        return Ok(fused
+            .into_iter()
+            .map(|h| HybridHit {
+                title: filename_title(&h.path),
+                path: h.path,
+                score: h.score,
+                snippet: String::new(),
+                match_count: 0,
+                bm25_rank: h.bm25_rank,
+                bm25_score: h.bm25_score,
+                vec_rank: h.vec_rank,
+                vec_score: h.vec_score,
+            })
+            .collect());
+    };
+
+    let schema = index.schema();
+    let path_field = schema.get_field("path").map_err(|_| VaultError::IndexCorrupt)?;
+    let title_field = schema.get_field("title").map_err(|_| VaultError::IndexCorrupt)?;
+    let body_field = schema.get_field("body").map_err(|_| VaultError::IndexCorrupt)?;
+
+    let mut qp = QueryParser::for_index(index, vec![title_field, body_field]);
+    qp.set_conjunction_by_default();
+    let (parsed, _errors) = qp.parse_query_lenient(query);
+
+    let searcher = reader.searcher();
+    let mut snippet_gen = SnippetGenerator::create(&searcher, &*parsed, body_field)
+        .map_err(|_| VaultError::IndexCorrupt)?;
+    snippet_gen.set_max_num_chars(200);
+
+    let mut out = Vec::with_capacity(fused.len());
+    for hit in fused {
+        // Look up the doc by exact path. Path field is stored as STRING
+        // (untokenised) so a TermQuery exact-matches.
+        let term = Term::from_field_text(path_field, &hit.path);
+        let term_q = TermQuery::new(term, IndexRecordOption::Basic);
+        let lookup: Vec<(f32, tantivy::DocAddress)> = searcher
+            .search(&term_q, &TopDocs::with_limit(1).order_by_score())
+            .map_err(|_| VaultError::IndexCorrupt)?;
+
+        let (title, snippet, match_count) = if let Some((_score, addr)) = lookup.first() {
+            let doc = searcher
+                .doc::<TantivyDocument>(*addr)
+                .map_err(|_| VaultError::IndexCorrupt)?;
+            let title = doc
+                .get_first(title_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let snip = snippet_gen.snippet_from_doc(&doc);
+            let mc = snip.highlighted().len();
+            (title, snip.to_html(), mc)
+        } else {
+            (filename_title(&hit.path), String::new(), 0)
+        };
+
+        out.push(HybridHit {
+            path: hit.path,
+            title,
+            score: hit.score,
+            snippet,
+            match_count,
+            bm25_rank: hit.bm25_rank,
+            bm25_score: hit.bm25_score,
+            vec_rank: hit.vec_rank,
+            vec_score: hit.vec_score,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "embeddings")]
+fn filename_title(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Stub for builds without `embeddings` — returns an empty list so the
+/// frontend IPC call always resolves to a valid array.
+#[cfg(not(feature = "embeddings"))]
+#[tauri::command]
+pub async fn hybrid_search(
+    _query: String,
+    _k: usize,
+    _state: tauri::State<'_, crate::VaultState>,
+) -> Result<Vec<serde_json::Value>, VaultError> {
+    Ok(Vec::new())
+}
+
 // ── rebuild_index ─────────────────────────────────────────────────────────────
 
 /// Trigger a full index rebuild.
