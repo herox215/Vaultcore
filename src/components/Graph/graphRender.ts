@@ -57,6 +57,38 @@ export const DEFAULT_FORCE_SETTINGS: ForceSettings = {
   slowDown: 10,
 };
 
+/**
+ * #288 — force defaults tuned for the embedding-similarity graph.
+ *
+ * The link graph is sparse (mostly 1–3 edges per node) so the link-mode
+ * defaults above are fine: a bit of repulsion, a moderate link pull, and
+ * the graph finds equilibrium as a loose constellation.
+ *
+ * The embedding graph is **dense** — every node has top_k neighbours (10)
+ * and at a moderate threshold a 200-note vault emits hundreds of edges.
+ * With the link-mode defaults the forces from unrelated neighbours cancel
+ * each other out and the whole thing collapses into a uniform hairball
+ * (see issue #288 screenshot). These defaults counter that:
+ *
+ * - `scalingRatio: 90` — far stronger per-node repulsion (translates to
+ *   `charge.strength = -1350` vs link mode's -600). Pushes unconnected
+ *   nodes hard enough to escape the crowd.
+ * - `edgeWeightInfluence: 1.0` — full strength on top of the per-edge
+ *   `w²` non-linearity (see `edgeStrengthScaleForWeight`), so strong
+ *   cosine ties dominate layout while weak ties barely tug.
+ * - `slowDown: 13` — slightly heavier damping so the denser graph
+ *   settles before the user starts interacting. Over-damping (>15)
+ *   freezes clusters mid-formation.
+ * - `gravity: 0.6` — softer centering so clusters can breathe apart
+ *   instead of being squeezed toward a common centroid.
+ */
+export const DEFAULT_EMBEDDING_FORCE_SETTINGS: ForceSettings = {
+  gravity: 0.6,
+  scalingRatio: 90,
+  edgeWeightInfluence: 1.0,
+  slowDown: 13,
+};
+
 /** Node datum handed to d3-force — references the underlying graphology id
  *  so `forceLink` can resolve source/target by string. */
 interface SimNode extends SimulationNodeDatum {
@@ -229,18 +261,60 @@ function normalizeWeight(weight: number | undefined): number | null {
   return weight;
 }
 
-/** Edge rest length scales inversely with weight — stronger similarity pulls
- *  nodes closer. Link-mode (weight=null) keeps the historical 80-unit default. */
-function edgeDistanceForWeight(weight: number | null): number {
-  if (weight === null) return 80;
-  return 120 - 80 * weight;
+/** Minimum rest length for a weighted edge — the pair of most-similar
+ *  notes in the vault still want a bit of breathing room so overlapping
+ *  labels stay legible. */
+const EDGE_MIN_DISTANCE = 30;
+/** Maximum rest length for a weighted edge. Set wide so weak edges stretch
+ *  long ropes across the canvas, creating visible gaps between clusters. */
+const EDGE_MAX_DISTANCE = 260;
+/** Link-mode edges (no weight) keep the historical 80-unit default so the
+ *  link graph's layout is visually unchanged by #288. */
+const LINK_MODE_DISTANCE = 80;
+
+/** Edge rest length scales inversely with weight on a quadratic curve.
+ *  #288: the earlier linear `120 − 80·w` was too narrow (a 0.55 edge and
+ *  a 0.95 edge differed by only 32 units) so edges from weak-but-plentiful
+ *  neighbours pulled every cluster apart. `(1 − w)²` widens the high-weight
+ *  band (0.95 ⇒ 30.6, 0.75 ⇒ 44.4) and stretches weak edges far out
+ *  (0.35 ⇒ 127.3, 0.10 ⇒ 216.3), so clusters collapse tight and weak
+ *  connections visually become long ropes. */
+export function edgeDistanceForWeight(weight: number | null): number {
+  if (weight === null) return LINK_MODE_DISTANCE;
+  const inv = 1 - weight;
+  return EDGE_MIN_DISTANCE + (EDGE_MAX_DISTANCE - EDGE_MIN_DISTANCE) * inv * inv;
 }
 
-/** Edge pull strength multiplier. Link-mode passes through unchanged (1);
- *  embedding-mode scales with weight so weak edges barely tug. */
-function edgeStrengthScaleForWeight(weight: number | null): number {
+/** Edge pull strength multiplier on a quadratic weight curve. #288:
+ *  the earlier `0.25 + 0.75·w` still gave weak edges a baseline pull
+ *  which, multiplied over hundreds of weak neighbours, homogenised the
+ *  layout into a single blob. `w²` near-zeroes weak edges (0.35² = 0.12,
+ *  0.10² = 0.01) so they contribute almost nothing while strong edges
+ *  (0.95² = 0.90) pull hard and enforce cluster shape. Link-mode
+ *  passes through unchanged. */
+export function edgeStrengthScaleForWeight(weight: number | null): number {
   if (weight === null) return 1;
-  return 0.25 + 0.75 * weight;
+  return weight * weight;
+}
+
+/** Edge alpha on an aggressive cubic curve. #288: the earlier
+ *  `0.45 + 0.55·w` left weak edges at ~0.64 alpha which, with hundreds of
+ *  them overlapping, painted a grey fog across the whole canvas. A
+ *  cubic with a 0.05 floor (0.05 + 0.95·w³) pushes weak edges near-invisible
+ *  (0.35 ⇒ 0.09, 0.10 ⇒ 0.05) while strong edges stand out (0.95 ⇒ 0.86,
+ *  0.80 ⇒ 0.54). Link-mode (weight=null) stays fully opaque. */
+export function edgeAlphaForWeight(weight: number | null): number {
+  if (weight === null) return 1;
+  return 0.05 + 0.95 * weight * weight * weight;
+}
+
+/** Edge thickness grows quadratically with weight so the cluster backbone
+ *  visually emerges. #288: the earlier linear `1 + 2.5·w` made every edge
+ *  look similar weight; `0.5 + 2.5·w²` gives weak edges near-string width
+ *  (0.10 ⇒ 0.53) and strong edges visible line weight (0.95 ⇒ 2.76). */
+export function edgeSizeForWeight(weight: number | null): number {
+  if (weight === null) return 1;
+  return 0.5 + 2.5 * weight * weight;
 }
 
 /** Build the d3-force node/link datum arrays from the current graphology
@@ -536,17 +610,15 @@ export function mountGraph(
 
   // Edge reducer — hover dim + weight-driven thickness/alpha.
   //
-  // In embedding mode each edge carries a `weight` attr (cosine similarity
-  // in 0..1). Map it to:
-  //   size  : 1  → 3.5  (thicker line for stronger relations)
-  //   alpha : 0.45 → 1.0 (fade weak edges into the background)
-  //
-  // Link-mode edges have no weight — they render with the historical
-  // size=1 / full-opacity color, so the link graph is visually unchanged.
+  // #288 — weight curves retuned to surface cluster structure in dense
+  // embedding graphs. Weak edges (low cosine) fade near-invisible and
+  // visually string-thin; strong edges stand out in thickness and
+  // opacity. Link-mode edges (no weight) keep full-opacity size=1 so
+  // the link graph is visually unchanged.
   renderer.setSetting("edgeReducer", (e, attrs) => {
     const weight = normalizeWeight(attrs.weight as number | undefined);
-    const baseSize = weight === null ? 1 : 1 + weight * 2.5;
-    const baseAlpha = weight === null ? 1 : 0.45 + weight * 0.55;
+    const baseSize = edgeSizeForWeight(weight);
+    const baseAlpha = edgeAlphaForWeight(weight);
     const weightedEdgeColor = baseAlpha < 1 ? applyAlpha(edge, baseAlpha) : edge;
 
     if (!handle.hoveredNode) {

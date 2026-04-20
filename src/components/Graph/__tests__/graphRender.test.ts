@@ -56,8 +56,13 @@ vi.mock("sigma", () => {
 
 import {
   applyAlpha,
+  DEFAULT_EMBEDDING_FORCE_SETTINGS,
   DEFAULT_FORCE_SETTINGS,
   destroyGraph,
+  edgeAlphaForWeight,
+  edgeDistanceForWeight,
+  edgeSizeForWeight,
+  edgeStrengthScaleForWeight,
   mountGraph,
   setForceSettings,
   setLayoutFrozen,
@@ -240,5 +245,120 @@ describe("d3-force integration", () => {
     expect(handle.simulation).toBe(before);
     expect(handle.options.forceSettings?.scalingRatio).toBe(20);
     destroyGraph(handle);
+  });
+});
+
+// #288 — weight-driven layout & visual curves.
+//
+// These are pure numeric helpers driving the embedding-mode force sim and
+// edge rendering. The link-mode contract is "weight=null means no change
+// from historical behaviour"; the embedding contract is "non-linear curve
+// that makes strong edges dominate layout and weak edges fade into the
+// background". Both ends and the monotonicity are pinned here so a
+// future tweak to the curve shape can't accidentally invert the
+// relationship or regress link-mode visuals.
+
+describe("edgeDistanceForWeight (#288)", () => {
+  it("returns the historical link-mode distance when weight is null", () => {
+    expect(edgeDistanceForWeight(null)).toBe(80);
+  });
+
+  it("strong edges (w→1) collapse to the minimum rest length", () => {
+    const atOne = edgeDistanceForWeight(1);
+    expect(atOne).toBe(30);
+  });
+
+  it("weak edges (w→0) stretch to the maximum rest length", () => {
+    const atZero = edgeDistanceForWeight(0);
+    expect(atZero).toBe(260);
+  });
+
+  it("is strictly monotone decreasing in weight (stronger similarity → shorter edge)", () => {
+    const values = [0.1, 0.3, 0.5, 0.7, 0.9].map(edgeDistanceForWeight);
+    for (let i = 0; i < values.length - 1; i += 1) {
+      expect(values[i]).toBeGreaterThan(values[i + 1]!);
+    }
+  });
+
+  it("has a wider high-weight → low-weight spread than the previous linear curve", () => {
+    // Previous curve was 120 - 80*w → spread at (0.55 vs 0.95) = 32 units.
+    // New curve widens that so clusters actually pull apart visually.
+    const gap = edgeDistanceForWeight(0.55) - edgeDistanceForWeight(0.95);
+    expect(gap).toBeGreaterThan(40);
+  });
+});
+
+describe("edgeStrengthScaleForWeight (#288)", () => {
+  it("passes through unchanged for link-mode edges (weight=null → 1)", () => {
+    expect(edgeStrengthScaleForWeight(null)).toBe(1);
+  });
+
+  it("weak edges contribute near-zero pull so they don't homogenise the layout", () => {
+    // At w=0.1 the old curve gave 0.325; the new w² curve gives 0.01 —
+    // a 30× reduction so hundreds of weak neighbours can't collectively
+    // dominate real cluster edges.
+    expect(edgeStrengthScaleForWeight(0.1)).toBeLessThan(0.05);
+  });
+
+  it("strong edges pull hard enough to drive cluster shape", () => {
+    expect(edgeStrengthScaleForWeight(0.95)).toBeGreaterThan(0.8);
+  });
+
+  it("is strictly monotone increasing in weight", () => {
+    const values = [0.1, 0.3, 0.5, 0.7, 0.9].map(edgeStrengthScaleForWeight);
+    for (let i = 0; i < values.length - 1; i += 1) {
+      expect(values[i]).toBeLessThan(values[i + 1]!);
+    }
+  });
+});
+
+describe("edgeAlphaForWeight (#288)", () => {
+  it("link-mode edges stay fully opaque", () => {
+    expect(edgeAlphaForWeight(null)).toBe(1);
+  });
+
+  it("near-zero weight sits at the alpha floor, not a legacy 0.45 baseline", () => {
+    // The previous linear curve left w=0 at 0.45 alpha — hundreds of
+    // such edges painted a grey fog. Floor at 0.05 keeps them visible
+    // only on direct inspection.
+    expect(edgeAlphaForWeight(0)).toBeCloseTo(0.05, 5);
+    expect(edgeAlphaForWeight(0.1)).toBeLessThan(0.1);
+  });
+
+  it("strong edges dominate visually with alpha ≥ 0.8", () => {
+    expect(edgeAlphaForWeight(0.95)).toBeGreaterThan(0.8);
+    expect(edgeAlphaForWeight(1)).toBeCloseTo(1, 5);
+  });
+});
+
+describe("edgeSizeForWeight (#288)", () => {
+  it("link-mode edges keep the historical size=1 default", () => {
+    expect(edgeSizeForWeight(null)).toBe(1);
+  });
+
+  it("weak edges render near string-thin", () => {
+    expect(edgeSizeForWeight(0.1)).toBeLessThan(0.6);
+  });
+
+  it("strong edges render visibly thicker", () => {
+    expect(edgeSizeForWeight(0.95)).toBeGreaterThan(2.5);
+  });
+});
+
+describe("DEFAULT_EMBEDDING_FORCE_SETTINGS (#288)", () => {
+  it("is stronger on repulsion than link mode so dense graphs spread apart", () => {
+    expect(DEFAULT_EMBEDDING_FORCE_SETTINGS.scalingRatio).toBeGreaterThan(
+      DEFAULT_FORCE_SETTINGS.scalingRatio,
+    );
+  });
+
+  it("is softer on centering so clusters can breathe apart", () => {
+    expect(DEFAULT_EMBEDDING_FORCE_SETTINGS.gravity).toBeLessThan(
+      DEFAULT_FORCE_SETTINGS.gravity,
+    );
+  });
+
+  it("uses full edge-weight influence so the w² per-edge curve can dominate", () => {
+    expect(DEFAULT_EMBEDDING_FORCE_SETTINGS.edgeWeightInfluence).toBe(1);
   });
 });

@@ -4,7 +4,11 @@
   import GraphCanvas from "./GraphCanvas.svelte";
   import GraphFilters, { type GraphFilterState } from "./GraphFilters.svelte";
   import GraphForces from "./GraphForces.svelte";
-  import { DEFAULT_FORCE_SETTINGS, type ForceSettings } from "./graphRender";
+  import {
+    DEFAULT_FORCE_SETTINGS,
+    DEFAULT_EMBEDDING_FORCE_SETTINGS,
+    type ForceSettings,
+  } from "./graphRender";
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore, type Tab, GRAPH_TAB_PATH } from "../../store/tabStore";
   import { getEmbeddingGraph, getLinkGraph } from "../../ipc/commands";
@@ -17,7 +21,12 @@
   // ── Persistence ─────────────────────────────────────────────────────────────
   const CAMERA_KEY_PREFIX = "vaultcore-graph-camera-";
   const FILTER_KEY_PREFIX = "vaultcore-graph-filters-";
+  // #288 — force settings persist per (vault, mode). The link-mode key
+  // stays under the original prefix for backward compatibility with
+  // previously-saved settings; embedding mode lives under its own slot
+  // with its own defaults tuned for dense graphs.
   const FORCES_KEY_PREFIX = "vaultcore-graph-forces-";
+  const FORCES_EMBEDDING_KEY_PREFIX = "vaultcore-graph-forces-embedding-";
   const FROZEN_KEY_PREFIX = "vaultcore-graph-frozen-";
   // #235 — embedding-mode persistence keys.
   const MODE_KEY_PREFIX = "vaultcore-graph-mode-";
@@ -122,20 +131,33 @@
     }
   }
 
-  function loadForces(vaultPath: string): ForceSettings {
+  /** #288 — resolve the correct (storage key, default) pair for a mode. */
+  function forcesSlotFor(mode: GraphMode, vaultPath: string): {
+    key: string;
+    defaults: ForceSettings;
+  } {
+    const hash = hashVaultPath(vaultPath);
+    return mode === "embedding"
+      ? { key: FORCES_EMBEDDING_KEY_PREFIX + hash, defaults: DEFAULT_EMBEDDING_FORCE_SETTINGS }
+      : { key: FORCES_KEY_PREFIX + hash, defaults: DEFAULT_FORCE_SETTINGS };
+  }
+
+  function loadForces(vaultPath: string, mode: GraphMode): ForceSettings {
+    const { key, defaults } = forcesSlotFor(mode, vaultPath);
     try {
-      const raw = localStorage.getItem(FORCES_KEY_PREFIX + hashVaultPath(vaultPath));
-      if (!raw) return { ...DEFAULT_FORCE_SETTINGS };
+      const raw = localStorage.getItem(key);
+      if (!raw) return { ...defaults };
       const parsed = JSON.parse(raw) as Partial<ForceSettings>;
-      return { ...DEFAULT_FORCE_SETTINGS, ...parsed };
+      return { ...defaults, ...parsed };
     } catch {
-      return { ...DEFAULT_FORCE_SETTINGS };
+      return { ...defaults };
     }
   }
 
-  function saveForces(vaultPath: string, s: ForceSettings): void {
+  function saveForces(vaultPath: string, mode: GraphMode, s: ForceSettings): void {
     try {
-      localStorage.setItem(FORCES_KEY_PREFIX + hashVaultPath(vaultPath), JSON.stringify(s));
+      const { key } = forcesSlotFor(mode, vaultPath);
+      localStorage.setItem(key, JSON.stringify(s));
     } catch {
       /* ignore */
     }
@@ -279,9 +301,11 @@
       vaultPath = s.currentPath;
       if (vaultPath) {
         filters = loadFilters(vaultPath);
-        forces = loadForces(vaultPath);
         frozen = loadFrozen(vaultPath);
+        // #288 — load mode first so force defaults can match the active
+        // graph type (link vs embedding have very different tunings).
         mode = loadMode(vaultPath);
+        forces = loadForces(vaultPath, mode);
         embeddingThreshold = loadThreshold(vaultPath);
         const loadedCluster = loadClusterThreshold(vaultPath);
         embeddingClusterThreshold = loadedCluster;
@@ -487,8 +511,16 @@
 
   function onModeChange(next: GraphMode): void {
     if (next === mode) return;
+    // #288 — forces persist per mode. Flush the current mode's settings
+    // before switching so user tweaks on the link graph don't get
+    // clobbered by loading the embedding slot, then load the new mode's
+    // slot (falling back to its mode-appropriate defaults).
+    if (vaultPath) saveForces(vaultPath, mode, forces);
     mode = next;
-    if (vaultPath) saveMode(vaultPath, next);
+    if (vaultPath) {
+      saveMode(vaultPath, next);
+      forces = loadForces(vaultPath, next);
+    }
     // Full dataset swap — force a layout re-seed so nodes don't animate
     // from link-graph positions into embedding-graph positions.
     datasetVersion += 1;
@@ -542,7 +574,7 @@
 
   function onForcesChange(next: ForceSettings): void {
     forces = next;
-    if (vaultPath) saveForces(vaultPath, next);
+    if (vaultPath) saveForces(vaultPath, mode, next);
   }
 
   function onFrozenChange(next: boolean): void {
