@@ -16,6 +16,10 @@ export interface E2eHook {
   finishProgress: () => void;
   typeInActiveEditor: (text: string) => Promise<void>;
   getActiveDocText: () => Promise<string>;
+  /** Current CodeMirror selection head on the visible editor, or -1 when
+   *  no editor is mounted. Used by #299 regression specs to assert that
+   *  chained autocomplete leaves the caret at the end of the inserted text. */
+  getActiveSelectionHead: () => Promise<number>;
   /** #204: trigger `reindex_vault` and resolve once the reindex worker
    *  emits a terminal `done` progress event. Used by the hybrid-search
    *  E2E spec to wait for embeddings to be queryable before running a
