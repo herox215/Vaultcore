@@ -151,7 +151,7 @@ async fn test_watcher_dispatch_update_tags_on_create() {
     let vault_path = tmp.path().parent().unwrap().to_path_buf();
     let ev = make_debounced_event(EventKind::Create(CreateKind::File), tmp.path().to_path_buf());
 
-    dispatch_tag_index_cmd(&tx, &vault_path, &ev);
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev, Some("Hello #rust"), None);
 
     let cmd = rx.try_recv().expect("expected one IndexCmd");
     match cmd {
@@ -175,7 +175,7 @@ async fn test_watcher_dispatch_remove_tags_on_delete() {
 
     let ev = make_debounced_event(EventKind::Remove(RemoveKind::File), md_path);
 
-    dispatch_tag_index_cmd(&tx, &vault_path, &ev);
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev, None, None);
 
     let cmd = rx.try_recv().expect("expected one IndexCmd");
     assert!(
@@ -196,12 +196,12 @@ async fn test_watcher_ignores_non_md_files() {
     // .txt file — must be ignored
     let txt_path = vault_path.join("note.txt");
     let ev = make_debounced_event(EventKind::Create(CreateKind::File), txt_path);
-    dispatch_tag_index_cmd(&tx, &vault_path, &ev);
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev, Some("Hello #rust"), None);
 
     // extensionless file — must be ignored
     let no_ext = vault_path.join("README");
     let ev2 = make_debounced_event(EventKind::Create(CreateKind::File), no_ext);
-    dispatch_tag_index_cmd(&tx, &vault_path, &ev2);
+    dispatch_tag_index_cmd(&tx, &vault_path, &ev2, Some("irrelevant"), None);
 
     assert!(
         rx.try_recv().is_err(),
