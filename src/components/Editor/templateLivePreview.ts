@@ -32,8 +32,14 @@ import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
 import { bookmarksStore } from "../../store/bookmarksStore";
 import { editorStore } from "../../store/editorStore";
+import { resolveTarget, stripKnownExt } from "./wikiLink";
 
 const refreshEffect = StateEffect.define<void>();
+
+// `[[target]]` or `[[target|alias]]`. Matches the shape wikiLink.ts uses for
+// real doc links — rendered expression output gets the same treatment so
+// `{{ ...select(n => "[[" + n.title + "]]")... }}` produces clickable links.
+const WIKI_LINK_IN_RENDER_RE = /\[\[([^\]|\n]+?)(?:\|([^\]\n]*))?\]\]/g;
 
 class RenderedValueWidget extends WidgetType {
   constructor(readonly value: string) { super(); }
@@ -47,10 +53,43 @@ class RenderedValueWidget extends WidgetType {
     // across lines inside the widget — default `normal` collapses \n to a
     // single space, which would flatten bulleted / tabular renders.
     el.style.whiteSpace = "pre-wrap";
-    el.textContent = this.value;
+    appendValueWithWikiLinks(el, this.value);
     return el;
   }
   override ignoreEvent(): boolean { return false; }
+}
+
+// Walks the rendered string and appends text nodes for plain runs and
+// anchor-style `<span>` elements for every `[[target(|alias)?]]` match.
+//
+// The anchor carries the same `data-wiki-target` / `data-wiki-resolved`
+// attributes the wikiLinkPlugin produces on real doc links, so its mousedown
+// handler (registered on the EditorView) picks up clicks inside this widget
+// and dispatches the shared `wiki-link-click` CustomEvent — EditorPane's
+// existing listener then navigates. Zero new plumbing.
+function appendValueWithWikiLinks(parent: HTMLElement, value: string): void {
+  let cursor = 0;
+  WIKI_LINK_IN_RENDER_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WIKI_LINK_IN_RENDER_RE.exec(value)) !== null) {
+    if (m.index > cursor) {
+      parent.appendChild(document.createTextNode(value.slice(cursor, m.index)));
+    }
+    const rawTarget = m[1]!;
+    const alias = m[2];
+    const stem = stripKnownExt(rawTarget);
+    const resolved = resolveTarget(rawTarget) !== null;
+    const link = document.createElement("span");
+    link.className = resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved";
+    link.setAttribute("data-wiki-target", stem);
+    link.setAttribute("data-wiki-resolved", resolved ? "true" : "false");
+    link.textContent = alias !== undefined ? alias : rawTarget;
+    parent.appendChild(link);
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < value.length) {
+    parent.appendChild(document.createTextNode(value.slice(cursor)));
+  }
 }
 
 const EXPR_RE = /\{\{([^{}]+?)\}\}/g;

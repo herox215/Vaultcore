@@ -59,7 +59,7 @@ export function resolveTarget(target: string): string | null {
   return resolvedLinks.get(stem) ?? null;
 }
 
-function stripKnownExt(target: string): string {
+export function stripKnownExt(target: string): string {
   if (target.endsWith(".md")) return target.slice(0, -3);
   if (target.endsWith(".canvas")) return target.slice(0, -7);
   return target;
