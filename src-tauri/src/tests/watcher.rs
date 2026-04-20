@@ -176,3 +176,115 @@ fn test_write_ignore_multiple_paths() {
     assert!(list.should_ignore(&path_b));
     assert!(!list.should_ignore(&PathBuf::from("/vault/c.md")));
 }
+
+// ─── Issue #246: dispatchers must not read from disk themselves ──────────────
+//
+// Regression guard for #246 — every .md modify event used to read the file
+// twice (once in dispatch_link_graph_cmd, once in dispatch_tag_index_cmd).
+// After the fix, the read is done once in process_events and the content is
+// handed to both dispatchers. These tests pin down that contract by calling
+// the dispatchers with an explicit content string on a path that does NOT
+// exist on disk: the old code would have silently dropped both commands (fs
+// read fails), the new code enqueues both because it never touches disk.
+
+#[test]
+fn test_dispatch_link_graph_uses_provided_content_without_disk_read() {
+    use crate::indexer::IndexCmd;
+    use crate::watcher::dispatch_link_graph_cmd;
+    use notify_debouncer_full::{
+        notify::{event::ModifyKind, Event, EventKind},
+        DebouncedEvent,
+    };
+    use std::time::Instant;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+
+    rt.block_on(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<IndexCmd>(8);
+
+        // A path that definitely does not exist on disk.
+        let vault_path = PathBuf::from("/tmp/vaultcore-nonexistent-246");
+        let md_path = vault_path.join("ghost.md");
+        let ev = DebouncedEvent::new(
+            Event {
+                kind: EventKind::Modify(ModifyKind::Data(
+                    notify_debouncer_full::notify::event::DataChange::Content,
+                )),
+                paths: vec![md_path],
+                attrs: Default::default(),
+            },
+            Instant::now(),
+        );
+
+        // Dispatcher must use the supplied content verbatim — not re-read from disk.
+        dispatch_link_graph_cmd(&tx, &vault_path, &ev, Some("link body [[foo]]"), None);
+
+        let cmd = rx.try_recv().expect(
+            "dispatcher must enqueue UpdateLinks from the supplied content, \
+             even though the path is not readable",
+        );
+        match cmd {
+            IndexCmd::UpdateLinks { rel_path, content } => {
+                assert_eq!(rel_path, "ghost.md");
+                assert_eq!(content, "link body [[foo]]");
+            }
+            other => panic!(
+                "expected UpdateLinks, got discriminant {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    });
+}
+
+#[test]
+fn test_dispatch_tag_index_uses_provided_content_without_disk_read() {
+    use crate::indexer::IndexCmd;
+    use crate::watcher::dispatch_tag_index_cmd;
+    use notify_debouncer_full::{
+        notify::{event::ModifyKind, Event, EventKind},
+        DebouncedEvent,
+    };
+    use std::time::Instant;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+
+    rt.block_on(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<IndexCmd>(8);
+
+        let vault_path = PathBuf::from("/tmp/vaultcore-nonexistent-246");
+        let md_path = vault_path.join("ghost.md");
+        let ev = DebouncedEvent::new(
+            Event {
+                kind: EventKind::Modify(ModifyKind::Data(
+                    notify_debouncer_full::notify::event::DataChange::Content,
+                )),
+                paths: vec![md_path],
+                attrs: Default::default(),
+            },
+            Instant::now(),
+        );
+
+        dispatch_tag_index_cmd(&tx, &vault_path, &ev, Some("body with #rust"), None);
+
+        let cmd = rx.try_recv().expect(
+            "dispatcher must enqueue UpdateTags from the supplied content, \
+             even though the path is not readable",
+        );
+        match cmd {
+            IndexCmd::UpdateTags { rel_path, content } => {
+                assert_eq!(rel_path, "ghost.md");
+                assert_eq!(content, "body with #rust");
+            }
+            other => panic!(
+                "expected UpdateTags, got discriminant {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    });
+}
