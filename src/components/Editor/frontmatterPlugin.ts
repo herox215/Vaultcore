@@ -1,9 +1,22 @@
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
 import { EditorState, StateField, Transaction } from "@codemirror/state";
-import type { ChangeSpec, Extension } from "@codemirror/state";
+import type { ChangeSpec, Extension, Text } from "@codemirror/state";
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n)?/;
+
+/**
+ * #247 — head-slice cap for `detectFrontmatterInDoc`.
+ *
+ * Frontmatter lives at offset 0 or not at all, and in practice never grows
+ * past a few hundred bytes; 16 KB is a comfortable upper bound that avoids
+ * serialising the entire document on every keystroke/selection for the three
+ * hot-path callers (livePreview decoration build, frontmatter StateField
+ * rebuild, frontmatterBoundaryGuard transactionFilter). Before this cap,
+ * each keystroke on a 10 k-word note paid two full-doc `toString()`
+ * allocations, directly eating the 16 ms keystroke budget.
+ */
+const FRONTMATTER_MAX_SLICE = 16384;
 
 export interface FrontmatterRegion {
   from: number;
@@ -15,6 +28,25 @@ export function detectFrontmatter(docText: string): FrontmatterRegion | null {
   const match = FRONTMATTER_RE.exec(docText);
   if (!match) return null;
   return { from: 0, to: match[0].length, body: match[1] ?? "" };
+}
+
+/**
+ * #247 — CM6 hot-path variant of `detectFrontmatter` that reads only the
+ * first `FRONTMATTER_MAX_SLICE` bytes of the document via `doc.sliceString`,
+ * avoiding the full-document `toString()` allocation on every keystroke.
+ *
+ * Safe because frontmatter is at offset 0 or absent, and is strictly bounded
+ * by the closing `---` fence — either the head slice covers the entire
+ * frontmatter region (overwhelmingly common: frontmatter is a few hundred
+ * bytes at most) or the frontmatter is so pathologically large that
+ * rendering would have other problems anyway. The spec promises a few
+ * hundred bytes; the cap here is a 10x+ safety margin.
+ */
+export function detectFrontmatterInDoc(doc: Text): FrontmatterRegion | null {
+  const headLen = Math.min(doc.length, FRONTMATTER_MAX_SLICE);
+  if (headLen === 0) return null;
+  const head = doc.sliceString(0, headLen);
+  return detectFrontmatter(head);
 }
 
 // Empty block widget. The frontmatter region is fully hidden — properties
@@ -40,7 +72,10 @@ class EmptyBlockWidget extends WidgetType {
 const HIDDEN_WIDGET = new EmptyBlockWidget();
 
 function buildDecorations(state: EditorState): DecorationSet {
-  const region = detectFrontmatter(state.doc.toString());
+  // #247 — head-slice variant avoids a full-doc toString() on every
+  // docChanged transaction; frontmatter is bounded to a few hundred bytes
+  // in practice, so the 16 KB head slice is a strict superset.
+  const region = detectFrontmatterInDoc(state.doc);
   if (!region) return Decoration.none;
 
   return Decoration.set([
@@ -82,7 +117,9 @@ const frontmatterBoundaryGuard = EditorState.transactionFilter.of((tr) => {
   const userEvent = tr.annotation(Transaction.userEvent);
   if (!userEvent || !userEvent.startsWith("input")) return tr;
 
-  const region = detectFrontmatter(tr.startState.doc.toString());
+  // #247 — head-slice variant; the filter fires on every input transaction
+  // and previously paid a full-doc toString() allocation every time.
+  const region = detectFrontmatterInDoc(tr.startState.doc);
   if (!region) return tr;
 
   const rewrites: ChangeSpec[] = [];

@@ -21,7 +21,7 @@
 //   - The StateField still rebuilds on docChanged.
 //   - The boundary guard still rewrites inserts into the frontmatter region.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { EditorState, EditorSelection, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
@@ -54,75 +54,93 @@ function mountView(doc: string): { view: EditorView; parent: HTMLElement } {
 
 // ─── hot-path toString assertion ────────────────────────────────────────────
 
+// Threshold: we don't care that CM6 / the boundary guard serialise small Text
+// fragments (inserted chunks, tiny docs in other tests). The regression target
+// is full-document `doc.toString()` — any Text instance whose length is at or
+// above this threshold on the hot path is a smoking gun.
+const BIG_TEXT = 1000;
+
+function spyOnBigTextToString(): { calls: number[]; restore: () => void } {
+  const orig = Text.prototype.toString;
+  const calls: number[] = [];
+  const wrapped = function (this: Text): string {
+    if (this.length >= BIG_TEXT) calls.push(this.length);
+    return orig.call(this);
+  };
+  Text.prototype.toString = wrapped;
+  return {
+    calls,
+    restore: () => {
+      Text.prototype.toString = orig;
+    },
+  };
+}
+
 describe("CM6 frontmatter plugins — no doc.toString() on keystroke (issue #247)", () => {
-  let toStringSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    toStringSpy = vi.spyOn(Text.prototype, "toString");
-  });
-
-  afterEach(() => {
-    toStringSpy.mockRestore();
-  });
-
-  it("does not call Text.toString() on a typing transaction (frontmatter StateField + boundary guard)", () => {
-    // Long body so any full-doc toString() would clearly show up in the spy.
+  it("does not serialise the whole doc on a typing transaction (StateField + boundary guard)", () => {
+    // Long body so any full-doc toString() would clearly show up.
     const longBody = "word ".repeat(10_000).trim();
     const doc = `---\ntitle: Hello\n---\n${longBody}`;
     const { view, parent } = mountView(doc);
 
-    toStringSpy.mockClear();
+    const spy = spyOnBigTextToString();
+    try {
+      // Dispatch a body-side insertion — passes through the boundary guard
+      // and triggers the StateField update because docChanged is true.
+      view.dispatch({
+        changes: { from: view.state.doc.length, to: view.state.doc.length, insert: "x" },
+        userEvent: "input.type",
+      });
 
-    // Dispatch a body-side insertion — passes through the boundary guard and
-    // triggers the StateField update because docChanged is true.
-    view.dispatch({
-      changes: { from: view.state.doc.length, to: view.state.doc.length, insert: "x" },
-      userEvent: "input.type",
-    });
-
-    expect(toStringSpy).not.toHaveBeenCalled();
-
-    view.destroy();
-    parent.remove();
+      expect(spy.calls).toEqual([]);
+    } finally {
+      spy.restore();
+      view.destroy();
+      parent.remove();
+    }
   });
 
-  it("does not call Text.toString() on a selection-only transaction (livePreview rebuild path)", () => {
+  it("does not serialise the whole doc on a selection-only transaction (livePreview rebuild path)", () => {
     // livePreview rebuilds on selectionSet; pre-fix it would call
     // detectFrontmatter(doc.toString()) on every arrow-key tap.
     const longBody = "word ".repeat(10_000).trim();
     const doc = `---\ntitle: Hello\n---\n${longBody}`;
     const { view, parent } = mountView(doc);
 
-    toStringSpy.mockClear();
+    const spy = spyOnBigTextToString();
+    try {
+      // 5 simulated arrow-key cursor moves in the body.
+      for (let i = 30; i <= 34; i++) {
+        view.dispatch({ selection: EditorSelection.cursor(i) });
+      }
 
-    // 5 simulated arrow-key cursor moves in the body.
-    for (let i = 30; i <= 34; i++) {
-      view.dispatch({ selection: EditorSelection.cursor(i) });
+      expect(spy.calls).toEqual([]);
+    } finally {
+      spy.restore();
+      view.destroy();
+      parent.remove();
     }
-
-    expect(toStringSpy).not.toHaveBeenCalled();
-
-    view.destroy();
-    parent.remove();
   });
 
-  it("does not call Text.toString() on an input transaction with no frontmatter", () => {
+  it("does not serialise the whole doc on an input transaction with no frontmatter", () => {
     // The boundary guard short-circuits when no frontmatter is present, but
     // pre-fix it still serialised the doc once to make that determination.
     const longBody = "word ".repeat(10_000).trim();
     const { view, parent } = mountView(longBody);
 
-    toStringSpy.mockClear();
+    const spy = spyOnBigTextToString();
+    try {
+      view.dispatch({
+        changes: { from: view.state.doc.length, to: view.state.doc.length, insert: "x" },
+        userEvent: "input.type",
+      });
 
-    view.dispatch({
-      changes: { from: view.state.doc.length, to: view.state.doc.length, insert: "x" },
-      userEvent: "input.type",
-    });
-
-    expect(toStringSpy).not.toHaveBeenCalled();
-
-    view.destroy();
-    parent.remove();
+      expect(spy.calls).toEqual([]);
+    } finally {
+      spy.restore();
+      view.destroy();
+      parent.remove();
+    }
   });
 });
 
@@ -258,24 +276,25 @@ describe("frontmatterBoundaryGuard — parity (issue #247)", () => {
     const doc = `---\ntitle: Long\n---\n${longBody}`;
     const { view, parent } = mountView(doc);
 
-    const toStringSpy = vi.spyOn(Text.prototype, "toString");
+    const spy = spyOnBigTextToString();
+    try {
+      view.dispatch({
+        changes: { from: 0, to: 0, insert: "X" },
+        userEvent: "input.type",
+      });
 
-    view.dispatch({
-      changes: { from: 0, to: 0, insert: "X" },
-      userEvent: "input.type",
-    });
+      // Guard redirects the insert past the frontmatter region; body stays
+      // intact, frontmatter stays intact.
+      expect(view.state.doc.sliceString(0, 20)).toBe("---\ntitle: Long\n---\n");
+      // The 21st character (first char of body after the redirect) is "X".
+      expect(view.state.doc.sliceString(20, 21)).toBe("X");
 
-    // Guard redirects the insert past the frontmatter region; body stays
-    // intact, frontmatter stays intact.
-    expect(view.state.doc.sliceString(0, 20)).toBe("---\ntitle: Long\n---\n");
-    // The 21st character (first char of body after the redirect) is "X".
-    expect(view.state.doc.sliceString(20, 21)).toBe("X");
-
-    expect(toStringSpy).not.toHaveBeenCalled();
-
-    toStringSpy.mockRestore();
-    view.destroy();
-    parent.remove();
+      expect(spy.calls).toEqual([]);
+    } finally {
+      spy.restore();
+      view.destroy();
+      parent.remove();
+    }
   });
 });
 
