@@ -563,10 +563,17 @@
     // #174 — any FS change flips the search index to "stale". The omni-search
     // modal will auto-rebuild on next open. Subscription lives here (not in
     // OmniSearch) so the flag is tracked even while the modal is closed.
+    // #307 — same callback also forwards the payload to the vault store so
+    // `fileList` reflects new/deleted/renamed notes in real time (e.g. for
+    // template expressions that query the vault). Store update first, then
+    // the stale flag, so any subscriber reading `fileList` in response to
+    // the flip sees fresh data.
     let cancelledStale = false;
     let unlistenStale: (() => void) | undefined;
-    void listenFileChange(() => {
-      if (!cancelledStale) searchStore.setIndexStale(true);
+    void listenFileChange((payload) => {
+      if (cancelledStale) return;
+      vaultStore.applyFileChange(payload);
+      searchStore.setIndexStale(true);
     }).then((fn) => {
       if (cancelledStale) { fn(); return; }
       unlistenStale = fn;
