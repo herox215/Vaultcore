@@ -13,6 +13,7 @@ import type {
 } from "@codemirror/autocomplete";
 import type { EditorView } from "@codemirror/view";
 import { analyzeCompletion } from "../../lib/templateCompletion";
+import { segmentContainingCursor } from "../../lib/templateProgram";
 import { parseFrontmatter } from "../../lib/frontmatterIO";
 
 const COMPLETION_TYPE: Record<string, string> = {
@@ -43,8 +44,16 @@ export function templateCompletionSource(
   const openCol = findOpenTemplate(line.text, col);
   if (openCol < 0) return null;
 
-  const exprStart = line.from + openCol + 2; // skip past `{{`
-  const input = ctx.state.doc.sliceString(exprStart, ctx.pos);
+  const bodyStart = line.from + openCol + 2; // skip past `{{`
+  const body = ctx.state.doc.sliceString(bodyStart, ctx.pos);
+
+  // #303: scope the analysis input to the segment containing the cursor.
+  // Without this, a prior segment like `vault.notes.` would confuse the
+  // analyzer into still treating the chain as open when the user has
+  // already typed `;` and is authoring a new segment.
+  const seg = segmentContainingCursor(body, body.length);
+  const input = seg.segment.slice(0, seg.offsetInSegment);
+  const exprStart = bodyStart + seg.segmentStart;
 
   const dynamicKeys = collectFrontmatterKeys(ctx.state.doc.toString());
   const analysis = analyzeCompletion(input, {
