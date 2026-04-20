@@ -93,8 +93,10 @@ describe("evaluate — member access security", () => {
   });
 
   it("does not expose Object.prototype.hasOwnProperty as a method", () => {
+    // The evaluator rejects the access as an unknown member before the
+    // call even reaches the call site — either path is safe.
     expect(() => evaluate("o.hasOwnProperty('name')", { o: obj })).toThrow(
-      /not callable/,
+      /hasOwnProperty|not callable/,
     );
   });
 });

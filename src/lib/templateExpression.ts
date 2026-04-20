@@ -443,6 +443,11 @@ function evalMember(
 // are allowed only when the prototype belongs to one of our own classes
 // (i.e. is NOT `Object.prototype`) — this is what lets `Collection#count`
 // dispatch while blocking `hasOwnProperty`, `toString`, etc.
+//
+// Unknown members throw (not silently undefined) — matches the allowlist
+// semantics from the identifier path: expression errors must be surfaced
+// so the live overlay can skip them and the inline-error renderer can
+// point at the real problem.
 function readProperty(obj: unknown, key: string): unknown {
   if (BANNED_PROPS.has(key)) {
     throw new ExprError(`Access to '${key}' is not allowed`);
@@ -462,7 +467,7 @@ function readProperty(obj: unknown, key: string): unknown {
       return (obj as Record<string, unknown>)[key];
     }
   }
-  return undefined;
+  throw new ExprError(`Unknown member '${key}'`);
 }
 
 function evalCall(node: Extract<Node, { t: "call" }>, ctx: EvalCtx): unknown {
