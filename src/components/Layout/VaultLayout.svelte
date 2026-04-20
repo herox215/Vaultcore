@@ -35,6 +35,7 @@
   import { treeRevealStore } from "../../store/treeRevealStore";
   import { openFileAsTab } from "../../lib/openFileAsTab";
   import { openHomeCanvas } from "../../lib/homeCanvas";
+  import { openDocsPage } from "../../lib/docsPage";
   import { resolveRevealRelPath } from "../../lib/activeTabReveal";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import { settingsStore } from "../../store/settingsStore";
@@ -546,6 +547,7 @@
       createNewFolder: () => { void createNewFolder(); },
       openGraph: () => { tabStore.openGraphTab(); },
       openHome: () => { void openHomeCanvas(); },
+      openDocs: () => { void openDocsPage(); },
       openCommandPalette: () => { commandPaletteOpen = true; },
       toggleBookmark: () => { void toggleActiveBookmark(); },
       openTodayNote: () => { void openTodayNote(); },
