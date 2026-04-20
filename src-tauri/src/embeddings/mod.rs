@@ -57,8 +57,8 @@ pub use vector_index::{VectorIndex, DEFAULT_EF_SEARCH, DIM};
 mod reindex;
 #[cfg(feature = "embeddings")]
 pub use reindex::{
-    start_reindex, start_reindex_with_backpressure, ReindexHandle, ReindexPhase,
-    ReindexProgress, CHECKPOINT_FILE, CHECKPOINT_VERSION,
+    reconcile_checkpoint_with_live_paths, start_reindex, start_reindex_with_backpressure,
+    ReindexHandle, ReindexPhase, ReindexProgress, CHECKPOINT_FILE, CHECKPOINT_VERSION,
 };
 
 #[cfg(feature = "embeddings")]

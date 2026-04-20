@@ -32,9 +32,28 @@ use crate::VaultState;
 /// coordinator worker's `blocking_recv` returns `None` and the task
 /// exits, dropping the last `Arc<EmbeddingService>`.
 pub fn teardown_for_disable(state: &VaultState) {
+    // #286: cancel **and join** the reindex so no further bulk enqueues
+    // land in the coordinator after we start tearing it down. Previously
+    // we only flipped the cancel flag and returned, which left the
+    // worker racing the sink shutdown — a truncated save on toggle-off
+    // was one of the paths that produced the phantom-skip drift.
     if let Ok(mut guard) = state.reindex_handle.lock() {
         if let Some(h) = guard.take() {
-            h.cancel();
+            h.cancel_and_join();
+        }
+    }
+    // #286: flush the sink synchronously while we still hold a strong
+    // Arc through `query_handles`. If we only relied on `HnswSink::Drop`
+    // the save wouldn't fire until every Arc clone (coordinator worker,
+    // query handlers) has dropped; the next `HnswSink::open` could read
+    // a partial mapping in between. Calling `save_now` here pins the
+    // on-disk state to the current in-memory index before we start
+    // dropping things.
+    if let Ok(guard) = state.query_handles.lock() {
+        if let Some(handles) = guard.as_ref() {
+            if let Err(e) = handles.sink.save_now() {
+                log::warn!("teardown: sink save_now failed: {e}");
+            }
         }
     }
     if let Ok(mut guard) = state.embed_coordinator.lock() {

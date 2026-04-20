@@ -92,6 +92,14 @@ impl HnswSink {
         self.snapshot().save(&self.save_dir)
     }
 
+    /// #286 — distinct paths whose vectors are currently represented in
+    /// the in-memory index (see [`VectorIndex::live_paths`]). Used by the
+    /// checkpoint reconciliation at vault open so phantom skip claims are
+    /// scrubbed before the next reindex run.
+    pub fn live_paths(&self) -> std::collections::HashSet<PathBuf> {
+        self.snapshot().live_paths()
+    }
+
     fn maybe_compact(&self) {
         let snap = self.snapshot();
         if !snap.should_compact() {
@@ -161,14 +169,19 @@ impl VectorSink for HnswSink {
 
 #[cfg(feature = "embeddings")]
 impl Drop for HnswSink {
+    /// #286 — save the index **synchronously** on drop. The previous
+    /// detached-thread approach let the process (or the next
+    /// `HnswSink::open`) race the save: on a truncated save the reloaded
+    /// index was missing vectors the checkpoint still claimed existed,
+    /// producing the phantom-skip drift at the root of #286. Callers that
+    /// care about latency (vault switch, app close) can invoke
+    /// [`save_now`] manually ahead of the drop and the drop save becomes
+    /// a cheap no-op — the mapping write is atomic (tmp + rename), so a
+    /// second save of an unchanged index is a deterministic 20-ms hit.
     fn drop(&mut self) {
-        let snap = self.snapshot();
-        let dir = self.save_dir.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = snap.save(&dir) {
-                log::warn!("HnswSink save on drop failed: {e}");
-            }
-        });
+        if let Err(e) = self.save_now() {
+            log::warn!("HnswSink save on drop failed: {e}");
+        }
     }
 }
 
@@ -271,33 +284,41 @@ mod tests {
     }
 
     #[test]
-    fn save_on_drop_persists_then_reloads() {
+    fn save_on_drop_persists_synchronously_then_reloads() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
         {
             let sink = HnswSink::open(dir.clone(), 8);
             sink.store(&PathBuf::from("persisted.md"), vec![pair(42)]);
-            // Sink dropped here — Drop spawns a save thread.
+            // Sink dropped here — Drop saves synchronously (#286).
         }
-        // Wait for the save file to appear.
-        let mapping = dir.join("vectors.mapping.json");
-        assert!(
-            wait_until(|| mapping.exists(), Duration::from_secs(5)),
-            "save-on-Drop never wrote {}",
-            mapping.display(),
-        );
-        // Wait briefly for the data dump to finish too — file_dump writes
-        // graph + data + mapping in sequence, and our preflight check
-        // requires both binary files present.
-        let data = dir.join("vectors.hnsw.data");
-        assert!(wait_until(|| data.exists(), Duration::from_secs(2)));
-        std::thread::sleep(Duration::from_millis(50));
+        // No polling — the mapping and data files must exist the instant
+        // the drop returns. This is the guarantee that fixes the #286
+        // phantom-skip race between the save and the next open.
+        assert!(dir.join("vectors.mapping.json").exists());
+        assert!(dir.join("vectors.hnsw.data").exists());
 
         let reopened = HnswSink::open(dir, 8);
         let snap = reopened.snapshot();
         assert_eq!(snap.len(), 1);
         let hits = snap.query_with_paths(&unit_vec(42), 1);
         assert_eq!(hits[0].0, PathBuf::from("persisted.md"));
+    }
+
+    #[test]
+    fn live_paths_returns_only_non_tombstoned_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sink = HnswSink::open(tmp.path().to_path_buf(), 8);
+        sink.store(&PathBuf::from("a.md"), vec![pair(1)]);
+        sink.store(&PathBuf::from("b.md"), vec![pair(2)]);
+        sink.store(&PathBuf::from("c.md"), vec![pair(3)]);
+        sink.delete(&PathBuf::from("b.md"));
+
+        let live = sink.live_paths();
+        assert_eq!(live.len(), 2);
+        assert!(live.contains(&PathBuf::from("a.md")));
+        assert!(live.contains(&PathBuf::from("c.md")));
+        assert!(!live.contains(&PathBuf::from("b.md")));
     }
 
     #[test]

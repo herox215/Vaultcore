@@ -631,3 +631,19 @@ export async function setSemanticEnabled(enabled: boolean): Promise<void> {
     throw normalizeError(e);
   }
 }
+
+/**
+ * #286 — wipe `<vault>/.vaultcore/embeddings/` and trigger a full reindex.
+ * The user-facing escape hatch from the drift bug where the checkpoint
+ * falsely claims files are embedded while the vector index is missing
+ * their vectors. Returns once the IPC returns — the reindex itself runs
+ * on a background thread and reports progress via the usual
+ * `embed://reindex_progress` event stream.
+ */
+export async function refreshAllEmbeddings(): Promise<void> {
+  try {
+    await invoke<void>("refresh_all_embeddings");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}

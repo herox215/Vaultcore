@@ -12,7 +12,12 @@
   import { DEFAULT_DAILY_DATE_FORMAT } from "../../lib/dailyNotes";
   import { vaultStore } from "../../store/vaultStore";
   import { snippetsStore } from "../../store/snippetsStore";
-  import { reindexVault, cancelReindex, setSemanticEnabled } from "../../ipc/commands";
+  import {
+    reindexVault,
+    cancelReindex,
+    setSemanticEnabled,
+    refreshAllEmbeddings,
+  } from "../../ipc/commands";
   import { reindexStore, isActive as isReindexActive } from "../../store/reindexStore";
   import { formatShortcut } from "../../lib/shortcuts";
   import { commandRegistry, hotkeysEqual, type Command, type HotKey } from "../../lib/commands/registry";
@@ -260,6 +265,32 @@
     }
   }
 
+  // #286 — user-visible recovery path for the embedding-drift bug. A
+  // two-step confirmation is required because this deletes every on-disk
+  // vector and forces a full re-embed, which on a large vault is minutes
+  // of CPU. UI-06 bans inline `confirm()`; we render the in-modal dialog
+  // used elsewhere (TreeNode delete / rename-with-links).
+  let refreshBusy = $state<boolean>(false);
+  let refreshConfirmOpen = $state<boolean>(false);
+  function askRefreshEmbeddings(): void {
+    if (refreshBusy) return;
+    refreshConfirmOpen = true;
+  }
+  function cancelRefreshEmbeddings(): void {
+    refreshConfirmOpen = false;
+  }
+  async function confirmRefreshEmbeddings(): Promise<void> {
+    refreshConfirmOpen = false;
+    refreshBusy = true;
+    try {
+      await refreshAllEmbeddings();
+    } catch (err) {
+      console.warn("refresh embeddings ipc failed", err);
+    } finally {
+      refreshBusy = false;
+    }
+  }
+
   onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); unsubReindex(); });
 </script>
 
@@ -475,6 +506,28 @@
             <br />Öffne zuerst einen Vault, um die semantische Suche zu aktivieren.
           {/if}
         </p>
+
+        <!-- #286 — escape hatch for the drift bug. Wipes the on-disk
+             embeddings directory and triggers a full reindex. -->
+        <div class="vc-settings-row">
+          <label for="refresh-embeddings">Alle Embeddings neu berechnen</label>
+          <button
+            id="refresh-embeddings"
+            data-testid="settings-refresh-embeddings"
+            type="button"
+            class="vc-settings-btn"
+            onclick={askRefreshEmbeddings}
+            disabled={!currentVaultPath || refreshBusy || reindexActive}
+            title="Löscht die gespeicherten Vektoren und rechnet jede Datei neu ein."
+          >
+            {#if refreshBusy}Läuft …{:else}Neu berechnen{/if}
+          </button>
+        </div>
+        <p class="vc-settings-hint">
+          Nützlich, wenn die Treffer unvollständig wirken (z. B. kürzlich
+          hinzugefügte Notizen tauchen nicht auf). Löscht
+          <code>.vaultcore/embeddings/</code> und embeddet jede Datei erneut.
+        </p>
       </section>
 
       <!-- Section C — Tastaturkürzel (UI-05 / D-11 / #65) -->
@@ -567,6 +620,47 @@
           onclick={resolveConflictUnbind}
           data-testid="shortcut-conflict-unbind"
         >Zuweisung aufheben</button>
+      </div>
+    </div>
+  {/if}
+
+  <!-- #286 — refresh-embeddings confirmation. Uses the vc-confirm-*
+       family established by TreeNode (delete / rename-with-links) so
+       the visual language is consistent. -->
+  {#if refreshConfirmOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="vc-confirm-overlay vc-modal-scrim"
+      onclick={cancelRefreshEmbeddings}
+      role="presentation"
+    ></div>
+    <div
+      class="vc-confirm-dialog vc-modal-surface"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="refresh-embeddings-heading"
+      data-testid="settings-refresh-embeddings-dialog"
+    >
+      <h2 id="refresh-embeddings-heading" class="vc-confirm-heading">
+        Alle Embeddings neu berechnen?
+      </h2>
+      <p class="vc-confirm-body">
+        Der Ordner <code>.vaultcore/embeddings/</code> wird gelöscht und jede
+        Datei neu eingebettet. Bei großen Vaults kann das mehrere Minuten
+        dauern.
+      </p>
+      <div class="vc-confirm-actions">
+        <button
+          type="button"
+          class="vc-confirm-btn vc-confirm-btn--cancel"
+          onclick={cancelRefreshEmbeddings}
+        >Abbrechen</button>
+        <button
+          type="button"
+          class="vc-confirm-btn vc-confirm-btn--accent"
+          onclick={() => void confirmRefreshEmbeddings()}
+          data-testid="settings-refresh-embeddings-confirm"
+        >Neu berechnen</button>
       </div>
     </div>
   {/if}
@@ -693,6 +787,30 @@
     background: var(--color-accent-bg);
     border-color: var(--color-accent);
     color: var(--color-accent);
+  }
+
+  /* #286 — refresh-embeddings button. Mirrors the vault-switch button
+     so neighbouring rows line up visually; adds a disabled state for
+     the semantic-off / refresh-in-flight cases. */
+  .vc-settings-btn {
+    flex-shrink: 0;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .vc-settings-btn:hover:not(:disabled) {
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+  .vc-settings-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   /* Section — CSS-Snippets */

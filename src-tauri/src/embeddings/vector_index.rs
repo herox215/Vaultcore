@@ -691,6 +691,30 @@ impl VectorIndex {
         self.path_pool.read().expect("path_pool lock").len()
     }
 
+    /// #286 — distinct paths whose vectors are currently represented in the
+    /// index (at least one non-tombstoned chunk). Returned as owned
+    /// `PathBuf`s so callers can compare against paths sourced from other
+    /// structures (e.g. the reindex checkpoint) without holding a lock.
+    ///
+    /// A path whose every chunk has been tombstoned is **not** included —
+    /// the checkpoint reconciliation at open considers those "not present"
+    /// and drops any lingering checkpoint claim so the next reindex run
+    /// re-embeds them cleanly.
+    pub fn live_paths(&self) -> HashSet<PathBuf> {
+        let mapping = self.mapping.read().expect("mapping lock");
+        let tombstones = self.tombstones.read().expect("tombstones lock");
+        let mut out: HashSet<PathBuf> = HashSet::new();
+        for (id, (path, _chunk)) in mapping.iter().enumerate() {
+            if tombstones.contains(&(id as u32)) {
+                continue;
+            }
+            if !out.contains(path.as_ref()) {
+                out.insert(path.to_path_buf());
+            }
+        }
+        out
+    }
+
     /// Test-only: max strong_count across the interner pool. Used by the
     /// embedding-graph RAM guard test to detect leaked Arc clones in
     /// downstream builders. Kept `#[cfg(test)]`-free because the module

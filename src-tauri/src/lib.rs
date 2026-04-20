@@ -144,6 +144,7 @@ pub fn run() {
             #[cfg(feature = "embeddings")]
             commands::vault::cancel_reindex,
             commands::vault::set_semantic_enabled,
+            commands::vault::refresh_all_embeddings,
             commands::files::read_file,
             commands::files::write_file,
             commands::files::create_file,
