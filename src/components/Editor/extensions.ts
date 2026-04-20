@@ -17,6 +17,7 @@ import { bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/
 import { autocompletion, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { wikiLinkCompletionSource } from "./wikiLinkAutocomplete";
 import { tagCompletionSource } from "./tagAutocomplete";
+import { templateCompletionSource } from "./templateAutocomplete";
 import { markdown } from "@codemirror/lang-markdown";
 import { GFM } from "@lezer/markdown";
 import { languages } from "@codemirror/language-data";
@@ -65,7 +66,11 @@ export function buildExtensions(
     bracketMatching(),
     closeBrackets(),
     autocompletion({
-      override: [wikiLinkCompletionSource, tagCompletionSource],
+      override: [
+        wikiLinkCompletionSource,
+        tagCompletionSource,
+        templateCompletionSource,
+      ],
       activateOnTyping: true,
       defaultKeymap: true,
     }),
