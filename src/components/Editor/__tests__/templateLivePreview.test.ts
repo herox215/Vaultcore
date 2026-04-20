@@ -280,6 +280,100 @@ describe("templateLivePlugin — rendering", () => {
     });
   });
 
+  // #305 — evaluated output that IS a GFM table should render as a read-only
+  // styled <table>, not as a monospaced pipe-and-dash <span>.
+  describe("rendered GFM table (#305)", () => {
+    it("renders a table-shaped output as a <table> widget", () => {
+      const doc = 'x {{ "|A|B|\\n|-|-|\\n|1|2|" }} y';
+      const view = mount(doc, doc.length);
+
+      const table = view.dom.querySelector(
+        ".vc-template-rendered-table table",
+      );
+      expect(table).not.toBeNull();
+
+      const ths = table!.querySelectorAll("thead th");
+      expect(Array.from(ths).map((t) => t.textContent?.trim())).toEqual(["A", "B"]);
+
+      const tds = table!.querySelectorAll("tbody tr:first-child td");
+      expect(Array.from(tds).map((t) => t.textContent?.trim())).toEqual(["1", "2"]);
+    });
+
+    it("non-table output still renders as the plain <span> widget", () => {
+      const view = mount("x {{vault.name}} y", 0);
+      expect(view.dom.querySelector(".vc-template-rendered-table")).toBeNull();
+      expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
+    });
+
+    it("reflects delimiter-row alignment in cell text-align", () => {
+      const doc = 'x {{ "|L|C|R|\\n|:-|:-:|-:|\\n|a|b|c|" }} y';
+      const view = mount(doc, doc.length);
+
+      const headers = view.dom.querySelectorAll(
+        ".vc-template-rendered-table thead th",
+      );
+      expect((headers[0] as HTMLElement).style.textAlign).toBe("left");
+      expect((headers[1] as HTMLElement).style.textAlign).toBe("center");
+      expect((headers[2] as HTMLElement).style.textAlign).toBe("right");
+    });
+
+    it("renders [[target]] inside a cell as a clickable wiki-link span", () => {
+      setResolvedLinks(new Map([["first", "first.md"]]));
+      const doc = 'x {{ "|Note|\\n|-|\\n|[[first]]|" }} y';
+      const view = mount(doc, doc.length);
+
+      const link = view.dom.querySelector(
+        ".vc-template-rendered-table tbody [data-wiki-target]",
+      );
+      expect(link).not.toBeNull();
+      expect(link!.getAttribute("data-wiki-target")).toBe("first");
+      expect(link!.getAttribute("data-wiki-resolved")).toBe("true");
+      expect(link!.classList.contains("cm-wikilink-resolved")).toBe(true);
+    });
+
+    it("is read-only: no contenteditable cells and no structural controls", () => {
+      const doc = 'x {{ "|A|B|\\n|-|-|\\n|1|2|" }} y';
+      const view = mount(doc, doc.length);
+
+      const table = view.dom.querySelector(".vc-template-rendered-table table");
+      expect(table).not.toBeNull();
+
+      expect(table!.querySelectorAll("[contenteditable='true']").length).toBe(0);
+      expect(table!.parentElement!.querySelectorAll(".cm-table-ctrl").length).toBe(0);
+    });
+
+    it("falls back to span when output has a table plus surrounding text", () => {
+      const doc = 'x {{ "prefix\\n|A|B|\\n|-|-|\\n|1|2|" }} y';
+      const view = mount(doc, doc.length);
+      expect(view.dom.querySelector(".vc-template-rendered-table")).toBeNull();
+      expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
+    });
+
+    it("re-renders the table when the backing store changes", () => {
+      const doc =
+        'x {{ "|Note|\\n|-|\\n"; vault.notes.select(n => "|[[" + n.name + "]]|").join("\\n") }} y';
+      const view = mount(doc, doc.length);
+
+      let rows = view.dom.querySelectorAll(
+        ".vc-template-rendered-table tbody tr",
+      );
+      expect(rows.length).toBe(2);
+
+      (vaultStore as unknown as { _set: (v: unknown) => void })._set({
+        currentPath: "/v/OtherVault",
+        status: "ready",
+        fileList: ["only.md"],
+        fileCount: 1,
+        errorMessage: null,
+        sidebarWidth: 240,
+        vaultReachable: true,
+      });
+
+      rows = view.dom.querySelectorAll(".vc-template-rendered-table tbody tr");
+      expect(rows.length).toBe(1);
+    });
+  });
+
   it("re-renders when the backing store changes", () => {
     const view = mount("vault={{vault.name}}", 0);
     expect(widgets(view)[0]!.text).toBe("MyVault");
