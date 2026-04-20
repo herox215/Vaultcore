@@ -22,3 +22,5 @@ mod embeddings;
 mod semantic_quality;
 #[cfg(feature = "embeddings")]
 mod embedding_graph;
+#[cfg(feature = "embeddings")]
+mod embedding_release;

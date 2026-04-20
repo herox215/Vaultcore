@@ -112,8 +112,14 @@ pub fn run() {
         .setup(|_app| {
             #[cfg(feature = "embeddings")]
             {
-                if let Err(e) = embeddings::bootstrap(&_app.handle()) {
-                    log::warn!("embeddings bootstrap failed: {e}");
+                // #244: honour the semantic-search toggle on startup. When
+                // off, skip the ORT init entirely — the runtime dylib
+                // mapping itself is deferred until the user flips the
+                // toggle on and `set_semantic_enabled` runs lazy init.
+                if commands::vault::read_semantic_enabled(&_app.handle()) {
+                    if let Err(e) = embeddings::bootstrap(&_app.handle()) {
+                        log::warn!("embeddings bootstrap failed: {e}");
+                    }
                 }
             }
             Ok(())
@@ -127,6 +133,7 @@ pub fn run() {
             commands::vault::reindex_vault,
             #[cfg(feature = "embeddings")]
             commands::vault::cancel_reindex,
+            commands::vault::set_semantic_enabled,
             commands::files::read_file,
             commands::files::write_file,
             commands::files::create_file,

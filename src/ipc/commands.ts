@@ -614,3 +614,20 @@ export async function cancelReindex(): Promise<void> {
     throw normalizeError(e);
   }
 }
+
+/**
+ * #244 — persist the semantic-search toggle and (re)arm or tear down
+ * the embedding stack on the backend to match.
+ *
+ * Setting this to `false` at runtime drops the `Arc<EmbeddingService>`
+ * held by the backend so the ~200-400 MB ONNX session is released.
+ * Setting it to `true` lazy-loads the model against the currently open
+ * vault (no-op when no vault is open — re-runs on the next `open_vault`).
+ */
+export async function setSemanticEnabled(enabled: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_semantic_enabled", { enabled });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
