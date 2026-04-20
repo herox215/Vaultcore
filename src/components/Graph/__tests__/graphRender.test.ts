@@ -154,6 +154,37 @@ describe("d3-force integration", () => {
     destroyGraph(handle);
   });
 
+  // #257 — pause/resume cycle used by GraphView when its tab is hidden.
+  // Freeze on hide, unfreeze on show: the simulation object itself must
+  // survive the round-trip (same Simulation instance) so node positions
+  // aren't reshuffled by a fresh seed.
+  it("pause/resume cycle via setLayoutFrozen preserves the simulation instance", () => {
+    const handle = mountGraph(makeContainer(), sampleGraph(), {
+      centerId: "a.md",
+      accentColor: "#ff8800",
+      nodeColor: "#888888",
+      unresolvedColor: "#cccccc",
+      edgeColor: "#eeeeee",
+      forceSettings: DEFAULT_FORCE_SETTINGS,
+    });
+    const simBefore = handle.simulation;
+    expect(simBefore).not.toBeNull();
+
+    // Hide → freeze.
+    setLayoutFrozen(handle, true);
+    expect(handle.frozen).toBe(true);
+    expect(handle.simulation).toBe(simBefore);
+
+    // Show → unfreeze.
+    setLayoutFrozen(handle, false);
+    expect(handle.frozen).toBe(false);
+    expect(handle.simulation).toBe(simBefore);
+    // alpha should have been re-heated for the resume.
+    expect(handle.simulation!.alpha()).toBeGreaterThan(0);
+
+    destroyGraph(handle);
+  });
+
   it("updateGraph with relayout=false preserves positions for nodes present in both datasets", () => {
     const handle = mountGraph(makeContainer(), sampleGraph(), {
       centerId: "a.md",
