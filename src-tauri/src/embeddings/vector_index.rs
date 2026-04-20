@@ -1085,4 +1085,63 @@ mod tests {
             assert!(hits.len() <= 10);
         }
     }
+
+    // ---- #254: path interning / RAM budgets --------------------------------
+
+    /// Inserting many chunks across few files must share one path
+    /// allocation per file. Pool cardinality is the testable proxy for
+    /// "no per-chunk PathBuf duplicates".
+    #[test]
+    fn path_interner_dedupes_across_chunks_of_same_file() {
+        let idx = VectorIndex::new(64);
+        // 5 files × 8 chunks each → 40 inserts, 5 distinct paths.
+        for f in 0..5u64 {
+            let p = PathBuf::from(format!("note-{f}.md"));
+            for c in 0..8usize {
+                idx.insert(p.clone(), c, &unit_vec(f * 100 + c as u64));
+            }
+        }
+        assert_eq!(idx.len(), 40);
+        assert_eq!(
+            idx.distinct_path_count(),
+            5,
+            "interner pool must hold one entry per distinct file, got {}",
+            idx.distinct_path_count()
+        );
+    }
+
+    #[test]
+    fn bulk_insert_shares_interned_path_across_chunks() {
+        let idx = VectorIndex::new(16);
+        let p = PathBuf::from("multi.md");
+        let items: Vec<(PathBuf, usize, Vec<f32>)> = (0..6usize)
+            .map(|c| (p.clone(), c, unit_vec(c as u64)))
+            .collect();
+        idx.bulk_insert(items);
+        assert_eq!(idx.len(), 6);
+        assert_eq!(
+            idx.distinct_path_count(),
+            1,
+            "bulk_insert must intern the single path, got {}",
+            idx.distinct_path_count()
+        );
+    }
+
+    #[test]
+    fn mapping_entries_share_arc_within_same_file() {
+        // Strong guarantee: the Arc<Path> handed out by the interner is
+        // reference-identical for every chunk of the same file.
+        let idx = VectorIndex::new(8);
+        let p = PathBuf::from("ident.md");
+        idx.insert(p.clone(), 0, &unit_vec(1));
+        idx.insert(p.clone(), 1, &unit_vec(2));
+        idx.insert(p.clone(), 2, &unit_vec(3));
+        let arcs = idx.mapping_arcs_for_test();
+        assert_eq!(arcs.len(), 3);
+        // All three Arc<Path> entries must be the same allocation.
+        assert!(Arc::ptr_eq(&arcs[0], &arcs[1]));
+        assert!(Arc::ptr_eq(&arcs[1], &arcs[2]));
+        // And each Arc has strong_count ≥ 2 (interner pool + mapping).
+        assert!(Arc::strong_count(&arcs[0]) >= 2);
+    }
 }
