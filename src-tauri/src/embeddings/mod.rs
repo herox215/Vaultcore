@@ -67,6 +67,11 @@ mod query;
 pub use query::{semantic_search_query, QueryHandles, SemanticHit};
 
 #[cfg(feature = "embeddings")]
+mod release;
+#[cfg(feature = "embeddings")]
+pub use release::teardown_for_disable;
+
+#[cfg(feature = "embeddings")]
 mod hybrid;
 #[cfg(feature = "embeddings")]
 pub use hybrid::{rrf_fuse, FusedHit, RRF_K};
