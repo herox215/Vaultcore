@@ -26,13 +26,15 @@ import {
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 import { get } from "svelte/store";
 
-import { evaluate, renderValue } from "../../lib/templateExpression";
+import { evaluateProgram } from "../../lib/templateProgram";
 import { currentVaultRoot } from "../../lib/vaultApiStoreBridge";
 import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
 import { bookmarksStore } from "../../store/bookmarksStore";
 import { editorStore } from "../../store/editorStore";
 import { resolveTarget, stripKnownExt } from "./wikiLink";
+import { parseTableText, renderStaticTableDom } from "./tablePlugin";
+import type { ParsedTable } from "./tablePlugin";
 
 const refreshEffect = StateEffect.define<void>();
 
@@ -40,6 +42,62 @@ const refreshEffect = StateEffect.define<void>();
 // real doc links — rendered expression output gets the same treatment so
 // `{{ ...select(n => "[[" + n.title + "]]")... }}` produces clickable links.
 const WIKI_LINK_IN_RENDER_RE = /\[\[([^\]|\n]+?)(?:\|([^\]\n]*))?\]\]/g;
+
+// Strict table detection (#305): only return a ParsedTable if the evaluated
+// output is itself a complete GFM table — no leading/trailing text, no
+// intermediate non-pipe lines (catches two-tables-separated-by-blank-line).
+// CRLF is normalized to LF before delegating to `parseTableText`, otherwise
+// `\r` residue leaks into the rightmost cell on every row.
+function tryParseStrictTable(rendered: string): ParsedTable | null {
+  const normalized = rendered.replace(/\r\n?/g, "\n").trim();
+  if (normalized.length === 0) return null;
+  for (const line of normalized.split("\n")) {
+    const t = line.trim();
+    if (t.length === 0) return null; // blank line inside → not a pure table
+    if (!t.startsWith("|")) return null; // non-pipe line → not a pure table
+  }
+  return parseTableText(normalized);
+}
+
+// Structural equality for two parsed tables — used by RenderedTableWidget.eq
+// to avoid DOM rebuilds on identical re-renders. Cheaper than serializing
+// both sides on every CM6 update tick.
+function sameTable(a: ParsedTable, b: ParsedTable): boolean {
+  if (a.headers.length !== b.headers.length) return false;
+  if (a.rows.length !== b.rows.length) return false;
+  for (let i = 0; i < a.headers.length; i++) {
+    if (a.headers[i] !== b.headers[i]) return false;
+    if ((a.alignments[i] ?? "default") !== (b.alignments[i] ?? "default")) return false;
+  }
+  for (let r = 0; r < a.rows.length; r++) {
+    const ra = a.rows[r]!;
+    const rb = b.rows[r]!;
+    if (ra.length !== rb.length) return false;
+    for (let c = 0; c < ra.length; c++) {
+      if (ra[c] !== rb[c]) return false;
+    }
+  }
+  return true;
+}
+
+class RenderedTableWidget extends WidgetType {
+  constructor(readonly table: ParsedTable) { super(); }
+  override eq(other: WidgetType): boolean {
+    return other instanceof RenderedTableWidget && sameTable(other.table, this.table);
+  }
+  toDOM(): HTMLElement {
+    const wrap = renderStaticTableDom(this.table, (cell, text) =>
+      appendValueWithWikiLinks(cell, text),
+    );
+    wrap.classList.add("vc-template-rendered-table");
+    // Inline-block so the surrounding line text doesn't get orphaned by the
+    // table's intrinsic block flow — keeps `x {{...}} y` readable.
+    wrap.style.display = "inline-block";
+    wrap.style.verticalAlign = "top";
+    return wrap;
+  }
+  override ignoreEvent(): boolean { return false; }
+}
 
 class RenderedValueWidget extends WidgetType {
   constructor(readonly value: string) { super(); }
@@ -137,25 +195,32 @@ function buildDecorations(view: EditorView): DecorationSet {
     );
     if (overlap) continue;
 
-    const body = m[1]!.trim();
+    const body = m[1]!;
     let rendered: string;
     try {
-      if (body === "date") rendered = formatDate(now);
-      else if (body === "time") rendered = formatTime(now);
-      else if (body === "title") rendered = activeTitle();
-      else {
-        if (vaultRoot === null) vaultRoot = currentVaultRoot();
-        rendered = renderValue(evaluate(body, { vault: vaultRoot }));
-      }
+      if (vaultRoot === null) vaultRoot = currentVaultRoot();
+      rendered = evaluateProgram(body, {
+        vault: vaultRoot,
+        date: formatDate(now),
+        time: formatTime(now),
+        title: activeTitle(),
+      });
     } catch {
       continue;
     }
+    // Drop the decoration when nothing evaluated successfully — otherwise
+    // a single-segment failure would show an empty widget in place of the
+    // source text, which is worse than leaving the source visible.
+    if (rendered === "") continue;
 
-    builder.add(
-      absFrom,
-      absTo,
-      Decoration.replace({ widget: new RenderedValueWidget(rendered) }),
-    );
+    // #305 — if the output is a complete GFM table, render it as a read-only
+    // styled <table>. Non-table output (including mixed table + surrounding
+    // text) falls through to the plain <span> widget.
+    const parsedTable = tryParseStrictTable(rendered);
+    const widget = parsedTable !== null
+      ? new RenderedTableWidget(parsedTable)
+      : new RenderedValueWidget(rendered);
+    builder.add(absFrom, absTo, Decoration.replace({ widget }));
   }
 
   return builder.finish();
