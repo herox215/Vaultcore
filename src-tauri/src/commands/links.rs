@@ -368,10 +368,13 @@ pub async fn update_links_after_rename(
         .collect();
 
     // Second pass (sequential): record write_ignore then write for each match.
+    // Issue #258: keep `new_content` in hand so the downstream link-graph update
+    // doesn't re-read the exact same bytes we just wrote. Per source file we
+    // avoid one `read_to_string` syscall + allocation + UTF-8 validation.
     let mut updated_files = 0usize;
     let mut updated_links = 0usize;
     let mut failed_files: Vec<String> = Vec::new();
-    let mut rewritten_sources: Vec<String> = Vec::new();
+    let mut rewrites: Vec<(String, String)> = Vec::new();
 
     for (source_rel, outcome) in rewrite_results {
         let (link_count, new_content) = match outcome {
@@ -398,20 +401,20 @@ pub async fn update_links_after_rename(
 
         updated_files += 1;
         updated_links += link_count;
-        rewritten_sources.push(source_rel);
+        rewrites.push((source_rel, new_content));
     }
 
     // Update link graph for each successfully rewritten file + the renamed file.
+    // For rewritten sources we use the in-memory `new_content` — it is byte-
+    // identical to what we just wrote (the write just completed, nothing else
+    // can race since write_ignore already suppresses the watcher loopback).
     {
         let mut lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        for source_rel in &rewritten_sources {
-            let abs_path = vault_root.join(source_rel);
-            if let Ok(content) = std::fs::read_to_string(&abs_path) {
-                let links = link_graph::extract_links(&content);
-                lg.update_file(source_rel, links, &all_paths);
-            }
-        }
-        // Also update the renamed file itself in the graph.
+        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+        // Also update the renamed file itself in the graph. This read stays:
+        // this function never rewrote the renamed file, so we don't have its
+        // content in memory. It's also a single read, not N, so outside the
+        // N-file perf burst the issue targets.
         lg.remove_file(&old_path);
         let new_abs = vault_root.join(&new_path);
         if let Ok(content) = std::fs::read_to_string(&new_abs) {
@@ -420,12 +423,31 @@ pub async fn update_links_after_rename(
         }
     }
 
+    let updated_paths: Vec<String> = rewrites.into_iter().map(|(rel, _)| rel).collect();
+
     Ok(RenameResult {
         updated_files,
         updated_links,
         failed_files,
-        updated_paths: rewritten_sources,
+        updated_paths,
     })
+}
+
+/// Apply in-memory rewrites to the link graph.
+///
+/// Issue #258: takes `(rel_path, content)` pairs so the graph update does not
+/// re-read files that `update_links_after_rename` just wrote. The content is
+/// parsed in-place via `link_graph::extract_links`; the graph itself is updated
+/// via `LinkGraph::update_file`. No filesystem access.
+fn apply_rewrites_to_graph(
+    lg: &mut LinkGraph,
+    rewrites: &[(String, String)],
+    all_paths: &[String],
+) {
+    for (source_rel, content) in rewrites {
+        let links = link_graph::extract_links(content);
+        lg.update_file(source_rel, links, all_paths);
+    }
 }
 
 // ── get_resolved_links ─────────────────────────────────────────────────────────
@@ -930,4 +952,74 @@ pub async fn get_link_graph(
     let ti = ti_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
     Ok(compute_link_graph(&lg, &fi, &ti))
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Issue #258: rewrite burst must update the graph from the in-memory
+    // content that was just written, not by re-reading each file from disk.
+    //
+    // This test proves it by passing paths that do NOT exist on disk: if the
+    // helper re-read from disk the graph would stay empty for those sources.
+    // Since `update_file` uses the in-memory content we pass in, the graph
+    // picks up the expected outgoing links.
+    #[test]
+    fn apply_rewrites_to_graph_uses_in_memory_content_not_disk() {
+        let all_paths = vec![
+            "Target.md".to_string(),
+            "Other.md".to_string(),
+            "src_a.md".to_string(),
+            "src_b.md".to_string(),
+        ];
+
+        // Paths that are guaranteed absent from any filesystem — a disk read
+        // here would fail, so if the graph ends up populated correctly it
+        // proves the helper consumed the in-memory strings.
+        let rewrites = vec![
+            ("src_a.md".to_string(), "before [[Target]] after".to_string()),
+            ("src_b.md".to_string(), "link [[Target]] and [[Other]]".to_string()),
+        ];
+
+        let mut lg = LinkGraph::new();
+        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+
+        let out_a = lg.outgoing_for("src_a.md").expect("src_a must have outgoing");
+        assert_eq!(out_a.len(), 1);
+        assert_eq!(out_a[0].target_raw, "Target");
+
+        let out_b = lg.outgoing_for("src_b.md").expect("src_b must have outgoing");
+        assert_eq!(out_b.len(), 2);
+        assert_eq!(out_b[0].target_raw, "Target");
+        assert_eq!(out_b[1].target_raw, "Other");
+
+        // Incoming side also populated from the in-memory content.
+        let in_target = lg
+            .incoming_for("Target.md")
+            .expect("Target must have incoming");
+        assert!(in_target.contains(&"src_a.md".to_string()));
+        assert!(in_target.contains(&"src_b.md".to_string()));
+    }
+
+    // A sibling guard: rewrites are idempotent — re-applying the same set
+    // must not duplicate outgoing entries. `update_file` already clears the
+    // previous state per source, so this locks the helper in on that
+    // contract in case someone replaces the body later.
+    #[test]
+    fn apply_rewrites_to_graph_is_idempotent() {
+        let all_paths = vec!["Target.md".to_string(), "src.md".to_string()];
+        let rewrites = vec![("src.md".to_string(), "[[Target]]".to_string())];
+
+        let mut lg = LinkGraph::new();
+        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+
+        let out = lg.outgoing_for("src.md").unwrap();
+        assert_eq!(out.len(), 1);
+        let incoming = lg.incoming_for("Target.md").unwrap();
+        assert_eq!(incoming.len(), 1);
+    }
 }
