@@ -41,6 +41,7 @@ describe("Issue #259: VaultLayout has no throwaway subscribe/unsub pattern", () 
     let m: RegExpExecArray | null;
     while ((m = starter.exec(src)) !== null) {
       const name = m[1];
+      if (name === undefined) continue;
       // Walk from the opening `(` of `.subscribe(` to its matching `)`.
       let i = m.index + m[0].length; // points just past the opening `(`
       let parenDepth = 1;
@@ -55,7 +56,7 @@ describe("Issue #259: VaultLayout has no throwaway subscribe/unsub pattern", () 
       }
       // Skip optional `;` then whitespace.
       if (src[i] === ";") i++;
-      while (i < src.length && /\s/.test(src[i]!)) i++;
+      while (i < src.length && /\s/.test(src[i] ?? "")) i++;
       const tail = src.slice(i, i + name.length + 4);
       if (new RegExp(`^${name}\\s*\\(\\s*\\)`).test(tail)) {
         offenders.push(src.slice(m.index, i + name.length + 4));
