@@ -314,6 +314,12 @@ impl LinkGraph {
     /// Uses pre-resolved targets cached in `StoredLink::resolved_target`
     /// so no call to `resolve_link` is needed — O(k) where k is the number
     /// of backlinks, not O(n·k).
+    ///
+    /// Source title lookup goes through `FileIndex::entry_for_rel` (#248),
+    /// an O(1) hash lookup, instead of a linear scan over `all_entries()`
+    /// per source (#260). On a 100k-note vault a hub note with 50 backlinks
+    /// previously did ~5M rel_path equality checks just for titles; this
+    /// now does 50.
     pub fn get_backlinks(&self, target_rel: &str, file_index: &FileIndex) -> Vec<BacklinkEntry> {
         let sources = match self.incoming.get(target_rel) {
             Some(s) => s,
@@ -322,13 +328,10 @@ impl LinkGraph {
 
         let mut entries = Vec::new();
         for source_path in sources {
-            let source_title = {
-                file_index
-                    .all_entries()
-                    .find(|(_, m)| m.relative_path == *source_path)
-                    .map(|(_, m)| m.title.clone())
-                    .unwrap_or_else(|| path_stem(source_path).to_string())
-            };
+            let source_title = file_index
+                .entry_for_rel(source_path)
+                .map(|m| m.title.clone())
+                .unwrap_or_else(|| path_stem(source_path).to_string());
 
             if let Some(stored_links) = self.outgoing.get(source_path) {
                 for stored in stored_links {
