@@ -513,8 +513,8 @@ fn hydrate_hits(
     query: &str,
     fused: Vec<crate::embeddings::FusedHit>,
 ) -> Result<Vec<HybridHit>, VaultError> {
-    use tantivy::query::TermQuery;
-    use tantivy::schema::IndexRecordOption;
+    use std::collections::HashMap;
+    use tantivy::query::TermSetQuery;
     use tantivy::Term;
 
     let Some((index, reader)) = bm25_handles else {
@@ -549,32 +549,56 @@ fn hydrate_hits(
         .map_err(|_| VaultError::IndexCorrupt)?;
     snippet_gen.set_max_num_chars(200);
 
+    // #252: replace the per-hit TermQuery loop with a single TermSetQuery over
+    // `path_field` containing every fused path. Path is a STRING (untokenised)
+    // field so `Term::from_field_text` exact-matches. We then index the
+    // resolved docs by path and walk `fused` in its original order to
+    // reconstruct the output — ranking is fully preserved.
+    //
+    // We collect unscored doc addresses (`DocSetCollector`) since we only need
+    // to look up the stored title/body per path — the fused score is already
+    // authoritative for the output ordering.
+    let terms: Vec<Term> = fused
+        .iter()
+        .map(|h| Term::from_field_text(path_field, &h.path))
+        .collect();
+    let set_q = TermSetQuery::new(terms);
+    let resolved: std::collections::HashSet<tantivy::DocAddress> = searcher
+        .search(&set_q, &tantivy::collector::DocSetCollector)
+        .map_err(|_| VaultError::IndexCorrupt)?;
+
+    // Map path -> (title, snippet_html, match_count). Resolving doc + snippet
+    // once per unique path avoids the k×query-plan cost of the previous loop.
+    let mut by_path: HashMap<String, (String, String, usize)> =
+        HashMap::with_capacity(resolved.len());
+    for addr in resolved {
+        let doc = searcher
+            .doc::<TantivyDocument>(addr)
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        let path = doc
+            .get_first(path_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let title = doc
+            .get_first(title_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let snip = snippet_gen.snippet_from_doc(&doc);
+        let mc = snip.highlighted().len();
+        by_path.insert(path, (title, snip.to_html(), mc));
+    }
+
     let mut out = Vec::with_capacity(fused.len());
     for hit in fused {
-        // Look up the doc by exact path. Path field is stored as STRING
-        // (untokenised) so a TermQuery exact-matches.
-        let term = Term::from_field_text(path_field, &hit.path);
-        let term_q = TermQuery::new(term, IndexRecordOption::Basic);
-        let lookup: Vec<(f32, tantivy::DocAddress)> = searcher
-            .search(&term_q, &TopDocs::with_limit(1).order_by_score())
-            .map_err(|_| VaultError::IndexCorrupt)?;
-
-        let (title, snippet, match_count) = if let Some((_score, addr)) = lookup.first() {
-            let doc = searcher
-                .doc::<TantivyDocument>(*addr)
-                .map_err(|_| VaultError::IndexCorrupt)?;
-            let title = doc
-                .get_first(title_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let snip = snippet_gen.snippet_from_doc(&doc);
-            let mc = snip.highlighted().len();
-            (title, snip.to_html(), mc)
-        } else {
-            (filename_title(&hit.path), String::new(), 0)
+        let (title, snippet, match_count) = match by_path.remove(&hit.path) {
+            Some(v) => v,
+            None => (filename_title(&hit.path), String::new(), 0),
         };
-
         out.push(HybridHit {
             path: hit.path,
             title,
