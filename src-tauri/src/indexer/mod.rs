@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use link_graph::{LinkGraph, extract_links};
+use link_graph::{LinkGraph, StemIndex, extract_links};
 use tag_index::TagIndex;
 use frontmatter::parse_frontmatter;
 
@@ -367,8 +367,13 @@ impl IndexCoordinator {
         // Two-pass: file_list already contains all relative paths; now
         // re-read each file and update the graph.  We hold the link_graph
         // lock only briefly per file.
+        //
+        // Perf (#250): build the vault-wide StemIndex once so each
+        // `update_file_with_index` call is O(k) in the stem bucket instead of
+        // O(N) × 2 full passes with per-path `to_lowercase` allocations.
         {
             let all_paths: Vec<String> = file_list.clone();
+            let stem_index = StemIndex::build(&all_paths);
             for abs_path in md_paths.iter() {
                 let rel = abs_path
                     .strip_prefix(vault_path)
@@ -378,7 +383,7 @@ impl IndexCoordinator {
                 if let Ok(content) = std::fs::read_to_string(abs_path) {
                     let links = extract_links(&content);
                     if let Ok(mut lg) = self.link_graph.lock() {
-                        lg.update_file(&rel, links, &all_paths);
+                        lg.update_file_with_index(&rel, links, &stem_index);
                     }
                     if let Ok(mut ti) = self.tag_index.lock() {
                         ti.update_file(&rel, &content);
