@@ -20,6 +20,10 @@
   import { toastStore } from "../../store/toastStore";
   import { searchStore } from "../../store/searchStore";
   import { buildExtensions, buildReadOnlyExtensions } from "./extensions";
+  import { insertTemplateExpression } from "./editorContextMenu";
+  import TemplateExpressionBuilder from "./TemplateExpressionBuilder.svelte";
+  import ContextMenu from "../common/ContextMenu.svelte";
+  import { parseFrontmatter } from "../../lib/frontmatterIO";
   import EditorGraphBackground from "./EditorGraphBackground.svelte";
   import CountStatusBar from "./CountStatusBar.svelte";
   import { countsStore } from "../../store/countsStore";
@@ -66,6 +70,105 @@
 
   // Pane host element — used by container-querying helpers below.
   let paneEl = $state<HTMLDivElement | undefined>();
+
+  // Custom editor context-menu (#301). The active CM6 `EditorView` target is
+  // stored in a non-reactive ref because Svelte 5 would otherwise proxy the
+  // object and break CM6's internal field access (same pitfall as viewMap).
+  let contextView: EditorView | null = null;
+  let contextMenuOpen = $state(false);
+  let contextMenuPos = $state({ x: 0, y: 0 });
+  let templateBuilderOpen = $state(false);
+  let templateBuilderKeys = $state<string[]>([]);
+
+  function handleContextMenuRequest(view: EditorView, x: number, y: number) {
+    contextView = view;
+    contextMenuPos = { x, y };
+    contextMenuOpen = true;
+  }
+
+  function closeContextMenu() {
+    contextMenuOpen = false;
+  }
+
+  function readActiveSelection(): string {
+    if (!contextView) return "";
+    const sel = contextView.state.selection.main;
+    return contextView.state.sliceDoc(sel.from, sel.to);
+  }
+
+  function menuAction_copy() {
+    const text = readActiveSelection();
+    closeContextMenu();
+    if (!text) return;
+    void navigator.clipboard.writeText(text).catch(() => { /* blocked — no-op */ });
+  }
+
+  function menuAction_cut() {
+    if (!contextView) { closeContextMenu(); return; }
+    const view = contextView;
+    const sel = view.state.selection.main;
+    const text = view.state.sliceDoc(sel.from, sel.to);
+    closeContextMenu();
+    if (!text) return;
+    void navigator.clipboard.writeText(text).catch(() => { /* blocked */ });
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: "" },
+      userEvent: "delete.cut",
+    });
+  }
+
+  async function menuAction_paste() {
+    if (!contextView) { closeContextMenu(); return; }
+    const view = contextView;
+    const sel = view.state.selection.main;
+    closeContextMenu();
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      return; // clipboard blocked (e.g. no permission); user can still Ctrl+V.
+    }
+    if (!text) return;
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: text },
+      selection: { anchor: sel.from + text.length },
+      userEvent: "input.paste",
+    });
+  }
+
+  function menuAction_selectAll() {
+    if (!contextView) { closeContextMenu(); return; }
+    const view = contextView;
+    const len = view.state.doc.length;
+    closeContextMenu();
+    view.dispatch({ selection: { anchor: 0, head: len } });
+  }
+
+  function menuAction_openBuilder() {
+    if (!contextView) { closeContextMenu(); return; }
+    // Surface frontmatter keys from the active doc so the lambda's property
+    // picker can offer `n.property.<key>` without requiring free-text.
+    const docText = contextView.state.doc.toString();
+    try {
+      const { properties } = parseFrontmatter(docText);
+      templateBuilderKeys = properties.map((p) => p.key);
+    } catch {
+      templateBuilderKeys = [];
+    }
+    contextMenuOpen = false;
+    templateBuilderOpen = true;
+  }
+
+  function onBuilderInsert(dsl: string) {
+    if (contextView) insertTemplateExpression(contextView, dsl);
+    templateBuilderOpen = false;
+    contextView = null;
+  }
+
+  function onBuilderCancel() {
+    templateBuilderOpen = false;
+    contextView = null;
+  }
 
   // ERR-04: Disk-full toast debounce — max one toast per 30 seconds
   let lastDiskFullToast = 0;
@@ -632,7 +735,7 @@
     const isReadOnly = tab.viewer === "text";
     const extensions = isReadOnly
       ? buildReadOnlyExtensions()
-      : buildExtensions(onSave, paneId);
+      : buildExtensions(onSave, paneId, handleContextMenuRequest);
     const { EditorView: EV } = await import("@codemirror/view");
     const dirtyListener = EV.updateListener.of((update) => {
       if (update.docChanged) {
@@ -853,6 +956,30 @@
   {#if !vaultReachable}
     <div class="vc-editor-readonly-overlay"></div>
   {/if}
+
+  <!-- #301: custom right-click menu + visual template-expression builder.
+       The menu entry order matches the ticket — the custom action sits at
+       the top, then the standard clipboard actions. -->
+  <ContextMenu
+    open={contextMenuOpen}
+    x={contextMenuPos.x}
+    y={contextMenuPos.y}
+    onClose={closeContextMenu}
+  >
+    <button class="vc-context-item" onclick={menuAction_openBuilder}>Insert template expression…</button>
+    <div class="vc-context-separator"></div>
+    <button class="vc-context-item" onclick={menuAction_cut}>Cut</button>
+    <button class="vc-context-item" onclick={menuAction_copy}>Copy</button>
+    <button class="vc-context-item" onclick={menuAction_paste}>Paste</button>
+    <button class="vc-context-item" onclick={menuAction_selectAll}>Select All</button>
+  </ContextMenu>
+
+  <TemplateExpressionBuilder
+    open={templateBuilderOpen}
+    dynamicPropertyKeys={templateBuilderKeys}
+    onInsert={onBuilderInsert}
+    onCancel={onBuilderCancel}
+  />
 
 </div>
 
