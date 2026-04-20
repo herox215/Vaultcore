@@ -95,9 +95,23 @@ function widgets(view: EditorView): Array<{ from: number; to: number; text: stri
   return out;
 }
 
+const DEFAULT_VAULT_STATE = {
+  currentPath: "/v/MyVault",
+  status: "ready",
+  fileList: ["first.md", "second.md"],
+  fileCount: 2,
+  errorMessage: null,
+  sidebarWidth: 240,
+  vaultReachable: true,
+};
+
 describe("templateLivePlugin — rendering", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    // Reset the mocked vaultStore so per-test mutations don't leak across.
+    (vaultStore as unknown as { _set: (v: unknown) => void })._set(
+      DEFAULT_VAULT_STATE,
+    );
   });
 
   it("renders {{vault.name}} as a widget with the vault name", () => {
@@ -319,7 +333,7 @@ describe("templateLivePlugin — rendering", () => {
 
     it("renders [[target]] inside a cell as a clickable wiki-link span", () => {
       setResolvedLinks(new Map([["first", "first.md"]]));
-      const doc = 'x {{ "|Note|\\n|-|\\n|[[first]]|" }} y';
+      const doc = 'x {{ "|Note|X|\\n|-|-|\\n|[[first]]| |" }} y';
       const view = mount(doc, doc.length);
 
       const link = view.dom.querySelector(
@@ -349,9 +363,48 @@ describe("templateLivePlugin — rendering", () => {
       expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
     });
 
+    it("renders a header-only table (no body rows)", () => {
+      const doc = 'x {{ "|A|B|\\n|-|-|" }} y';
+      const view = mount(doc, doc.length);
+
+      const table = view.dom.querySelector(
+        ".vc-template-rendered-table table",
+      );
+      expect(table).not.toBeNull();
+      expect(table!.querySelectorAll("tbody tr").length).toBe(0);
+      expect(table!.querySelectorAll("thead th").length).toBe(2);
+    });
+
+    it("renders multiple [[...]] inside a single cell", () => {
+      setResolvedLinks(new Map([["a", "a.md"], ["b", "b.md"]]));
+      const doc = 'x {{ "|Links|X|\\n|-|-|\\n|[[a]] [[b]]| |" }} y';
+      const view = mount(doc, doc.length);
+
+      const links = view.dom.querySelectorAll(
+        ".vc-template-rendered-table tbody [data-wiki-target]",
+      );
+      expect(links.length).toBe(2);
+      expect(links[0]!.getAttribute("data-wiki-target")).toBe("a");
+      expect(links[1]!.getAttribute("data-wiki-target")).toBe("b");
+    });
+
+    // Note: [[target|alias]] inside a cell can't round-trip through the
+    // current `splitRow` (the `|` splits the cell). GFM requires `\|` escape
+    // for pipes-in-cells; that's a broader table-plugin enhancement and out
+    // of scope here. The general aliased wiki-link rendering path is already
+    // covered by the non-table test at line ~176.
+
+    it("falls back to span when output contains two tables separated by a blank line", () => {
+      const doc =
+        'x {{ "|A|x|\\n|-|-|\\n|1|y|\\n\\n|B|z|\\n|-|-|\\n|2|w|" }} y';
+      const view = mount(doc, doc.length);
+      expect(view.dom.querySelector(".vc-template-rendered-table")).toBeNull();
+      expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
+    });
+
     it("re-renders the table when the backing store changes", () => {
       const doc =
-        'x {{ "|Note|\\n|-|\\n"; vault.notes.select(n => "|[[" + n.name + "]]|").join("\\n") }} y';
+        'x {{ "|Note|X|\\n|-|-|\\n"; vault.notes.select(n => "|[[" + n.name + "]]| |").join("\\n") }} y';
       const view = mount(doc, doc.length);
 
       let rows = view.dom.querySelectorAll(

@@ -25,7 +25,7 @@ import { undo, redo } from "@codemirror/commands";
 
 type Align = "left" | "center" | "right" | "default";
 
-interface ParsedTable {
+export interface ParsedTable {
   headers: string[];
   alignments: Align[];
   rows: string[][];
@@ -140,6 +140,60 @@ export function serializeTable(table: ParsedTable): string {
   const lines: string[] = [formatRow(table.headers), formatDelimiter()];
   for (const row of table.rows) lines.push(formatRow(row));
   return lines.join("\n");
+}
+
+// ── Static (read-only) renderer (shared with templateLivePreview, #305) ─────
+
+/**
+ * Build a read-only rendered table DOM — no contenteditable cells, no
+ * structural controls, no event handlers. Used by `templateLivePreview` to
+ * render `{{ ... }}` expression output that evaluates to a GFM table. Shares
+ * the `cm-table-rendered` class so the existing border/padding CSS applies.
+ *
+ * `appendCellContent` lets callers hook wiki-link rendering (or any other
+ * inline transformation) per cell. Default: `cell.textContent = text`.
+ */
+export function renderStaticTableDom(
+  table: ParsedTable,
+  appendCellContent?: (cell: HTMLElement, text: string) => void,
+): HTMLElement {
+  const setContent =
+    appendCellContent ?? ((cell: HTMLElement, text: string) => {
+      cell.textContent = text;
+    });
+
+  const wrap = document.createElement("div");
+  wrap.className = "cm-static-table-wrap";
+
+  const el = document.createElement("table");
+  el.className = "cm-table-rendered";
+
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (let i = 0; i < table.headers.length; i++) {
+    const th = document.createElement("th");
+    applyAlign(th, table.alignments[i] ?? "default");
+    setContent(th, table.headers[i] ?? "");
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  el.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (let r = 0; r < table.rows.length; r++) {
+    const tr = document.createElement("tr");
+    for (let i = 0; i < table.headers.length; i++) {
+      const td = document.createElement("td");
+      applyAlign(td, table.alignments[i] ?? "default");
+      setContent(td, table.rows[r]?.[i] ?? "");
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  el.appendChild(tbody);
+
+  wrap.appendChild(el);
+  return wrap;
 }
 
 // ── Minimal source diff (keeps decoration range stable) ──────────────────────
