@@ -65,6 +65,8 @@ const FOLDER: TypeDescriptor = {
   members: [
     { kind: "property", name: "name", returns: "string" },
     { kind: "property", name: "path", returns: "string" },
+    { kind: "property", name: "notes", returns: "Collection<Note>",
+      doc: "All notes in this folder (recursive, includes descendants)" },
   ],
 };
 
