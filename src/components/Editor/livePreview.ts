@@ -1,7 +1,7 @@
 import { ViewPlugin, Decoration, type EditorView, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
-import { detectFrontmatter } from "./frontmatterPlugin";
+import { detectFrontmatterInDoc } from "./frontmatterPlugin";
 
 const HIDE = Decoration.replace({});
 
@@ -22,7 +22,12 @@ function buildDecorations(view: EditorView): DecorationSet {
   // YAML frontmatter block gets tagged as `HeaderMark`. Skip hiding inside
   // the frontmatter region — otherwise the closing `---` vanishes whenever
   // the cursor sits on a different line.
-  const frontmatter = detectFrontmatter(doc.toString());
+  //
+  // #247 — read only the first ~16 KB of the doc via `sliceString` instead
+  // of serialising the entire document; frontmatter is bounded to a few
+  // hundred bytes in practice. Previously each selection-only arrow-key
+  // transaction paid a full-doc `toString()` allocation here.
+  const frontmatter = detectFrontmatterInDoc(doc);
 
   syntaxTree(view.state).iterate({
     from: view.viewport.from,
