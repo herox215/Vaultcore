@@ -18,6 +18,7 @@ mod file_index_contention;
 mod vault_walk;
 mod rename_link_resolution;
 mod home_canvas;
+mod docs_page;
 #[cfg(feature = "embeddings")]
 mod embeddings;
 #[cfg(feature = "embeddings")]

@@ -300,6 +300,12 @@ impl IndexCoordinator {
             log::warn!("ensure_home_canvas failed: {e:?}");
         }
 
+        // Issue #285: bootstrap / refresh the bundled docs page. Version-
+        // tagged, so unchanged app versions skip the write entirely.
+        if let Err(e) = ensure_docs_page(vault_path) {
+            log::warn!("ensure_docs_page failed: {e:?}");
+        }
+
         // Collect all .md paths (skip dot-dirs and .vaultcore).
         let md_paths = collect_md_paths(vault_path);
         let total = md_paths.len();
@@ -709,6 +715,65 @@ pub fn ensure_home_canvas(vault_path: &Path) -> Result<(), VaultError> {
     })?;
     std::fs::write(&home_path, &buf).map_err(VaultError::Io)?;
     Ok(())
+}
+
+/// Bundled docs body. Shipped alongside the binary so the file contents
+/// can be edited as normal Markdown without touching Rust code.
+const DOCS_TEMPLATE_BODY: &str = include_str!("../../resources/DOCS.template.md");
+
+/// Idempotently ensure `<vault>/.vaultcore/DOCS.md` exists and is current
+/// with the running app version (#285).
+///
+/// The file starts with a YAML frontmatter block carrying
+/// `vaultcore_docs_version: "<CARGO_PKG_VERSION>"`. On every vault open we
+/// read the first few hundred bytes and compare: if the tag matches the
+/// running app version the file is left alone, otherwise the whole file is
+/// overwritten. This lets the docs stay fresh across upgrades without
+/// clobbering the file on every launch. Users who edit the file will lose
+/// their changes on the next upgrade — the header warns about this.
+pub fn ensure_docs_page(vault_path: &Path) -> Result<(), VaultError> {
+    let docs_path = vault_path.join(".vaultcore").join("DOCS.md");
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    if docs_path.exists() && file_declares_version(&docs_path, current_version) {
+        return Ok(());
+    }
+
+    if let Some(parent) = docs_path.parent() {
+        std::fs::create_dir_all(parent).map_err(VaultError::Io)?;
+    }
+
+    // Front-matter stamped with the running version. The generator-warning
+    // line sits inside the frontmatter as a plain `warning:` key so YAML
+    // parsers on the frontend ignore it safely, but humans opening the raw
+    // file still see it.
+    let header = format!(
+        "---\nvaultcore_docs_version: \"{}\"\n---\n\n",
+        current_version
+    );
+    let mut contents = String::with_capacity(header.len() + DOCS_TEMPLATE_BODY.len());
+    contents.push_str(&header);
+    contents.push_str(DOCS_TEMPLATE_BODY);
+
+    std::fs::write(&docs_path, contents.as_bytes()).map_err(VaultError::Io)?;
+    Ok(())
+}
+
+/// Returns true when `path` exists and its YAML frontmatter declares the
+/// given `vaultcore_docs_version`. Only reads the file's head (≤ 1 KB) —
+/// the frontmatter block is always at the top and bounded in practice.
+fn file_declares_version(path: &Path, version: &str) -> bool {
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    use std::io::Read;
+    let mut buf = [0u8; 1024];
+    let mut reader = std::io::BufReader::new(file);
+    let Ok(n) = reader.read(&mut buf) else { return false };
+    let head = match std::str::from_utf8(&buf[..n]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let needle = format!("vaultcore_docs_version: \"{}\"", version);
+    head.contains(&needle)
 }
 
 /// Collect all `.canvas` relative paths (forward-slash, vault-relative) under

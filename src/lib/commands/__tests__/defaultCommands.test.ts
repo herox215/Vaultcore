@@ -41,6 +41,7 @@ function makeCtx(overrides: Partial<DefaultCommandContext> = {}): DefaultCommand
     toggleReadingMode: noop,
     insertTemplate: noop,
     openHome: noop,
+    openDocs: noop,
     ...overrides,
   };
 }
@@ -182,5 +183,38 @@ describe("defaultCommands — editor:toggle-reading-mode (#63)", () => {
     // Cmd+Shift+E still resolves to the sidebar-toggle alt — no collision.
     const shiftEv = new KeyboardEvent("keydown", { key: "e", metaKey: true, shiftKey: true });
     expect(commandRegistry.findByHotkey(shiftEv)?.id).toBe(CMD_IDS.TOGGLE_SIDEBAR_ALT);
+  });
+});
+
+describe("defaultCommands — vault:open-docs (#285)", () => {
+  beforeEach(() => {
+    setupLocalStorage();
+    commandRegistry._reset();
+  });
+
+  it("registers vault:open-docs with a palette label and Cmd+Shift+/ hotkey", () => {
+    const spec = DEFAULT_COMMAND_SPECS.find((s) => s.id === CMD_IDS.OPEN_DOCS);
+    expect(spec).toBeTruthy();
+    expect(spec!.name.length).toBeGreaterThan(0);
+    expect(spec!.hotkey).toEqual({ meta: true, shift: true, key: "/" });
+  });
+
+  it("registerDefaultCommands wires openDocs callback and exposes it via execute()", () => {
+    const openDocs = vi.fn();
+    registerDefaultCommands(makeCtx({ openDocs }));
+    const cmd = commandRegistry.list().find((c) => c.id === CMD_IDS.OPEN_DOCS);
+    expect(cmd).toBeTruthy();
+    commandRegistry.execute(CMD_IDS.OPEN_DOCS);
+    expect(openDocs).toHaveBeenCalledOnce();
+  });
+
+  it("Cmd+Shift+/ resolves to vault:open-docs via findByHotkey without colliding", () => {
+    registerDefaultCommands(makeCtx());
+    const ev = new KeyboardEvent("keydown", {
+      key: "/",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(commandRegistry.findByHotkey(ev)?.id).toBe(CMD_IDS.OPEN_DOCS);
   });
 });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { FilePlus, FolderPlus, Network, ChevronDown, FileText, LayoutDashboard } from "lucide-svelte";
+  import { FilePlus, FolderPlus, Network, ChevronDown, FileText, LayoutDashboard, BookOpen } from "lucide-svelte";
   import { listDirectory, createFile, createFolder, writeFile } from "../../ipc/commands";
   import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
   import { commandRegistry } from "../../lib/commands/registry";
@@ -29,6 +29,7 @@
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { tabStore } from "../../store/tabStore";
   import { openHomeCanvas } from "../../lib/homeCanvas";
+  import { openDocsPage } from "../../lib/docsPage";
   import { searchStore } from "../../store/searchStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
@@ -449,6 +450,15 @@
           title="Open graph (Cmd/Ctrl+Shift+G)"
         >
           <Network size={16} strokeWidth={1.5} />
+        </button>
+        <button
+          class="vc-sidebar-action-btn"
+          onclick={() => { void openDocsPage(); }}
+          aria-label="Open docs"
+          title="Open documentation (Cmd/Ctrl+Shift+/)"
+          data-testid="sidebar-open-docs"
+        >
+          <BookOpen size={16} strokeWidth={1.5} />
         </button>
       </div>
     {/if}

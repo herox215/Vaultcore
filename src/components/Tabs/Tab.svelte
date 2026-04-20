@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { X, Home } from "lucide-svelte";
+  import { X, Home, BookOpen } from "lucide-svelte";
   import type { Tab } from "../../store/tabStore";
   import { isHomeCanvasPath, homeTabLabel } from "../../lib/homeCanvas";
+  import { isDocsPagePath, docsTabLabel } from "../../lib/docsPage";
 
   let {
     tab,
@@ -16,15 +17,19 @@
   } = $props();
 
   const isHome = $derived(isHomeCanvasPath(tab.filePath));
+  const isDocs = $derived(isDocsPagePath(tab.filePath));
 
   // Derive the display filename from the full path. Graph tabs use a
-  // friendly label; the home canvas shows the vault name (#279).
+  // friendly label; the home canvas shows the vault name (#279); the
+  // bundled docs page uses a fixed "Docs" label (#285).
   const filename = $derived(
     tab.type === "graph"
       ? "Graph"
       : isHome
         ? homeTabLabel(tab.filePath)
-        : (tab.filePath.split("/").pop() ?? tab.filePath),
+        : isDocs
+          ? docsTabLabel(tab.filePath)
+          : (tab.filePath.split("/").pop() ?? tab.filePath),
   );
 
   function handleClick(e: MouseEvent) {
@@ -75,6 +80,10 @@
   {#if isHome}
     <span class="vc-tab-home-icon" aria-hidden="true">
       <Home size={14} strokeWidth={1.75} />
+    </span>
+  {:else if isDocs}
+    <span class="vc-tab-home-icon" aria-hidden="true">
+      <BookOpen size={14} strokeWidth={1.75} />
     </span>
   {/if}
   <span class="vc-tab-label">{filename}</span>
