@@ -26,7 +26,7 @@ import {
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 import { get } from "svelte/store";
 
-import { evaluate, renderValue } from "../../lib/templateExpression";
+import { evaluateProgram } from "../../lib/templateProgram";
 import { currentVaultRoot } from "../../lib/vaultApiStoreBridge";
 import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
@@ -137,19 +137,23 @@ function buildDecorations(view: EditorView): DecorationSet {
     );
     if (overlap) continue;
 
-    const body = m[1]!.trim();
+    const body = m[1]!;
     let rendered: string;
     try {
-      if (body === "date") rendered = formatDate(now);
-      else if (body === "time") rendered = formatTime(now);
-      else if (body === "title") rendered = activeTitle();
-      else {
-        if (vaultRoot === null) vaultRoot = currentVaultRoot();
-        rendered = renderValue(evaluate(body, { vault: vaultRoot }));
-      }
+      if (vaultRoot === null) vaultRoot = currentVaultRoot();
+      rendered = evaluateProgram(body, {
+        vault: vaultRoot,
+        date: formatDate(now),
+        time: formatTime(now),
+        title: activeTitle(),
+      });
     } catch {
       continue;
     }
+    // Drop the decoration when nothing evaluated successfully — otherwise
+    // a single-segment failure would show an empty widget in place of the
+    // source text, which is worse than leaving the source visible.
+    if (rendered === "") continue;
 
     builder.add(
       absFrom,

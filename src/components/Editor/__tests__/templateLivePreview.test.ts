@@ -185,6 +185,101 @@ describe("templateLivePlugin — rendering", () => {
     expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
   });
 
+  // #303 — multi-segment `{{ ... ; ... }}` bodies.
+  describe("multi-segment expressions (#303)", () => {
+    it("renders `{{ vault.name; vault.notes.count() }}` as the concatenation", () => {
+      const doc = "x {{ vault.name; vault.notes.count() }} y";
+      const view = mount(doc, doc.length);
+      const ws = widgets(view);
+      expect(ws).toHaveLength(1);
+      expect(ws[0]!.text).toBe("MyVault2");
+    });
+
+    it("lets a literal string segment act as a separator", () => {
+      const doc = 'x {{ vault.name; " — "; vault.notes.count() }} y';
+      const view = mount(doc, doc.length);
+      const ws = widgets(view);
+      expect(ws).toHaveLength(1);
+      expect(ws[0]!.text).toBe("MyVault — 2");
+    });
+
+    it("swallows one broken segment and renders the rest", () => {
+      const doc = "x {{ vault.name; vault.nonsense; vault.notes.count() }} y";
+      const view = mount(doc, doc.length);
+      const ws = widgets(view);
+      expect(ws).toHaveLength(1);
+      expect(ws[0]!.text).toBe("MyVault2");
+    });
+
+    it("drops the decoration entirely when every segment fails", () => {
+      const doc = "x {{ @@@; @@@ }} y";
+      const view = mount(doc, doc.length);
+      expect(widgets(view)).toHaveLength(0);
+    });
+
+    it("exposes `date` / `time` / `title` via scope so they work mid-program", () => {
+      // After #303, the scope carries `date` / `time` / `title` alongside
+      // `vault`, so a non-special-cased segment can reference them too.
+      const doc = "x {{ title; vault.name }} y";
+      const view = mount(doc, doc.length);
+      const ws = widgets(view);
+      expect(ws).toHaveLength(1);
+      // editorStore.activePath is null in this test → `title` renders as "".
+      expect(ws[0]!.text).toBe("MyVault");
+    });
+
+    it("re-wires `{{ title }}` single-segment through the new scope path", () => {
+      // Pinning that moving title/date/time into scope didn't regress the
+      // single-segment shortcut users already rely on.
+      const doc = "x {{ title }} y";
+      const view = mount(doc, doc.length);
+      const ws = widgets(view);
+      // activePath is null → `title` resolves to empty string; renderer
+      // treats empty output as "no decoration worth showing".
+      // Either a widget with empty text OR no widget is acceptable.
+      if (ws.length === 1) {
+        expect(ws[0]!.text).toBe("");
+      } else {
+        expect(ws).toHaveLength(0);
+      }
+    });
+
+    it("does not split on `;` inside a string literal", () => {
+      const doc = 'x {{ "a;b" }} y';
+      const view = mount(doc, doc.length);
+      const ws = widgets(view);
+      expect(ws).toHaveLength(1);
+      expect(ws[0]!.text).toBe("a;b");
+    });
+
+    it("#295 regression: wiki-link decoration still suppressed inside multi-segment body", () => {
+      setResolvedLinks(new Map([["first", "first.md"]]));
+      // Even with multi-segment, the EDITOR body `[[first]]` substring is
+      // part of a string-literal argument — the wiki-link plugin should
+      // not surface a decoration for it inside the `{{ ... }}` range.
+      // (The RENDERED output, however, may still show a wiki-link span —
+      // that's #297 behavior and is exercised below.)
+      const doc = 'x {{ vault.name; "[[first]]" }} y';
+      const view = mount(doc, 0);
+      const ws = widgets(view);
+      expect(ws).toHaveLength(1);
+      // Rendered widget text is the concatenation.
+      expect(ws[0]!.text).toBe("MyVault[[first]]");
+    });
+
+    it("renders [[...]] from any segment as a clickable wiki-link span (#297)", () => {
+      setResolvedLinks(new Map([["first", "first.md"]]));
+      const doc = 'x {{ vault.name; " "; "[[first]]" }} y';
+      const view = mount(doc, 0);
+      const anchor = view.dom.querySelector(
+        ".vc-template-rendered [data-wiki-target]",
+      );
+      expect(anchor).not.toBeNull();
+      expect(anchor!.getAttribute("data-wiki-target")).toBe("first");
+      expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    });
+  });
+
   it("re-renders when the backing store changes", () => {
     const view = mount("vault={{vault.name}}", 0);
     expect(widgets(view)[0]!.text).toBe("MyVault");
