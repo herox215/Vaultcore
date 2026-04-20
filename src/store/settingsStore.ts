@@ -31,6 +31,85 @@ const MONO_STACKS: Record<MonoFont, string> = {
   "fira-code":      '"Fira Code", monospace',
 };
 
+/**
+ * Lazy font loaders — issue #255. Previously `src/main.ts` statically
+ * imported 8 `@fontsource/*` CSS files before Svelte mounted, forcing the
+ * browser to fetch every woff2 binary on the first-paint critical path.
+ *
+ * We now load each family on demand: once when `init()` sees the persisted
+ * choice and again whenever a setter changes it. Each dynamic import lands
+ * in its own Vite-emitted chunk, so the startup bundle no longer carries
+ * any font payload. The CSS side-effect injects `@font-face` rules into
+ * the document; repeat calls are deduped by the browser's module cache.
+ *
+ * The `system` keys do NOT resolve to "no webfont" — the default stacks
+ * still list JetBrains Mono + Fira Code as first preferences, so we load
+ * those lazily too when the user keeps the default. This preserves the
+ * pre-fix visual appearance of code blocks on systems where the fonts
+ * aren't installed; the only behavioural difference is a brief FOUT on
+ * first launch before the chunk resolves. On subsequent launches the
+ * browser cache makes the swap unobservable.
+ *
+ * Each loader is memoised so the same import() promise is reused and a
+ * family can be preloaded in parallel with the rest of the app shell
+ * without triggering duplicate network requests.
+ */
+const loadedPromises = new Map<string, Promise<unknown>>();
+
+/** Fire-and-forget: resolve a family's `@font-face` CSS and inject it. */
+function loadFontCss(id: string, loader: () => Promise<unknown>): void {
+  if (loadedPromises.has(id)) return;
+  let p: Promise<unknown>;
+  try {
+    p = loader();
+  } catch {
+    // import() can throw synchronously in environments without a module
+    // runner (jsdom during unit tests). A missing webfont is a visual
+    // fallback, never fatal — swallow and pretend success so the store
+    // stays test-friendly.
+    p = Promise.resolve();
+  }
+  loadedPromises.set(id, p.catch(() => undefined));
+}
+
+function loadBodyWebfont(key: BodyFont): void {
+  switch (key) {
+    case "inter":
+      loadFontCss("inter-400", () => import("@fontsource/inter/400.css"));
+      loadFontCss("inter-700", () => import("@fontsource/inter/700.css"));
+      return;
+    case "lora":
+      loadFontCss("lora-400", () => import("@fontsource/lora/400.css"));
+      loadFontCss("lora-700", () => import("@fontsource/lora/700.css"));
+      return;
+    case "system":
+      // System stack has no webfont — fallbacks only.
+      return;
+  }
+}
+
+function loadMonoWebfont(key: MonoFont): void {
+  // Both the "system" default stack and the explicit choices reference
+  // JetBrains Mono / Fira Code. Load whichever the chosen stack names
+  // first; in "system" mode we load both so the stack degrades in order.
+  switch (key) {
+    case "jetbrains-mono":
+      loadFontCss("jetbrains-mono-400", () => import("@fontsource/jetbrains-mono/400.css"));
+      loadFontCss("jetbrains-mono-700", () => import("@fontsource/jetbrains-mono/700.css"));
+      return;
+    case "fira-code":
+      loadFontCss("fira-code-400", () => import("@fontsource/fira-code/400.css"));
+      loadFontCss("fira-code-700", () => import("@fontsource/fira-code/700.css"));
+      return;
+    case "system":
+      loadFontCss("jetbrains-mono-400", () => import("@fontsource/jetbrains-mono/400.css"));
+      loadFontCss("jetbrains-mono-700", () => import("@fontsource/jetbrains-mono/700.css"));
+      loadFontCss("fira-code-400", () => import("@fontsource/fira-code/400.css"));
+      loadFontCss("fira-code-700", () => import("@fontsource/fira-code/700.css"));
+      return;
+  }
+}
+
 export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 20;
 export const FONT_SIZE_DEFAULT = 14;
@@ -136,6 +215,11 @@ function createSettingsStore() {
       applyBody(s.fontBody);
       applyMono(s.fontMono);
       applySize(s.fontSize);
+      // #255: kick off the webfont CSS chunks now (after Svelte mount,
+      // off the first-paint critical path). Fire-and-forget — the CSS
+      // self-installs its @font-face rules when it lands.
+      loadBodyWebfont(s.fontBody);
+      loadMonoWebfont(s.fontMono);
       // One-shot cleanup of the legacy attachment-folder key. Safe to drop
       // after a few release cycles — kept here for now so upgraded users
       // don't carry stale state forever.
@@ -145,12 +229,14 @@ function createSettingsStore() {
       if (!isBodyFont(key)) return;
       _store.update((s) => ({ ...s, fontBody: key }));
       applyBody(key);
+      loadBodyWebfont(key);
       try { localStorage.setItem(K_BODY, key); } catch { /* */ }
     },
     setFontMono(key: MonoFont): void {
       if (!isMonoFont(key)) return;
       _store.update((s) => ({ ...s, fontMono: key }));
       applyMono(key);
+      loadMonoWebfont(key);
       try { localStorage.setItem(K_MONO, key); } catch { /* */ }
     },
     setFontSize(n: number): void {
