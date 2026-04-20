@@ -88,19 +88,43 @@
   function handleClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
     if (!target) return;
-    const anchor = target.closest("[data-wiki-target]") as HTMLElement | null;
+
+    // Wiki-link — forward as a CustomEvent so EditorPane owns navigation.
+    const wikiAnchor = target.closest("[data-wiki-target]") as HTMLElement | null;
+    if (wikiAnchor) {
+      event.preventDefault();
+      const wikiTarget = wikiAnchor.getAttribute("data-wiki-target") ?? "";
+      const resolved = wikiAnchor.getAttribute("data-wiki-resolved") === "true";
+      containerEl?.dispatchEvent(
+        new CustomEvent("wiki-link-click", {
+          bubbles: true,
+          detail: { target: wikiTarget, resolved },
+        }),
+      );
+      return;
+    }
+
+    // In-page anchor (table-of-contents style): `<a href="#heading-slug">`.
+    // Scroll the reading container to the target element. Using the plain
+    // browser default would scroll the entire window and leave the inner
+    // container untouched, since the anchor lives inside an absolutely-
+    // positioned scroll area.
+    const anchor = target.closest("a[href]") as HTMLAnchorElement | null;
     if (!anchor) return;
+    const href = anchor.getAttribute("href") ?? "";
+    if (!href.startsWith("#") || href.length < 2) return;
+    const id = decodeURIComponent(href.slice(1));
+    const targetEl = containerEl?.querySelector(
+      `[id="${CSS.escape(id)}"]`,
+    ) as HTMLElement | null;
+    if (!targetEl || !containerEl) return;
     event.preventDefault();
-    const wikiTarget = anchor.getAttribute("data-wiki-target") ?? "";
-    const resolved = anchor.getAttribute("data-wiki-resolved") === "true";
-    // Reuse the same CustomEvent contract the CM6 wiki-link plugin dispatches
-    // so EditorPane.handleWikiLinkClick handles navigation identically.
-    containerEl?.dispatchEvent(
-      new CustomEvent("wiki-link-click", {
-        bubbles: true,
-        detail: { target: wikiTarget, resolved },
-      }),
-    );
+    // offsetTop is relative to the nearest positioned ancestor — the content
+    // wrapper sits inside the scroll container, so subtract the container's
+    // own offsetTop from the target's offsetTop via getBoundingClientRect.
+    const containerTop = containerEl.getBoundingClientRect().top;
+    const targetTop = targetEl.getBoundingClientRect().top;
+    containerEl.scrollTop += targetTop - containerTop - 8;
   }
 
   // Restore initial scroll after the first render when the tab opens directly

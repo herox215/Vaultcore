@@ -89,7 +89,9 @@ describe("renderMarkdownToHtml (#63)", () => {
   it("strips YAML frontmatter before rendering", () => {
     const html = renderMarkdownToHtml("---\ntitle: x\ntags: [a]\n---\n\n# Heading");
     expect(html).not.toContain("title:");
-    expect(html).toContain("<h1>");
+    // H1 carries a slugified id now (#285 ToC fix), so match the open tag
+    // without assuming attribute shape.
+    expect(html).toMatch(/<h1[^>]*>Heading<\/h1>/);
   });
 
   it("renders task list checkboxes as disabled inputs", () => {
@@ -102,5 +104,40 @@ describe("renderMarkdownToHtml (#63)", () => {
   it("escapes wiki-link targets so injected HTML cannot leak", () => {
     const html = renderMarkdownToHtml('[[<script>alert(1)</script>]]');
     expect(html).not.toContain("<script>");
+  });
+
+  // ── Heading slug ids (#285 ToC bug) ────────────────────────────────────
+  it("emits id= on headings derived from plain-text slug", () => {
+    const html = renderMarkdownToHtml("# Getting started\n");
+    expect(html).toContain('id="getting-started"');
+  });
+
+  it("slugifies punctuation and multiple spaces consistently", () => {
+    const html = renderMarkdownToHtml("## Hello, world!\n\n### Foo   bar\n");
+    expect(html).toContain('id="hello-world"');
+    expect(html).toContain('id="foo-bar"');
+  });
+
+  it("disambiguates duplicate heading slugs within one document", () => {
+    const html = renderMarkdownToHtml("## Section\n\n## Section\n\n## Section\n");
+    expect(html).toContain('id="section"');
+    expect(html).toContain('id="section-1"');
+    expect(html).toContain('id="section-2"');
+  });
+
+  it("resets slug counters between independent render() calls", () => {
+    const a = renderMarkdownToHtml("## Section\n");
+    const b = renderMarkdownToHtml("## Section\n");
+    expect(a).toContain('id="section"');
+    expect(b).toContain('id="section"');
+    expect(b).not.toContain('id="section-1"');
+  });
+
+  it("anchor links to headings survive sanitization", () => {
+    const html = renderMarkdownToHtml(
+      "- [Hello](#hello)\n\n# Hello\n",
+    );
+    expect(html).toContain('href="#hello"');
+    expect(html).toContain('id="hello"');
   });
 });

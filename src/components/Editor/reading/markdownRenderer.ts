@@ -147,6 +147,48 @@ md.renderer.rules["wiki_link"] = (tokens, idx) => {
   return `<a class="${cls}" href="#" data-wiki-target="${escapedTarget}" data-wiki-resolved="${resolved ? "true" : "false"}">${label}</a>`;
 };
 
+// ── Heading slug IDs ─────────────────────────────────────────────────────────
+//
+// markdown-it doesn't set `id` on headings by default. Without ids, every
+// `[text](#anchor)` link in a doc is a dead end. Hook into heading_open to
+// emit an id derived from the plain-text contents of the heading (GitHub-
+// style slug: lowercased, non-alphanumerics → hyphens, consecutive hyphens
+// collapsed). Duplicate slugs within one render pass get a `-N` suffix to
+// keep ids unique.
+md.renderer.rules["heading_open"] = (tokens, idx, options, _env, self) => {
+  const inlineTok = tokens[idx + 1];
+  const text = inlineTok && inlineTok.children
+    ? inlineTok.children
+        .filter((t) => t.type === "text" || t.type === "code_inline")
+        .map((t) => t.content)
+        .join("")
+    : "";
+  const slug = uniqueSlug(text, _env as { _slugCounts?: Map<string, number> });
+  if (slug) tokens[idx]!.attrSet("id", slug);
+  return self.renderToken(tokens, idx, options);
+};
+
+export function slugifyHeading(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function uniqueSlug(
+  text: string,
+  env: { _slugCounts?: Map<string, number> },
+): string {
+  const base = slugifyHeading(text);
+  if (!base) return "";
+  if (!env._slugCounts) env._slugCounts = new Map();
+  const seen = env._slugCounts.get(base) ?? 0;
+  env._slugCounts.set(base, seen + 1);
+  return seen === 0 ? base : `${base}-${seen}`;
+}
+
 // Task list items — `- [ ]` / `- [x]` become disabled checkboxes. markdown-it
 // emits them as literal text inside <li>, so a regex post-process is both
 // simpler and more reliable than an inline rule override (which doesn't fire
@@ -177,9 +219,11 @@ export function renderMarkdownToHtml(markdown: string): string {
   // Strip YAML frontmatter — readers don't want to see --- blocks at the top
   // of every note. Same rule the editor frontmatter plugin applies.
   const stripped = stripFrontmatter(markdown);
-  const rawHtml = renderTaskListCheckboxes(md.render(stripped));
+  // Fresh env per render — the heading_open rule uses `env._slugCounts` to
+  // disambiguate repeated heading texts within a single document.
+  const rawHtml = renderTaskListCheckboxes(md.render(stripped, {}));
   return DOMPurify.sanitize(rawHtml, {
-    ADD_ATTR: ["data-wiki-target", "data-wiki-resolved", "data-embed-target"],
+    ADD_ATTR: ["data-wiki-target", "data-wiki-resolved", "data-embed-target", "id"],
     ALLOW_DATA_ATTR: true,
     ALLOWED_URI_REGEXP,
   });

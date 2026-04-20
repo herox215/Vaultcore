@@ -7,6 +7,7 @@
 
 import { get } from "svelte/store";
 import { vaultStore } from "../store/vaultStore";
+import { tabStore } from "../store/tabStore";
 import { openFileAsTab } from "./openFileAsTab";
 
 /** Vault-relative path of the bundled docs page. */
@@ -39,9 +40,22 @@ export function docsTabLabel(_absPath: string): string {
  * Open (or focus) the current vault's docs page. Singleton by path —
  * `openFileAsTab` routes to `tabStore.openFileTab` which dedupes on filePath.
  * No-op when no vault is open.
+ *
+ * The docs page defaults to reading mode. The table of contents at the top
+ * uses `[text](#anchor)` links that only render as clickable anchors in the
+ * HTML reader — showing the raw markdown source on first open would bury the
+ * navigation the user came for. Users can still toggle to edit mode via the
+ * breadcrumbs button or `Cmd/Ctrl+E`, and that choice sticks for the tab's
+ * lifetime because we only set `viewMode` when it's unset (fresh tab).
  */
 export async function openDocsPage(): Promise<void> {
   const vaultPath = get(vaultStore).currentPath;
   if (!vaultPath) return;
-  await openFileAsTab(docsPagePath(vaultPath));
+  const absPath = docsPagePath(vaultPath);
+  const tabId = await openFileAsTab(absPath);
+  if (!tabId) return;
+  const tab = get(tabStore).tabs.find((t) => t.id === tabId);
+  if (tab && tab.viewMode === undefined) {
+    tabStore.setViewMode(tabId, "read");
+  }
 }
