@@ -188,6 +188,18 @@ The language is a safe, allowlisted subset of JavaScript. **No `eval`, no access
 - `property.*` — frontmatter keys (dynamic)
 - `content` — raw Markdown of the note
 
+#### Folder members
+
+- `name` — folder name (last path segment)
+- `path` — vault-relative folder path
+- `notes` — `Collection<Note>` of every note under this folder (recursive, includes descendants)
+
+Example: all notes in the `Done` folder, regardless of depth:
+
+```
+{{vault.folders.where(f => f.name == "Done").first().notes.count()}}
+```
+
 #### Collection methods
 
 Lazy where possible — `first()` and `any()` short-circuit without materializing the whole collection.
