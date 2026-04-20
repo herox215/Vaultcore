@@ -301,16 +301,64 @@ pub fn create_file_impl(state: &VaultState, parent: String, name: String) -> Res
     record_write(state, final_path.clone());
     std::fs::write(&final_path, "").map_err(VaultError::Io)?;
 
+    // #307: write_ignore (D-12) suppresses the watcher's natural create event,
+    // which would normally populate FileIndex. Insert directly so `resolve_link`
+    // (and anything else that reads FileIndex) finds the new file immediately,
+    // instead of falling back to the "create-at-root" path on the next click.
+    if let Ok(vault_root) = get_vault_root(state) {
+        sync_file_index_create(state, &final_path, &vault_root);
+    }
+
     Ok(final_path.to_string_lossy().into_owned())
+}
+
+/// Insert `canonical` into FileIndex with a minimal FileMeta. Used by
+/// `create_file_impl` to compensate for the write_ignore-suppressed watcher
+/// event. Hash stays empty until the file is saved with content; the title
+/// defaults to the filename stem so wiki-link resolution works right away.
+fn sync_file_index_create(state: &VaultState, canonical: &Path, vault_root: &Path) {
+    let Ok(mut fi) = state.file_index.write() else { return };
+    let rel = match canonical.strip_prefix(vault_root) {
+        Ok(p) => p.to_string_lossy().replace('\\', "/"),
+        Err(_) => return,
+    };
+    let title = canonical
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    fi.insert(
+        canonical.to_path_buf(),
+        FileMeta {
+            relative_path: rel,
+            hash: String::new(),
+            title,
+            aliases: Vec::new(),
+        },
+    );
 }
 
 #[tauri::command]
 pub async fn create_file(
+    app: tauri::AppHandle,
     state: tauri::State<'_, VaultState>,
     parent: String,
     name: String,
 ) -> Result<String, VaultError> {
-    create_file_impl(&state, parent, name)
+    use tauri::Emitter;
+    let final_path = create_file_impl(&state, parent, name)?;
+    // #307: the watcher suppresses this create via write_ignore (D-12), so
+    // emit a synthetic file_changed event — same pattern as delete_file (#102).
+    // Without this, frontend listeners (vaultStore.fileList, template live
+    // preview) never see self-initiated file creates until app restart.
+    let _ = app.emit(
+        crate::watcher::FILE_CHANGED_EVENT,
+        crate::watcher::FileChangePayload {
+            path: final_path.clone(),
+            kind: "create".to_string(),
+            new_path: None,
+        },
+    );
+    Ok(final_path)
 }
 
 // ─── create_folder ───────────────────────────────────────────────────────────
@@ -454,10 +502,12 @@ fn sync_file_index_rename(
 
 #[tauri::command]
 pub async fn rename_file(
+    app: tauri::AppHandle,
     state: tauri::State<'_, VaultState>,
     old_path: String,
     new_name: String,
 ) -> Result<RenameResult, VaultError> {
+    use tauri::Emitter;
     // Capture the canonical pre-rename path so we can dispatch an embed
     // delete for the OLD path after the rename succeeds. write_ignore
     // suppresses the watcher's natural Remove event for self-mutations,
@@ -466,8 +516,23 @@ pub async fn rename_file(
     #[cfg(feature = "embeddings")]
     let old_canonical = std::fs::canonicalize(&old_path).ok();
     let old_canonical_for_tantivy = std::fs::canonicalize(&old_path).ok();
+    let old_canonical_for_event = old_canonical_for_tantivy
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| old_path.clone());
 
     let result = rename_file_impl(&state, old_path, new_name)?;
+
+    // #307: write_ignore (D-12) suppresses the watcher's natural rename
+    // event, so emit a synthetic one — same pattern as delete_file (#102).
+    let _ = app.emit(
+        crate::watcher::FILE_CHANGED_EVENT,
+        crate::watcher::FileChangePayload {
+            path: old_canonical_for_event,
+            kind: "rename".to_string(),
+            new_path: Some(result.new_path.clone()),
+        },
+    );
 
     // #277: the watcher would normally dispatch DeleteFile(old) + AddFile(new)
     // on a rename event, but write_ignore suppresses that for self-mutations.
@@ -602,18 +667,35 @@ pub fn move_file_impl(state: &VaultState, from: String, to_folder: String) -> Re
 
 #[tauri::command]
 pub async fn move_file(
+    app: tauri::AppHandle,
     state: tauri::State<'_, VaultState>,
     from: String,
     to_folder: String,
 ) -> Result<String, VaultError> {
+    use tauri::Emitter;
     // #201 PR-A: same rationale as rename_file — the OLD path's vectors
     // need an explicit tombstone because write_ignore hides the
     // watcher's Remove event.
     #[cfg(feature = "embeddings")]
     let old_canonical = std::fs::canonicalize(&from).ok();
     let old_canonical_for_tantivy = std::fs::canonicalize(&from).ok();
+    let old_canonical_for_event = old_canonical_for_tantivy
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| from.clone());
 
     let result = move_file_impl(&state, from, to_folder)?;
+
+    // #307: write_ignore (D-12) suppresses the watcher's natural rename
+    // event. A move is reported as a rename with a new parent path.
+    let _ = app.emit(
+        crate::watcher::FILE_CHANGED_EVENT,
+        crate::watcher::FileChangePayload {
+            path: old_canonical_for_event,
+            kind: "rename".to_string(),
+            new_path: Some(result.clone()),
+        },
+    );
 
     // #277: same Tantivy parity as rename_file.
     if let Some(old) = old_canonical_for_tantivy {
