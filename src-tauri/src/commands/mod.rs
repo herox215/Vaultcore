@@ -8,7 +8,3 @@ pub mod bookmarks;
 pub mod snippets;
 pub mod templates;
 pub mod export;
-#[cfg(feature = "embeddings")]
-pub mod embedding_graph;
-#[cfg(not(feature = "embeddings"))]
-pub mod embedding_graph_stub;

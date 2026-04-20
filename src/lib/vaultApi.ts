@@ -54,6 +54,7 @@ export interface Folder {
   readonly __id: string;
   readonly name: string;
   readonly path: string;
+  readonly notes: Collection<Note>;
 }
 
 export interface Tag {
@@ -112,7 +113,7 @@ export function createVaultRoot(stores: VaultStores): VaultRoot {
       enumerable: true,
       get: () => {
         const paths = stores.readVault().fileList;
-        const folders = collectFolders(paths);
+        const folders = collectFolders(paths, buildNote);
         return new Collection<Folder>(folders);
       },
     },
@@ -210,7 +211,10 @@ function makeNote(
   return note;
 }
 
-function collectFolders(paths: string[]): Folder[] {
+function collectFolders(
+  paths: readonly string[],
+  buildNote: (relPath: string) => Note,
+): Folder[] {
   const seen = new Set<string>();
   const out: Folder[] = [];
   for (const p of paths) {
@@ -219,15 +223,36 @@ function collectFolders(paths: string[]): Folder[] {
       const folderPath = parts.slice(0, i).join("/");
       if (seen.has(folderPath)) continue;
       seen.add(folderPath);
-      out.push({
-        __typeName: "Folder",
-        __id: folderPath,
-        name: parts[i - 1]!,
-        path: folderPath,
-      });
+      out.push(makeFolder(folderPath, parts[i - 1]!, paths, buildNote));
     }
   }
   return out;
+}
+
+// `notes` is a getter so the filter+map runs only when accessed — the common
+// `{{vault.folders.select(f => f.name)}}` path never touches it. The captured
+// `allPaths` is the snapshot taken at `vault.folders` access time, matching
+// the folder list itself (one consistent view per expression evaluation).
+function makeFolder(
+  folderPath: string,
+  name: string,
+  allPaths: readonly string[],
+  buildNote: (relPath: string) => Note,
+): Folder {
+  const prefix = folderPath + "/";
+  return Object.defineProperties({} as Folder, {
+    __typeName: { value: "Folder", enumerable: true },
+    __id: { value: folderPath, enumerable: true },
+    name: { value: name, enumerable: true },
+    path: { value: folderPath, enumerable: true },
+    notes: {
+      enumerable: true,
+      get: () =>
+        new Collection<Note>(
+          allPaths.filter((p) => p.startsWith(prefix)).map(buildNote),
+        ),
+    },
+  });
 }
 
 function makeTag(t: TagSnapshot): Tag {

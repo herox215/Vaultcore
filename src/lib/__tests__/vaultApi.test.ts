@@ -123,6 +123,65 @@ describe("createVaultRoot — tags, bookmarks, folders, stats", () => {
     expect(names).toEqual(["sub"]);
   });
 
+  it("folder.notes returns direct children", () => {
+    const v = createVaultRoot(mkStores());
+    const sub = v.folders.where((f) => f.path === "sub").first()!;
+    const paths = sub.notes.select((n) => n.path).toArray();
+    expect(paths).toEqual(["sub/b.md", "sub/c.md"]);
+  });
+
+  it("folder.notes includes nested descendants", () => {
+    const v = createVaultRoot({
+      ...mkStores(),
+      readVault: () => ({
+        name: "V",
+        path: "/v",
+        fileList: ["Done/a.md", "Done/sub/b.md", "Done/sub/deep/c.md", "Other/x.md"],
+      }),
+    });
+    const done = v.folders.where((f) => f.path === "Done").first()!;
+    const paths = done.notes.select((n) => n.path).toArray();
+    expect(paths).toEqual(["Done/a.md", "Done/sub/b.md", "Done/sub/deep/c.md"]);
+  });
+
+  it("folder.notes is empty for a folder with no descendants", () => {
+    // Nested-only fixture: top-level "empty" appears as a folder only because
+    // it's a prefix of some path — so construct one that is truly leaf-less
+    // by giving it only subfolder entries.
+    const v = createVaultRoot({
+      ...mkStores(),
+      readVault: () => ({
+        name: "V",
+        path: "/v",
+        fileList: ["Outer/Inner/a.md"],
+      }),
+    });
+    // Sanity: Inner has a note, Outer has it transitively.
+    const inner = v.folders.where((f) => f.path === "Outer/Inner").first()!;
+    expect(inner.notes.count()).toBe(1);
+    const outer = v.folders.where((f) => f.path === "Outer").first()!;
+    expect(outer.notes.count()).toBe(1);
+    // A sibling prefix that isn't actually present yields nothing — and the
+    // folders collection itself doesn't surface it, so this also checks that
+    // `folder.notes` never leaks across sibling boundaries (e.g. "Out" must
+    // not match "Outer/...").
+    expect(v.folders.any((f) => f.path === "Out")).toBe(false);
+  });
+
+  it("folder.notes does not leak across sibling folders with shared prefix", () => {
+    const v = createVaultRoot({
+      ...mkStores(),
+      readVault: () => ({
+        name: "V",
+        path: "/v",
+        fileList: ["foo/a.md", "foobar/b.md"],
+      }),
+    });
+    const foo = v.folders.where((f) => f.path === "foo").first()!;
+    const paths = foo.notes.select((n) => n.path).toArray();
+    expect(paths).toEqual(["foo/a.md"]);
+  });
+
   it("stats exposes noteCount and tagCount", () => {
     const v = createVaultRoot(mkStores());
     expect(v.stats.noteCount).toBe(3);

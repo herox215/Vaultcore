@@ -91,13 +91,6 @@ pub struct VaultState {
     /// see the same live `VectorIndex` the embed worker writes to.
     #[cfg(feature = "embeddings")]
     pub query_handles: Arc<Mutex<Option<Arc<embeddings::QueryHandles>>>>,
-    /// #287 — cached threshold-independent embedding graph. Rebuilt when
-    /// the index fingerprint changes; otherwise reused across requests
-    /// so threshold-slider drags don't rerun the O(chunks × raw_k) HNSW
-    /// work on each tick.
-    #[cfg(feature = "embeddings")]
-    pub embedding_graph_cache:
-        Arc<Mutex<Option<crate::commands::embedding_graph::EmbeddingGraphCache>>>,
 }
 
 impl Default for VaultState {
@@ -115,8 +108,6 @@ impl Default for VaultState {
             reindex_handle: Arc::new(Mutex::new(None)),
             #[cfg(feature = "embeddings")]
             query_handles: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "embeddings")]
-            embedding_graph_cache: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -180,10 +171,6 @@ pub fn run() {
             commands::links::get_resolved_attachments,
             commands::links::get_local_graph,
             commands::links::get_link_graph,
-            #[cfg(feature = "embeddings")]
-            commands::embedding_graph::get_embedding_graph,
-            #[cfg(not(feature = "embeddings"))]
-            commands::embedding_graph_stub::get_embedding_graph,
             commands::tags::list_tags,
             commands::tags::get_tag_occurrences,
             commands::bookmarks::load_bookmarks,
