@@ -121,16 +121,36 @@ fn ensure_onnxruntime(
     // Tauri's bundled host is linker-signed ad-hoc with no Team — the TeamID
     // mismatch makes AMFI refuse the dlopen at runtime, so embeddings fail
     // silently in installed builds. Strip the upstream signature back to
-    // ad-hoc so it matches the host's identity. Idempotent: re-running on an
-    // already-ad-hoc dylib is a no-op rewrite. Non-fatal on failure (e.g.
-    // cross-compiling from Linux where `codesign` doesn't exist) — the build
-    // continues and the runtime falls back to the existing signature.
-    if platform.starts_with("macos-") {
+    // ad-hoc so it matches the host's identity. Skipped when the dylib is
+    // already ad-hoc — `codesign --force` rewrites the file unconditionally
+    // and bumps mtime, which triggers the Tauri dev watcher into an endless
+    // rebuild loop (#281). Non-fatal on failure (e.g. cross-compiling from
+    // Linux where `codesign` doesn't exist) — the build continues and the
+    // runtime falls back to the existing signature.
+    if platform.starts_with("macos-") && !is_adhoc_signed(&dest) {
         if let Err(e) = adhoc_resign(&dest) {
             println!("cargo:warning=macos adhoc re-sign skipped: {e}");
         }
     }
     Ok(())
+}
+
+/// `codesign -dv` prints signing metadata to stderr. Ad-hoc signed binaries
+/// emit the literal line `Signature=adhoc`; every other status (unsigned,
+/// TeamID-signed, or codesign missing entirely) is reported as "not adhoc"
+/// so the caller falls through to the re-sign step.
+fn is_adhoc_signed(path: &Path) -> bool {
+    let Ok(out) = std::process::Command::new("codesign")
+        .args(["-dv"])
+        .arg(path)
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&out.stderr).contains("Signature=adhoc")
 }
 
 fn adhoc_resign(path: &Path) -> Result<(), AssetError> {
