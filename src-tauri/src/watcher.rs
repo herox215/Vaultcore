@@ -261,11 +261,30 @@ fn process_events(
 
     // Step 4: Emit individual file_changed events and dispatch index commands
     for ev in filtered {
-        // Step 5: Dispatch link-graph commands (LINK-08)
+        // Step 5: Dispatch link-graph + tag-index commands (LINK-08, TAG-01/02).
+        //
+        // #246: read the .md body exactly once per event and hand it to both
+        // dispatchers. Previously each dispatcher did its own
+        // std::fs::read_to_string, doubling syscalls + transient allocations
+        // on the bulk-save hot path. Both dispatchers are pure functions of
+        // (rel_path, content), so sharing the read is also strictly more
+        // consistent (no risk of the file changing between the two reads).
         if let Some(tx) = index_tx {
-            dispatch_link_graph_cmd(tx, vault_path, &ev);
-            // Step 5b: Dispatch tag-index commands (TAG-01/02)
-            dispatch_tag_index_cmd(tx, vault_path, &ev);
+            let (primary_content, renamed_content) = read_event_contents(vault_path, &ev);
+            dispatch_link_graph_cmd(
+                tx,
+                vault_path,
+                &ev,
+                primary_content.as_deref(),
+                renamed_content.as_deref(),
+            );
+            dispatch_tag_index_cmd(
+                tx,
+                vault_path,
+                &ev,
+                primary_content.as_deref(),
+                renamed_content.as_deref(),
+            );
         }
 
         // Step 5c (#201 PR-A): Tombstone vectors for externally-deleted
@@ -337,16 +356,76 @@ pub(crate) fn try_send_or_warn(tx: &tokio::sync::mpsc::Sender<IndexCmd>, cmd: In
     }
 }
 
+/// Read the event's primary path (and renamed path, for rename events) from
+/// disk exactly once so both downstream dispatchers can share the same body.
+///
+/// #246 — previously each dispatcher did its own `std::fs::read_to_string`,
+/// so a single `.md` modify event hit disk twice and allocated two Strings.
+/// Now `process_events` reads once and hands the content to both dispatchers.
+///
+/// Returns `(primary_content, renamed_content)`:
+/// - `primary_content` is `Some` for Create / non-rename Modify on an in-vault
+///   `.md` path whose bytes could be read. `None` otherwise (Remove, rename,
+///   non-.md, out-of-vault, or read failure).
+/// - `renamed_content` is `Some` only for rename events (`ModifyKind::Name`)
+///   where `paths[1]` is an in-vault `.md` file whose bytes could be read.
+fn read_event_contents(
+    vault_path: &Path,
+    ev: &DebouncedEvent,
+) -> (Option<String>, Option<String>) {
+    let primary_path = match ev.paths.first() {
+        Some(p) => p,
+        None => return (None, None),
+    };
+
+    let is_md = |p: &Path| {
+        p.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    };
+    let in_vault = |p: &Path| p.starts_with(vault_path);
+
+    match &ev.kind {
+        EventKind::Modify(ModifyKind::Name(_)) => {
+            // Rename: only the NEW path (paths[1]) carries fresh content.
+            let renamed = ev.paths.get(1).and_then(|new_path| {
+                if is_md(new_path) && in_vault(new_path) {
+                    std::fs::read_to_string(new_path).ok()
+                } else {
+                    None
+                }
+            });
+            (None, renamed)
+        }
+        EventKind::Create(_) | EventKind::Modify(_) => {
+            let primary = if is_md(primary_path) && in_vault(primary_path) {
+                std::fs::read_to_string(primary_path).ok()
+            } else {
+                None
+            };
+            (primary, None)
+        }
+        // Remove / Access / Other — neither dispatcher needs on-disk content.
+        _ => (None, None),
+    }
+}
+
 /// Dispatch `IndexCmd::UpdateLinks` or `IndexCmd::RemoveLinks` based on the
 /// event kind.  Only `.md` files are dispatched — non-Markdown file changes
 /// don't affect the link graph.
 ///
+/// #246: `primary_content` / `renamed_content` are pre-read by
+/// `read_event_contents` so this dispatcher never touches disk. Both
+/// dispatchers share the same bytes, halving syscalls on the watcher hot
+/// path during bulk saves.
+///
 /// Uses `try_send_or_warn` so a full channel drops the command rather than
 /// blocking the watcher callback thread, but logs the drop (#139).
-fn dispatch_link_graph_cmd(
+pub(crate) fn dispatch_link_graph_cmd(
     tx: &tokio::sync::mpsc::Sender<IndexCmd>,
     vault_path: &Path,
     ev: &DebouncedEvent,
+    primary_content: Option<&str>,
+    renamed_content: Option<&str>,
 ) {
     let primary_path = match ev.paths.first() {
         Some(p) => p,
@@ -378,18 +457,21 @@ fn dispatch_link_graph_cmd(
                             Ok(r) => r.to_string_lossy().replace('\\', "/"),
                             Err(_) => return,
                         };
-                        if let Ok(content) = std::fs::read_to_string(new_path) {
+                        if let Some(content) = renamed_content {
                             try_send_or_warn(tx, IndexCmd::UpdateLinks {
                                 rel_path: new_rel,
-                                content,
+                                content: content.to_owned(),
                             });
                         }
                     }
                 }
             } else {
-                // create or modify — read content and dispatch UpdateLinks
-                if let Ok(content) = std::fs::read_to_string(primary_path) {
-                    try_send_or_warn(tx, IndexCmd::UpdateLinks { rel_path, content });
+                // create or modify — use the pre-read content
+                if let Some(content) = primary_content {
+                    try_send_or_warn(tx, IndexCmd::UpdateLinks {
+                        rel_path,
+                        content: content.to_owned(),
+                    });
                 }
             }
         }
@@ -404,12 +486,19 @@ fn dispatch_link_graph_cmd(
 /// event kind. Only `.md` files are dispatched — non-Markdown file changes
 /// don't affect the tag index.
 ///
+/// #246: `primary_content` / `renamed_content` are pre-read by
+/// `read_event_contents` so this dispatcher never touches disk. Shares the
+/// same bytes with `dispatch_link_graph_cmd`, halving the watcher's syscall
+/// and allocation cost per event.
+///
 /// Uses `try_send_or_warn` so a full channel drops the command rather than
 /// blocking the watcher callback thread, but logs the drop (#139).
 pub(crate) fn dispatch_tag_index_cmd(
     tx: &tokio::sync::mpsc::Sender<IndexCmd>,
     vault_path: &Path,
     ev: &DebouncedEvent,
+    primary_content: Option<&str>,
+    renamed_content: Option<&str>,
 ) {
     let primary_path = match ev.paths.first() {
         Some(p) => p,
@@ -450,18 +539,21 @@ pub(crate) fn dispatch_tag_index_cmd(
                             Ok(r) => r.to_string_lossy().replace('\\', "/"),
                             Err(_) => return,
                         };
-                        if let Ok(content) = std::fs::read_to_string(new_path) {
+                        if let Some(content) = renamed_content {
                             try_send_or_warn(tx, IndexCmd::UpdateTags {
                                 rel_path: new_rel,
-                                content,
+                                content: content.to_owned(),
                             });
                         }
                     }
                 }
             } else {
-                // create or modify — read content and dispatch UpdateTags
-                if let Ok(content) = std::fs::read_to_string(primary_path) {
-                    try_send_or_warn(tx, IndexCmd::UpdateTags { rel_path, content });
+                // create or modify — use the pre-read content
+                if let Some(content) = primary_content {
+                    try_send_or_warn(tx, IndexCmd::UpdateTags {
+                        rel_path,
+                        content: content.to_owned(),
+                    });
                 }
             }
         }
