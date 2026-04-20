@@ -256,37 +256,64 @@ impl EmbeddingService {
         }
 
         // Mean-pool across seq axis, masked by attention_mask, then L2.
-        let mut out = Vec::with_capacity(batch);
-        for bi in 0..batch {
-            let mut pooled = Array1::<f32>::zeros(EMBED_DIM);
-            let mut count: f32 = 0.0;
-            for si in 0..seq_len {
-                let m = attn_mask[[bi, si]];
-                if m == 0 {
-                    continue;
-                }
-                count += 1.0;
-                let base = (bi * seq_len + si) * EMBED_DIM;
-                for hi in 0..EMBED_DIM {
-                    pooled[hi] += data[base + hi];
-                }
-            }
-            if count > 0.0 {
-                pooled.mapv_inplace(|x| x / count);
-            }
-            let norm = pooled
-                .view()
-                .map(|x| x * x)
-                .sum_axis(Axis(0))
-                .into_scalar()
-                .sqrt();
-            if norm > f32::EPSILON {
-                pooled.mapv_inplace(|x| x / norm);
-            }
-            out.push(pooled.to_vec());
-        }
-        Ok(out)
+        Ok(mean_pool_and_normalize(data, attn_mask.view(), batch, seq_len))
     }
+}
+
+/// Masked mean-pool across the `seq` axis, then L2-normalize per row.
+///
+/// Input: `data` is the flat `[batch, seq, EMBED_DIM]` ORT output slice;
+/// `attn_mask` is `[batch, seq]` with `1` for real tokens and `0` for pad.
+/// Output: one `EMBED_DIM`-long L2-normalized vector per batch row.
+///
+/// Extracted from `embed_batch` so it can be (a) unit-tested without the
+/// bundled ONNX model and (b) optimized with ndarray row-wise ops (#256).
+/// The hot inner loop replaces a scalar `for hi in 0..EMBED_DIM` add with
+/// an ndarray `+=` over a contiguous row view — per-hidden-dim summation
+/// order is preserved so outputs are bit-identical to the old scalar path.
+fn mean_pool_and_normalize(
+    data: &[f32],
+    attn_mask: ndarray::ArrayView2<'_, i64>,
+    batch: usize,
+    seq_len: usize,
+) -> Vec<Vec<f32>> {
+    // View the flat ORT output as [batch, seq, hidden]. Built once,
+    // outside the hot loop, so per-token row slicing is O(1).
+    let token_view = ndarray::ArrayView3::from_shape((batch, seq_len, EMBED_DIM), data)
+        .expect("mean_pool_and_normalize: data length must equal batch*seq*EMBED_DIM");
+
+    let mut out = Vec::with_capacity(batch);
+    for bi in 0..batch {
+        let mut pooled = Array1::<f32>::zeros(EMBED_DIM);
+        let mut count: f32 = 0.0;
+        for si in 0..seq_len {
+            if attn_mask[[bi, si]] == 0 {
+                continue;
+            }
+            count += 1.0;
+            // Row-wise add: `pooled += &token_row` walks EMBED_DIM
+            // contiguous f32s in lock-step. Per-hidden-dim accumulation
+            // order (token order) is identical to the old scalar loop,
+            // so the result is bit-identical, while the inner walk
+            // vectorizes under the Zip/SIMD paths ndarray enables.
+            let token_row = token_view.slice(ndarray::s![bi, si, ..]);
+            pooled += &token_row;
+        }
+        if count > 0.0 {
+            pooled.mapv_inplace(|x| x / count);
+        }
+        let norm = pooled
+            .view()
+            .map(|x| x * x)
+            .sum_axis(Axis(0))
+            .into_scalar()
+            .sqrt();
+        if norm > f32::EPSILON {
+            pooled.mapv_inplace(|x| x / norm);
+        }
+        out.push(pooled.to_vec());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -349,6 +376,109 @@ mod tests {
             close > far + 0.05,
             "expected close > far + 0.05, got close={close}, far={far}"
         );
+    }
+
+    /// #256 — lock the numerical behavior of `mean_pool_and_normalize` on a
+    /// hand-constructed input so the ndarray refactor cannot silently drift.
+    ///
+    /// Runs without the bundled ONNX model: the pooling helper operates on a
+    /// plain `&[f32]` + attention mask so we can feed it a tiny deterministic
+    /// tensor. Covers all three behaviors that downstream cosine similarity,
+    /// graph clustering, and search ranking rely on:
+    ///   1. masked-token exclusion (pad tokens contribute nothing),
+    ///   2. mean division uses the *unmasked* token count,
+    ///   3. the returned row has L2 norm 1.0 (when non-zero).
+    #[test]
+    fn mean_pool_and_normalize_matches_reference() {
+        // Shape: batch=2, seq=3, hidden=EMBED_DIM=384.
+        let batch = 2;
+        let seq_len = 3;
+        let mut data = vec![0.0f32; batch * seq_len * EMBED_DIM];
+
+        // Batch 0: three real tokens.
+        //   token 0 = all 1.0 → contributes 1.0 to every dim
+        //   token 1 = all 2.0
+        //   token 2 = all 3.0
+        // Expected pooled (before norm) = (1+2+3)/3 = 2.0 across all dims.
+        // After L2: every entry = 2 / (2 * sqrt(384)) = 1/sqrt(384).
+        for hi in 0..EMBED_DIM {
+            data[(0 * seq_len + 0) * EMBED_DIM + hi] = 1.0;
+            data[(0 * seq_len + 1) * EMBED_DIM + hi] = 2.0;
+            data[(0 * seq_len + 2) * EMBED_DIM + hi] = 3.0;
+        }
+
+        // Batch 1: two real tokens + one pad (mask=0 must be ignored).
+        //   token 0 = all 4.0, token 1 = all 6.0, token 2 = 100.0 (PAD).
+        // Expected pooled (before norm) = (4+6)/2 = 5.0 across all dims; the
+        // 100.0 row must NOT appear — this catches regressions where someone
+        // accidentally averages with `batch.mean_axis(Axis(1))` without the
+        // mask, which would mix in the pad token's 100.0.
+        for hi in 0..EMBED_DIM {
+            data[(1 * seq_len + 0) * EMBED_DIM + hi] = 4.0;
+            data[(1 * seq_len + 1) * EMBED_DIM + hi] = 6.0;
+            data[(1 * seq_len + 2) * EMBED_DIM + hi] = 100.0;
+        }
+
+        let mut attn_mask = Array2::<i64>::zeros((batch, seq_len));
+        attn_mask[[0, 0]] = 1;
+        attn_mask[[0, 1]] = 1;
+        attn_mask[[0, 2]] = 1;
+        attn_mask[[1, 0]] = 1;
+        attn_mask[[1, 1]] = 1;
+        // attn_mask[[1, 2]] stays 0 — padding.
+
+        let out = mean_pool_and_normalize(&data, attn_mask.view(), batch, seq_len);
+
+        assert_eq!(out.len(), batch);
+        assert_eq!(out[0].len(), EMBED_DIM);
+        assert_eq!(out[1].len(), EMBED_DIM);
+
+        let expected_b0 = 1.0 / (EMBED_DIM as f32).sqrt();
+        for (i, &v) in out[0].iter().enumerate() {
+            assert!(
+                (v - expected_b0).abs() < 1e-6,
+                "batch 0 dim {i}: got {v}, expected {expected_b0}"
+            );
+        }
+        // Same normalized value — all dims equal means L2 collapses to the
+        // same 1/sqrt(EMBED_DIM) regardless of the pre-norm magnitude.
+        let expected_b1 = 1.0 / (EMBED_DIM as f32).sqrt();
+        for (i, &v) in out[1].iter().enumerate() {
+            assert!(
+                (v - expected_b1).abs() < 1e-6,
+                "batch 1 dim {i}: got {v}, expected {expected_b1} (pad-token mask leak?)"
+            );
+        }
+
+        // Belt-and-braces: the returned rows must be unit-norm.
+        for (bi, row) in out.iter().enumerate() {
+            let norm: f32 = row.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-5,
+                "batch {bi} L2 norm: {norm}"
+            );
+        }
+    }
+
+    /// #256 — cover the all-masked edge case. If every token in a row is
+    /// padding, count is zero, norm is zero, and the output must be all
+    /// zeros (not NaN from a division by zero, not the raw pooled sum).
+    #[test]
+    fn mean_pool_and_normalize_all_masked_row_is_zero() {
+        let batch = 1;
+        let seq_len = 2;
+        let mut data = vec![0.0f32; batch * seq_len * EMBED_DIM];
+        for hi in 0..EMBED_DIM {
+            data[hi] = 7.0;
+            data[EMBED_DIM + hi] = 9.0;
+        }
+        let attn_mask = Array2::<i64>::zeros((batch, seq_len));
+
+        let out = mean_pool_and_normalize(&data, attn_mask.view(), batch, seq_len);
+        assert_eq!(out.len(), 1);
+        for &v in &out[0] {
+            assert_eq!(v, 0.0, "all-masked row must yield zero vector, got {v}");
+        }
     }
 
     #[test]
