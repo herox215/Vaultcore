@@ -11,6 +11,7 @@ import type {
   CompletionContext,
   CompletionResult,
 } from "@codemirror/autocomplete";
+import type { EditorView } from "@codemirror/view";
 import { analyzeCompletion } from "../../lib/templateCompletion";
 import { parseFrontmatter } from "../../lib/frontmatterIO";
 
@@ -56,7 +57,19 @@ export function templateCompletionSource(
     const opt: Completion = {
       label: item.label,
       detail: item.detail,
-      apply: item.insertText,
+      // #299: function-form apply guarantees the caret lands at the end of
+      // the inserted text regardless of how CodeMirror resolves `to` under
+      // a chained-completion timing (e.g. picking `vault`, then `.`, then
+      // picking a member). The string-form fallback used to leave the caret
+      // anchored at `result.from` when `to` drifted across transactions.
+      apply: (view: EditorView, _completion, from: number, to: number) => {
+        const insert = item.insertText;
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
+          userEvent: "input.complete",
+        });
+      },
       type: COMPLETION_TYPE[item.kind] ?? "text",
     };
     if (item.doc !== undefined) opt.info = item.doc;
@@ -65,6 +78,7 @@ export function templateCompletionSource(
 
   return {
     from: exprStart + analysis.from,
+    to: ctx.pos,
     options,
     filter: true,
   };

@@ -247,6 +247,15 @@
         if (!view) return "";
         return view.state.doc.toString();
       };
+      const getActiveSelectionHead = async (): Promise<number> => {
+        const { EditorView } = await import("@codemirror/view");
+        const els = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
+        const active = els.find((el) => el.offsetParent !== null);
+        if (!active) return -1;
+        const view = EditorView.findFromDOM(active);
+        if (!view) return -1;
+        return view.state.selection.main.head;
+      };
       // #204: subscribe once to the reindex-done signal so E2E specs can
       // wait for embeddings to be queryable before running a semantic-only
       // search. We keep a single listener for the lifetime of the window
@@ -277,6 +286,7 @@
         finishProgress,
         typeInActiveEditor,
         getActiveDocText,
+        getActiveSelectionHead,
         reindexAndWaitDone,
       };
     }
