@@ -218,6 +218,25 @@ Lazy where possible — `first()` and `any()` short-circuit without materializin
 | `all(pred)` | boolean | Every element matches |
 | `groupBy(n => key)` | any | Group by key |
 | `toArray()` | any[] | Materialize |
+| `join(sep)` | string | Materialize as a string with separator between elements |
+
+##### Multi-line output
+
+`.join("\n")` produces real line breaks in both the insert-template flow and the live editor preview. Combine with `.select(...)` to shape each item:
+
+```
+{{vault.folders.where(f => f.name == "Done").first().notes.select(n => "- [[" + n.title + "]]").join("\n")}}
+```
+
+Renders as:
+
+```
+- [[First note]]
+- [[Second note]]
+- [[Third note]]
+```
+
+For cleanest layout put the `{{ ... }}` on its own line — the multi-line block then occupies its own lines in the rendered output.
 
 #### Operators
 

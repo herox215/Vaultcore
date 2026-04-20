@@ -43,6 +43,10 @@ class RenderedValueWidget extends WidgetType {
   toDOM(): HTMLElement {
     const el = document.createElement("span");
     el.className = "vc-template-rendered";
+    // `pre-wrap` so multi-line output from `.join("\n")` actually breaks
+    // across lines inside the widget — default `normal` collapses \n to a
+    // single space, which would flatten bulleted / tabular renders.
+    el.style.whiteSpace = "pre-wrap";
     el.textContent = this.value;
     return el;
   }

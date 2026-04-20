@@ -106,6 +106,15 @@ export class Collection<T> {
     return true;
   }
 
+  // Materialise the pipeline into a single string, coercing each element via
+  // `String()` and inserting `separator` between them. Mirrors
+  // `Array.prototype.join`. Accepting arbitrary separators (including `"\n"`)
+  // is what makes multi-line expression output possible — downstream
+  // `renderValue()` passes strings through verbatim.
+  join(separator: string): string {
+    return this.materialize().map((v) => String(v)).join(separator);
+  }
+
   groupBy<K>(key: Selector<T, K>): { key: K; items: T[] }[] {
     const map = new Map<K, T[]>();
     for (const item of this.materialize()) {
