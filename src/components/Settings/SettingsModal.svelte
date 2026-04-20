@@ -12,7 +12,7 @@
   import { DEFAULT_DAILY_DATE_FORMAT } from "../../lib/dailyNotes";
   import { vaultStore } from "../../store/vaultStore";
   import { snippetsStore } from "../../store/snippetsStore";
-  import { reindexVault, cancelReindex } from "../../ipc/commands";
+  import { reindexVault, cancelReindex, setSemanticEnabled } from "../../ipc/commands";
   import { reindexStore, isActive as isReindexActive } from "../../store/reindexStore";
   import { formatShortcut } from "../../lib/shortcuts";
   import { commandRegistry, hotkeysEqual, type Command, type HotKey } from "../../lib/commands/registry";
@@ -235,14 +235,21 @@
     }
   }
 
-  /** #201: master toggle for semantic search. Enabling fires the
-   *  background reindex against the open vault; disabling cancels it.
-   *  Both calls are fire-and-forget — the statusbar listens for the
-   *  `embed://reindex_progress` event and surfaces progress. */
+  /** #201 / #244: master toggle for semantic search.
+   *  - Enabling: persist the flag + lazy-init the embedding stack on the
+   *    backend, then kick off the reindex against the open vault.
+   *  - Disabling: persist the flag + tear down the backend embedding
+   *    stack so the ~200-400 MB ONNX session is released; cancel any
+   *    running reindex as the backend already does that internally
+   *    (`teardown_for_disable` cancels the reindex handle) so the
+   *    explicit `cancelReindex` is redundant but harmless.
+   *  The statusbar listens for the `embed://reindex_progress` event and
+   *  surfaces progress. */
   async function onToggleSemantic(e: Event): Promise<void> {
     const enabled = (e.target as HTMLInputElement).checked;
     settingsStore.setEnableSemanticSearch(enabled);
     try {
+      await setSemanticEnabled(enabled);
       if (enabled) {
         if (currentVaultPath) await reindexVault();
       } else {
