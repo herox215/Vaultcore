@@ -62,4 +62,11 @@ pub fn teardown_for_disable(state: &VaultState) {
     if let Ok(mut guard) = state.query_handles.lock() {
         *guard = None;
     }
+    // #287 — invalidate the cached embedding graph. `get_embedding_graph`
+    // also invalidates via fingerprint mismatch when the index changes,
+    // but an explicit clear on teardown / toggle-off / refresh keeps
+    // memory tight and guarantees no stale answer crosses a vault switch.
+    if let Ok(mut guard) = state.embedding_graph_cache.lock() {
+        *guard = None;
+    }
 }

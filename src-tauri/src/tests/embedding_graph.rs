@@ -21,7 +21,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::commands::embedding_graph::compute_embedding_graph;
+use crate::commands::embedding_graph::{
+    apply_threshold_to_raw, compute_embedding_graph, compute_embedding_graph_raw,
+};
 use crate::commands::links::{GraphEdge, LocalGraph};
 use crate::embeddings::{VectorIndex, DIM};
 use crate::indexer::memory::{FileIndex, FileMeta};
@@ -500,4 +502,132 @@ fn graph_build_does_not_materialise_full_vector_clone() {
         clones, 0,
         "graph build cloned {clones} chunk vectors; expected 0 after #254"
     );
+}
+
+// ── #287 — split raw/threshold builder for cached slider path ─────────────
+
+/// Builds a fixed 4-note fixture with a known cosine ordering:
+///   a(axis0) · b ≈ 0.95,  a · c ≈ 0.80,  a · d ≈ 0.50
+/// plus pairwise relationships between b/c/d that push all of them
+/// above 0.50 with each other.
+fn fixture_ordered_four() -> (VectorIndex, FileIndex, TagIndex) {
+    let vi = VectorIndex::new(16);
+    vi.insert(PathBuf::from("a.md"), 0, &axis_unit(0));
+    vi.insert(
+        PathBuf::from("b.md"),
+        0,
+        &mixed_unit(&[(0, 0.95), (1, 0.3122499)]),
+    );
+    vi.insert(
+        PathBuf::from("c.md"),
+        0,
+        &mixed_unit(&[(0, 0.80), (1, 0.6)]),
+    );
+    vi.insert(
+        PathBuf::from("d.md"),
+        0,
+        &mixed_unit(&[(0, 0.50), (1, (0.75f32).sqrt())]),
+    );
+    let fi = file_index_with(&["a.md", "b.md", "c.md", "d.md"]);
+    let ti = TagIndex::new();
+    (vi, fi, ti)
+}
+
+#[test]
+fn raw_builder_produces_threshold_independent_per_source_lists() {
+    let (vi, fi, ti) = fixture_ordered_four();
+    let raw = compute_embedding_graph_raw(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 3);
+
+    // Every chunked path becomes a node — threshold plays no role.
+    let ids: Vec<_> = raw.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids, vec!["a.md", "b.md", "c.md", "d.md"]);
+
+    // Per-source lists are sorted descending by cosine.
+    for (_src, neighbours) in &raw.per_src {
+        for w in neighbours.windows(2) {
+            assert!(
+                w[0].1 >= w[1].1,
+                "neighbour list must be sorted desc by cosine",
+            );
+        }
+    }
+    // `a.md`'s neighbours include b/c/d with cos in descending order.
+    use std::sync::Arc;
+    let a_arc: Arc<str> = Arc::<str>::from("a.md");
+    let a_neigh = raw.per_src.get(&a_arc).expect("source a.md present");
+    let ids: Vec<&str> = a_neigh.iter().map(|(p, _)| p.as_ref()).collect();
+    assert_eq!(ids[0], "b.md");
+    assert_eq!(ids[1], "c.md");
+    assert_eq!(ids[2], "d.md");
+}
+
+#[test]
+fn apply_threshold_matches_original_compute_for_equivalent_threshold() {
+    // The refactor must preserve the end-to-end output for every
+    // threshold. Build raw once, apply two thresholds, and compare each
+    // against a direct `compute_embedding_graph` call at that threshold.
+    let (vi, fi, ti) = fixture_ordered_four();
+    let raw = compute_embedding_graph_raw(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 3);
+
+    for threshold in [0.0_f32, 0.4, 0.7, 0.9] {
+        let via_cache = apply_threshold_to_raw(&raw, threshold);
+        let direct =
+            compute_embedding_graph(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 3, threshold);
+
+        let pairs_cache = edge_pairs(&via_cache);
+        let pairs_direct = edge_pairs(&direct);
+        assert_eq!(
+            pairs_cache, pairs_direct,
+            "edge set differs at threshold {threshold}",
+        );
+        for (a, b) in &pairs_cache {
+            let w_cache = edge_weight(&via_cache, a, b);
+            let w_direct = edge_weight(&direct, a, b);
+            assert_eq!(
+                w_cache, w_direct,
+                "weight for ({a}, {b}) at threshold {threshold} differs: cache={w_cache:?} direct={w_direct:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn apply_threshold_on_raw_is_side_effect_free() {
+    // The cache must remain reusable after a threshold application —
+    // otherwise a second slider change in a row would silently rebuild.
+    let (vi, fi, ti) = fixture_ordered_four();
+    let raw = compute_embedding_graph_raw(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 3);
+    let entries_before = raw.per_src.len();
+    let total_edges_before: usize = raw.per_src.values().map(|v| v.len()).sum();
+
+    let _ = apply_threshold_to_raw(&raw, 0.5);
+    let _ = apply_threshold_to_raw(&raw, 0.95);
+
+    assert_eq!(raw.per_src.len(), entries_before);
+    let total_after: usize = raw.per_src.values().map(|v| v.len()).sum();
+    assert_eq!(total_after, total_edges_before);
+}
+
+#[test]
+fn apply_threshold_trivially_returns_all_edges_at_zero() {
+    let (vi, fi, ti) = fixture_ordered_four();
+    let raw = compute_embedding_graph_raw(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 3);
+    let g_zero = apply_threshold_to_raw(&raw, 0.0);
+    // Every source contributes up to top_k edges; symmetric dedup
+    // collapses some, but at threshold 0 we expect non-empty edges on
+    // a four-note fixture where all cosines are > 0.
+    assert!(
+        !g_zero.edges.is_empty(),
+        "threshold 0 should not filter out every edge",
+    );
+}
+
+#[test]
+fn apply_threshold_at_one_filters_all_edges() {
+    let (vi, fi, ti) = fixture_ordered_four();
+    let raw = compute_embedding_graph_raw(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 3);
+    let g_one = apply_threshold_to_raw(&raw, 1.0);
+    assert!(g_one.edges.is_empty());
+    // Nodes still present — threshold only suppresses edges.
+    assert_eq!(g_one.nodes.len(), 4);
 }

@@ -75,6 +75,31 @@ fn bump_vector_clone_counter() {
 /// neighbours despite many candidates above threshold.
 const OVERSHOOT: usize = 8;
 
+/// Threshold-independent half of the embedding graph build. Holds the
+/// expensive outputs of phase 1–3 (path → tags, the per-source raw top-
+/// `raw_k` neighbour list pre-threshold) so repeated calls that only
+/// change the threshold can skip the O(chunks × raw_k) HNSW work.
+///
+/// #287 — threshold-slider responsiveness. Before this split the command
+/// rebuilt the whole graph on every slider drag; at ~200 live files
+/// (post-#286 reconciliation) that's several seconds per tick. Now the
+/// raw payload is cached once per `(vault_root, top_k, index fingerprint)`
+/// tuple and threshold changes only rerun [`apply_threshold_to_raw`],
+/// which is a sort + truncate + hash-bucket dedup — negligible.
+#[derive(Clone)]
+pub struct RawEmbeddingGraph {
+    /// Pre-built nodes — these don't depend on threshold, every live
+    /// chunked path becomes a node regardless.
+    pub nodes: Vec<GraphNode>,
+    /// `src_rel → sorted desc list of (tgt_rel, cosine)` capped at
+    /// `raw_k = top_k * OVERSHOOT`. **Not** threshold-filtered —
+    /// threshold is applied per request against this material.
+    pub per_src: HashMap<Arc<str>, Vec<(Arc<str>, f32)>>,
+    /// The `top_k` this raw payload was sampled for. Cache consumers
+    /// reuse the payload iff the requested `top_k` matches.
+    pub top_k: usize,
+}
+
 /// Pure builder that constructs the embedding-similarity graph. Split
 /// out from the Tauri command so unit tests can drive it with synthetic
 /// `VectorIndex` fixtures without standing up the full coordinator.
@@ -89,7 +114,7 @@ const OVERSHOOT: usize = 8;
 /// empty `Path` for tests that already use vault-relative fixtures.
 pub fn compute_embedding_graph(
     vi: &VectorIndex,
-    _fi: &FileIndex,
+    fi: &FileIndex,
     ti: &TagIndex,
     vault_root: &Path,
     top_k: usize,
@@ -99,6 +124,26 @@ pub fn compute_embedding_graph(
         return LocalGraph {
             nodes: Vec::new(),
             edges: Vec::new(),
+        };
+    }
+    let raw = compute_embedding_graph_raw(vi, fi, ti, vault_root, top_k);
+    apply_threshold_to_raw(&raw, threshold)
+}
+
+/// Build the threshold-independent payload. Runs phases 1–3 of the
+/// original algorithm minus the threshold filter — see [`RawEmbeddingGraph`].
+pub fn compute_embedding_graph_raw(
+    vi: &VectorIndex,
+    _fi: &FileIndex,
+    ti: &TagIndex,
+    vault_root: &Path,
+    top_k: usize,
+) -> RawEmbeddingGraph {
+    if top_k == 0 {
+        return RawEmbeddingGraph {
+            nodes: Vec::new(),
+            per_src: HashMap::new(),
+            top_k: 0,
         };
     }
 
@@ -157,13 +202,15 @@ pub fn compute_embedding_graph(
     // writes (writers queue on `points_by_layer.write()` which the
     // iterator defers between layers).
     let raw_k = top_k.saturating_mul(OVERSHOOT);
-    let mut per_src: HashMap<Arc<str>, HashMap<Arc<str>, f32>> = HashMap::new();
+    // NOTE: threshold is NOT applied here (#287). The raw payload must
+    // be threshold-agnostic so callers can rebind threshold cheaply.
+    let mut per_src_map: HashMap<Arc<str>, HashMap<Arc<str>, f32>> = HashMap::new();
     vi.for_each_live(|id, _path, _chunk_idx, vec| {
         let Some(src_rel) = id_to_path_arc.get(&id).cloned() else {
             return;
         };
         let hits = vi.query(vec, raw_k);
-        let bucket = per_src.entry(src_rel.clone()).or_default();
+        let bucket = per_src_map.entry(src_rel.clone()).or_default();
         for (hit_id, distance) in hits {
             let Some(tgt_rel) = id_to_path_arc.get(&hit_id) else {
                 continue;
@@ -172,7 +219,7 @@ pub fn compute_embedding_graph(
                 continue;
             }
             let cos = (1.0_f32 - distance).clamp(0.0, 1.0);
-            if !cos.is_finite() || cos < threshold {
+            if !cos.is_finite() {
                 continue;
             }
             let entry = bucket.entry(Arc::clone(tgt_rel)).or_insert(cos);
@@ -186,34 +233,25 @@ pub fn compute_embedding_graph(
     // themselves against the RAM-guard test.
     let _ = bump_vector_clone_counter;
 
-    // Phase 3.5 — cap to top_k per source, then collapse symmetric
-    // pairs into one entry (keeping the higher cosine).
-    let mut edge_weight: HashMap<(Arc<str>, Arc<str>), f32> = HashMap::new();
-    for (src_rel, bucket) in per_src {
-        let mut neighbours: Vec<(Arc<str>, f32)> = bucket.into_iter().collect();
-        neighbours.sort_by(|a, b| b.1.total_cmp(&a.1));
-        neighbours.truncate(top_k);
-        for (tgt_rel, cos) in neighbours {
-            let key = if src_rel.as_ref() < tgt_rel.as_ref() {
-                (Arc::clone(&src_rel), tgt_rel)
-            } else {
-                (tgt_rel, Arc::clone(&src_rel))
-            };
-            edge_weight
-                .entry(key)
-                .and_modify(|w| {
-                    if cos > *w {
-                        *w = cos;
-                    }
-                })
-                .or_insert(cos);
-        }
-    }
+    // Flatten each source's per-target map into a sorted Vec, capped at
+    // raw_k. The cap guards against runaway memory on pathological
+    // vaults where one source has thousands of neighbours at raw cosine.
+    // The sort-desc is stable and authoritative — downstream
+    // threshold filters just walk until the cosine drops below the bar.
+    let per_src: HashMap<Arc<str>, Vec<(Arc<str>, f32)>> = per_src_map
+        .into_iter()
+        .map(|(src, bucket)| {
+            let mut v: Vec<(Arc<str>, f32)> = bucket.into_iter().collect();
+            v.sort_by(|a, b| b.1.total_cmp(&a.1));
+            v.truncate(raw_k);
+            (src, v)
+        })
+        .collect();
 
-    // Phase 4 — build sorted node + edge lists. Every chunked path
-    // becomes a node, even if it ends up edgeless — orphans are
-    // informative ("this note is semantically unique") and let users
-    // loosen the threshold to find connections.
+    // Phase 4 — build the node list (threshold-independent). Every
+    // chunked path becomes a node, even if it ends up edgeless —
+    // orphans are informative ("this note is semantically unique") and
+    // let users loosen the threshold to find connections.
     let mut node_list: Vec<GraphNode> = path_node
         .keys()
         .map(|rel| {
@@ -230,6 +268,59 @@ pub fn compute_embedding_graph(
         .collect();
     node_list.sort_by(|a, b| a.id.cmp(&b.id));
 
+    RawEmbeddingGraph {
+        nodes: node_list,
+        per_src,
+        top_k,
+    }
+}
+
+/// Cheap threshold application — the hot path that every slider drag
+/// hits. No HNSW queries, no tag lookups, no cloning of vectors: just
+/// walk the cached per-source neighbour lists, drop entries below the
+/// threshold, cap to `top_k`, collapse symmetric pairs. O(total edges
+/// in raw) regardless of vault size. Typical cost on a 200-note vault:
+/// sub-millisecond.
+pub fn apply_threshold_to_raw(
+    raw: &RawEmbeddingGraph,
+    threshold: f32,
+) -> LocalGraph {
+    let top_k = raw.top_k;
+    if top_k == 0 {
+        return LocalGraph {
+            nodes: raw.nodes.clone(),
+            edges: Vec::new(),
+        };
+    }
+    let mut edge_weight: HashMap<(Arc<str>, Arc<str>), f32> = HashMap::new();
+    for (src_rel, neighbours) in &raw.per_src {
+        let mut kept = 0usize;
+        for (tgt_rel, cos) in neighbours {
+            if kept >= top_k {
+                break;
+            }
+            if *cos < threshold {
+                // The list is sorted desc — once we dip below the bar
+                // the rest of this source's list is also below it.
+                break;
+            }
+            kept += 1;
+            let key = if src_rel.as_ref() < tgt_rel.as_ref() {
+                (Arc::clone(src_rel), Arc::clone(tgt_rel))
+            } else {
+                (Arc::clone(tgt_rel), Arc::clone(src_rel))
+            };
+            edge_weight
+                .entry(key)
+                .and_modify(|w| {
+                    if *cos > *w {
+                        *w = *cos;
+                    }
+                })
+                .or_insert(*cos);
+        }
+    }
+
     let mut edge_list: Vec<GraphEdge> = edge_weight
         .into_iter()
         .map(|((from, to), w)| GraphEdge {
@@ -244,7 +335,7 @@ pub fn compute_embedding_graph(
     });
 
     LocalGraph {
-        nodes: node_list,
+        nodes: raw.nodes.clone(),
         edges: edge_list,
     }
 }
@@ -255,6 +346,21 @@ pub fn compute_embedding_graph(
 fn relativize(path: &Path, vault_root: &Path) -> Option<String> {
     let stripped = path.strip_prefix(vault_root).ok()?;
     Some(stripped.to_string_lossy().replace('\\', "/"))
+}
+
+/// #287 — cache slot lived in `VaultState`. Holds the most recent
+/// `RawEmbeddingGraph` keyed by enough state to detect "the graph
+/// definitely hasn't changed" without any semantic-awareness of the
+/// index internals. On a hit we skip straight to `apply_threshold_to_raw`
+/// so the slider is back to sub-millisecond response.
+pub struct EmbeddingGraphCache {
+    pub vault_root: std::path::PathBuf,
+    pub top_k: usize,
+    /// `VectorIndex::len()` at build time — total chunks inc. tombstones.
+    pub index_len: usize,
+    /// `VectorIndex::tombstone_count()` at build time.
+    pub tombstone_count: usize,
+    pub raw: RawEmbeddingGraph,
 }
 
 // ── IPC ────────────────────────────────────────────────────────────────────
@@ -342,17 +448,50 @@ pub async fn get_embedding_graph(
 
     let snap = handles.sink.snapshot();
 
+    // #287 — cache fast path. If the cached raw payload still matches
+    // (same vault root, same top_k, index fingerprint unchanged), we
+    // can answer a threshold change without touching HNSW at all.
+    let cache_slot = std::sync::Arc::clone(&state.embedding_graph_cache);
+    let cached_hit: Option<LocalGraph> = {
+        let guard = cache_slot.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        guard.as_ref().and_then(|c| {
+            if c.vault_root == vault_root
+                && c.top_k == top_k
+                && c.index_len == snap.len()
+                && c.tombstone_count == snap.tombstone_count()
+            {
+                Some(apply_threshold_to_raw(&c.raw, threshold))
+            } else {
+                None
+            }
+        })
+    };
+    if let Some(hit) = cached_hit {
+        return Ok(hit);
+    }
+
+    let vault_root_for_cache = vault_root.clone();
     tokio::task::spawn_blocking(move || {
         let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
         let ti = ti_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        Ok(compute_embedding_graph(
-            &snap,
-            &fi,
-            &ti,
-            &vault_root,
-            top_k,
-            threshold,
-        ))
+        let index_len = snap.len();
+        let tombstone_count = snap.tombstone_count();
+        let raw = compute_embedding_graph_raw(&snap, &fi, &ti, &vault_root, top_k);
+        let result = apply_threshold_to_raw(&raw, threshold);
+        // Drop the read locks before grabbing the cache slot so a slow
+        // cache-lock contention doesn't pin the FileIndex / TagIndex.
+        drop(fi);
+        drop(ti);
+        if let Ok(mut guard) = cache_slot.lock() {
+            *guard = Some(EmbeddingGraphCache {
+                vault_root: vault_root_for_cache,
+                top_k,
+                index_len,
+                tombstone_count,
+                raw,
+            });
+        }
+        Ok(result)
     })
     .await
     .map_err(|_| VaultError::IndexCorrupt)?
