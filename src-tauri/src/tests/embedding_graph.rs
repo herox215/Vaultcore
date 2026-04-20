@@ -330,42 +330,27 @@ fn graph_edge_without_weight_still_constructs() {
 
 // ── #254: RAM-reduction parity + hot-path memory guards ───────────────────
 
-/// Shared fixture generator — deterministic 12-note × 3-chunk index where
-/// each chunk is a noisy rotation of its file's axis. Produces a non-
-/// trivial graph (several edges above threshold 0.5) so the parity check
-/// covers ordering, deduplication and chunk-pair max semantics.
+/// Shared fixture generator — deterministic 6-note × 3-chunk index
+/// arranged into two clusters (notes 0-2 share axis 0 weight, notes
+/// 3-5 share axis 1 weight) so plenty of cross-note edges land above
+/// threshold 0.5. Produces a non-trivial graph for the parity check
+/// (ordering, deduplication, chunk-pair max).
 fn seeded_graph_fixture() -> VectorIndex {
-    let vi = VectorIndex::new(36);
-    // xorshift64 driven so the output is byte-identical across runs
-    // without pulling in a `rand` dep.
-    let mut s: u64 = 0xC0FFEE_DEADBEEF;
-    let mut rng = || {
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        s
-    };
-    for f in 0..12u64 {
-        let axis = (f as usize * 7) % DIM;
-        // Each file pins most of its weight on one axis; the remaining
-        // 0.2 of norm is scattered across 3 other axes so chunk pairs
-        // aren't cosine-1 clones.
+    let vi = VectorIndex::new(18);
+    for f in 0..6u64 {
+        // Cluster A (f < 3): dominant axis = 0 with weight 0.9.
+        // Cluster B (f ≥ 3): dominant axis = 1 with weight 0.9.
+        let (major_axis, minor_axis) = if f < 3 { (0usize, 2usize) } else { (1, 3) };
         for c in 0..3u64 {
-            let mut comps = vec![(axis, 0.93_f32.sqrt())];
-            for _ in 0..3 {
-                let off = (rng() as usize) % DIM;
-                if off == axis {
-                    continue;
-                }
-                comps.push((off, (0.07_f32 / 3.0).sqrt() * (1.0 + (c as f32) * 0.05)));
-            }
-            // Normalise to unit length.
-            let norm_sq: f32 = comps.iter().map(|(_, w)| w * w).sum();
-            let scale = 1.0 / norm_sq.sqrt();
+            // Slight per-chunk tilt along a secondary axis so chunks of
+            // the same file aren't cosine-1 clones. `major_weight` ≈ 0.9
+            // → cos between two same-cluster notes ≈ 0.81 > 0.5.
+            let major_w = 0.9_f32;
+            let minor_w = (1.0 - major_w * major_w).sqrt(); // keeps unit norm
+            let tilt_axis = minor_axis + (c as usize);
             let mut v = vec![0.0f32; DIM];
-            for (ax, w) in &comps {
-                v[*ax] += *w * scale;
-            }
+            v[major_axis] = major_w;
+            v[tilt_axis] = minor_w;
             vi.insert(PathBuf::from(format!("note-{f}.md")), c as usize, &v);
         }
     }
@@ -384,9 +369,48 @@ fn compute_embedding_graph_output_is_stable_parity_snapshot() {
 
     let g = compute_embedding_graph(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 5, 0.5);
 
-    // 12 nodes, one per file, sorted lexically.
+    // 6 nodes, one per file, sorted lexically.
     let node_ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
-    assert_eq!(node_ids.len(), 12);
+    assert_eq!(node_ids.len(), 6);
+    assert_eq!(
+        node_ids,
+        vec!["note-0.md", "note-1.md", "note-2.md", "note-3.md", "note-4.md", "note-5.md"]
+    );
+
+    // Fixture has two disjoint clusters (0/1/2 on axis 0, 3/4/5 on axis 1).
+    // Within each cluster every pair lands at cos ≈ 0.81, above threshold 0.5.
+    // Cross-cluster pairs land at cos ≈ 0.0 (perpendicular axes) — pruned.
+    // Expected edges: all 3-choose-2 pairs in each cluster = 6 edges total.
+    let pairs: Vec<(String, String)> = g
+        .edges
+        .iter()
+        .map(|e| (e.from.clone(), e.to.clone()))
+        .collect();
+    let expected: Vec<(String, String)> = vec![
+        ("note-0.md", "note-1.md"),
+        ("note-0.md", "note-2.md"),
+        ("note-1.md", "note-2.md"),
+        ("note-3.md", "note-4.md"),
+        ("note-3.md", "note-5.md"),
+        ("note-4.md", "note-5.md"),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    assert_eq!(pairs, expected, "edge set changed; parity regression?");
+
+    // Every surviving edge must sit in the narrow cosine band the
+    // fixture pins (chunk-pair max ≈ 0.9² + minor_w² on a shared tilt
+    // axis: ~0.81 when tilts align, ~0.81 + minor_weight² otherwise).
+    for e in &g.edges {
+        let w = e.weight.expect("weight set");
+        assert!(
+            w >= 0.5 && w <= 1.0001,
+            "edge {}↔{} weight {w} outside expected band",
+            e.from,
+            e.to,
+        );
+    }
     for w in node_ids.windows(2) {
         assert!(w[0] < w[1], "node list must be sorted: {w:?}");
     }
