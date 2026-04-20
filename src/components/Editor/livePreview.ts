@@ -2,6 +2,10 @@ import { ViewPlugin, Decoration, type EditorView, type DecorationSet, type ViewU
 import { RangeSetBuilder } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { detectFrontmatterInDoc } from "./frontmatterPlugin";
+import {
+  findTemplateExprRanges,
+  isInsideTemplateExpr,
+} from "./templateExprRanges";
 
 const HIDE = Decoration.replace({});
 
@@ -29,11 +33,19 @@ function buildDecorations(view: EditorView): DecorationSet {
   // transaction paid a full-doc `toString()` allocation here.
   const frontmatter = detectFrontmatterInDoc(doc);
 
+  // Scan the viewport slice once up-front so we can short-circuit any markup-
+  // hiding node that sits inside a `{{ ... }}` range — template expression
+  // bodies are source code, not Markdown (#295).
+  const viewportText = doc.sliceString(view.viewport.from, view.viewport.to);
+  const exprRanges = findTemplateExprRanges(viewportText, view.viewport.from);
+
   syntaxTree(view.state).iterate({
     from: view.viewport.from,
     to: view.viewport.to,
     enter(node) {
       const name = node.name;
+
+      if (isInsideTemplateExpr(exprRanges, node.from, node.to)) return;
 
       if (name === "HeaderMark") {
         if (frontmatter && node.from >= frontmatter.from && node.to <= frontmatter.to) {
