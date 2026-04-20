@@ -282,6 +282,78 @@ describe("OmniSearch (#174)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  // ── Issue #261 — k cap + debounce coalescing + recentFiles memoisation ─
+
+  it("content mode coalesces a rapid 5-char keystroke burst into a single IPC call (#261)", async () => {
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { container } = mountOpen({ initialMode: "content" });
+    await tick();
+    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+
+    // Type 5 characters within the 200ms debounce window. Each keystroke
+    // must reset the trailing timer so only the last one actually dispatches.
+    for (const ch of ["n", "ne", "nee", "need", "needl"]) {
+      await fireEvent.input(input, { target: { value: ch } });
+      // Small wait < debounce delay — simulates a ~40ms-per-key typist.
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    // No debounce firing yet.
+    expect(hybridSearch).toHaveBeenCalledTimes(0);
+
+    // Flush the debounce tail.
+    await new Promise((r) => setTimeout(r, 260));
+    expect(hybridSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("content mode requests a small k by default (viewport-sized, <= 30) (#261)", async () => {
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { container } = mountOpen({ initialMode: "content" });
+    await tick();
+    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+    await fireEvent.input(input, { target: { value: "needle" } });
+    await new Promise((r) => setTimeout(r, 260));
+    expect(hybridSearch).toHaveBeenCalledTimes(1);
+    const args = (hybridSearch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const kArg = args[1] as number;
+    expect(kArg).toBeLessThanOrEqual(30);
+    expect(kArg).toBeGreaterThan(0);
+  });
+
+  it("renders a load-more affordance when results are capped at k and expanding refetches with larger k (#261)", async () => {
+    const INITIAL_K = 20;
+    const BIG_HIT_LIST: HybridHit[] = Array.from({ length: INITIAL_K }, (_, i) => ({
+      path: `notes/hit-${i}.md`,
+      title: `hit-${i}`,
+      score: 1 - i / 100,
+      snippet: "s",
+      matchCount: 0,
+    }));
+    (hybridSearch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(BIG_HIT_LIST);
+    const { container } = mountOpen({ initialMode: "content" });
+    await tick();
+    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+    await fireEvent.input(input, { target: { value: "needle" } });
+    await new Promise((r) => setTimeout(r, 260));
+    await tick();
+    await Promise.resolve();
+    await tick();
+
+    // First call used the small default k.
+    const firstArgs = (hybridSearch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(firstArgs[1]).toBeLessThanOrEqual(30);
+
+    const loadMore = container.querySelector<HTMLButtonElement>(".vc-omni-load-more");
+    expect(loadMore).toBeTruthy();
+
+    await fireEvent.click(loadMore!);
+    // Clicking load-more dispatches a fresh search with a larger k.
+    expect(hybridSearch).toHaveBeenCalledTimes(2);
+    const secondArgs = (hybridSearch as unknown as ReturnType<typeof vi.fn>).mock.calls[1]!;
+    expect(secondArgs[0]).toBe("needle");
+    expect(secondArgs[1] as number).toBeGreaterThan(firstArgs[1] as number);
+  });
+
+
   // ── Cursor position preservation while typing (regression) ────────────
   // The content-mode debounce + async search used to re-sync bind:value while
   // the search was in-flight, occasionally resetting the caret to position 0.
