@@ -1,0 +1,13 @@
+# Tauri dev-watcher exclusions. Anything listed here is ignored by the file
+# watcher that restarts the app on change — not a Cargo or bundle exclusion.
+#
+# resources/ holds vendored binaries (onnxruntime dylib, ONNX model, tokenizer)
+# that build.rs fetches and — on macOS — re-signs via `codesign --force`.
+# `codesign --force` rewrites the file even when the signature is already
+# ad-hoc, so without this ignore every `cargo build` triggers a watcher
+# restart which triggers another build, which re-signs, which triggers
+# another restart — an infinite rebuild loop. build.rs makes the signing
+# step idempotent too, but keeping the watcher off vendored binaries is
+# defense-in-depth.
+resources/
+target/
