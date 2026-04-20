@@ -27,6 +27,7 @@
   import { scrollToMatch } from "./flashHighlight";
   import { scrollStore } from "../../store/scrollStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
+  import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { tagsStore } from "../../store/tagsStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
@@ -248,6 +249,19 @@
       if (state.currentPath) {
         void reloadResolvedLinks();
       }
+    }
+  });
+
+  // #277: user-initiated rename/move bypass the watcher (write_ignore), so the
+  // module-level `resolvedLinks` map in wikiLink.ts keeps the stale OLD
+  // rel_path until a manual reload. TreeNode fires `resolvedLinksStore.requestReload()`
+  // after every rename/move so we refresh here and the click handler stops
+  // routing [[new-name]] into the create-at-root fallback.
+  let prevResolvedLinksToken: string | null = null;
+  const unsubResolvedLinks = resolvedLinksStore.subscribe((state) => {
+    if (state.token && state.token !== prevResolvedLinksToken) {
+      prevResolvedLinksToken = state.token;
+      void reloadResolvedLinks();
     }
   });
 
@@ -735,6 +749,7 @@
     unsubScroll();
     unsubTabReload();
     unsubVaultPath();
+    unsubResolvedLinks();
     unsubEditorHash();
     unlistenFileChange?.();
     unlistenVaultStatus?.();
