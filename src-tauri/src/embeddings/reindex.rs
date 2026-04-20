@@ -459,6 +459,59 @@ fn rel_key(vault_root: &Path, abs: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// #286 — drop checkpoint entries that don't correspond to a file whose
+/// vectors are actually present in the vector index. The checkpoint speaks
+/// vault-relative forward-slash paths (`rel_key`), while the index stores
+/// absolute `PathBuf`s; the caller passes the live set sourced from
+/// [`VectorIndex::live_paths`] and this function does the projection.
+///
+/// The two structures can drift whenever:
+///   - an initial embed terminates before every file's chunks were
+///     persisted (e.g. vault-close mid-run; `HnswSink::Drop` fires a
+///     detached save that may not have finished before the OS reaps the
+///     process), leaving the checkpoint claiming "done" for paths the
+///     index has never seen — the phantom-skip behaviour in #286;
+///   - a user edits one file while stale checkpoint claims still list a
+///     purged set of vectors.
+///
+/// Called on every vault open from the command layer *before* the reindex
+/// worker starts, so the next reindex loop honours the real on-disk state.
+/// Returns the number of entries removed, for logging.
+pub fn reconcile_checkpoint_with_live_paths(
+    checkpoint_dir: &Path,
+    vault_root: &Path,
+    live_abs_paths: &std::collections::HashSet<PathBuf>,
+) -> std::io::Result<usize> {
+    let path = checkpoint_dir.join(CHECKPOINT_FILE);
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut checkpoint = load_checkpoint(&path);
+    if checkpoint.entries.is_empty() {
+        return Ok(0);
+    }
+    // Project live absolute paths → rel_keys so we can diff against the
+    // checkpoint. Paths that don't strip_prefix cleanly fall through as
+    // themselves, which means they simply won't match any checkpoint
+    // entry (and thus get treated as "not live" — the safe default).
+    let live_keys: std::collections::HashSet<String> = live_abs_paths
+        .iter()
+        .map(|p| rel_key(vault_root, p))
+        .collect();
+    let before = checkpoint.entries.len();
+    checkpoint.entries.retain(|rel, _| live_keys.contains(rel));
+    let removed = before - checkpoint.entries.len();
+    if removed > 0 {
+        save_checkpoint(&path, &checkpoint)?;
+        log::info!(
+            "reindex: reconciled checkpoint — dropped {removed} phantom entries \
+             (kept {} live of {before})",
+            checkpoint.entries.len(),
+        );
+    }
+    Ok(removed)
+}
+
 fn is_excluded(entry: &DirEntry) -> bool {
     let name = entry.file_name().to_str().unwrap_or("");
     entry.depth() > 0 && name.starts_with('.')
@@ -1007,5 +1060,127 @@ mod tests {
             1,
             "stale file with no checkpoint entry must be retried"
         );
+    }
+
+    // ── #286 — reconciliation against live paths ───────────────────────────
+
+    fn seed_checkpoint(path: &Path, entries: &[(&str, &str)]) {
+        let mut map = HashMap::new();
+        for (k, v) in entries {
+            map.insert((*k).to_string(), (*v).to_string());
+        }
+        let f = CheckpointFile {
+            version: CHECKPOINT_VERSION,
+            entries: map,
+        };
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_string(&f).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn reconcile_drops_phantom_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ckpt_dir = tmp.path().to_path_buf();
+        let ckpt = ckpt_dir.join(CHECKPOINT_FILE);
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        // Checkpoint claims four files; the live index only has two.
+        seed_checkpoint(
+            &ckpt,
+            &[
+                ("a.md", "aaa"),
+                ("sub/b.md", "bbb"),
+                ("sub/c.md", "ccc"),
+                ("d.md", "ddd"),
+            ],
+        );
+        let live: std::collections::HashSet<PathBuf> = [
+            vault.join("a.md"),
+            vault.join("sub/b.md"),
+        ]
+        .into_iter()
+        .collect();
+
+        let removed = reconcile_checkpoint_with_live_paths(&ckpt_dir, &vault, &live).unwrap();
+        assert_eq!(removed, 2);
+
+        let after = load_checkpoint(&ckpt);
+        assert_eq!(after.entries.len(), 2);
+        assert!(after.entries.contains_key("a.md"));
+        assert!(after.entries.contains_key("sub/b.md"));
+        assert!(!after.entries.contains_key("sub/c.md"));
+        assert!(!after.entries.contains_key("d.md"));
+    }
+
+    #[test]
+    fn reconcile_preserves_matching_entries_and_hashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ckpt_dir = tmp.path().to_path_buf();
+        let ckpt = ckpt_dir.join(CHECKPOINT_FILE);
+        let vault = tmp.path().join("v");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        seed_checkpoint(&ckpt, &[("x.md", "hash-x"), ("y.md", "hash-y")]);
+        let live: std::collections::HashSet<PathBuf> =
+            [vault.join("x.md"), vault.join("y.md")].into_iter().collect();
+
+        let removed =
+            reconcile_checkpoint_with_live_paths(&ckpt_dir, &vault, &live).unwrap();
+        assert_eq!(removed, 0);
+        let after = load_checkpoint(&ckpt);
+        assert_eq!(after.entries.get("x.md").map(String::as_str), Some("hash-x"));
+        assert_eq!(after.entries.get("y.md").map(String::as_str), Some("hash-y"));
+    }
+
+    #[test]
+    fn reconcile_is_noop_when_checkpoint_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ckpt_dir = tmp.path().to_path_buf();
+        let vault = tmp.path().join("v");
+        std::fs::create_dir_all(&vault).unwrap();
+        let removed =
+            reconcile_checkpoint_with_live_paths(&ckpt_dir, &vault, &Default::default())
+                .unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn reconcile_wipes_checkpoint_when_nothing_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ckpt_dir = tmp.path().to_path_buf();
+        let ckpt = ckpt_dir.join(CHECKPOINT_FILE);
+        let vault = tmp.path().join("v");
+        std::fs::create_dir_all(&vault).unwrap();
+        seed_checkpoint(&ckpt, &[("a.md", "h"), ("b.md", "h")]);
+
+        let removed =
+            reconcile_checkpoint_with_live_paths(&ckpt_dir, &vault, &Default::default())
+                .unwrap();
+        assert_eq!(removed, 2);
+        let after = load_checkpoint(&ckpt);
+        assert!(after.entries.is_empty());
+    }
+
+    #[test]
+    fn reconcile_normalises_windows_slashes_via_rel_key() {
+        // Paths from the live index are platform-native PathBufs; the
+        // checkpoint uses forward-slash vault-relative strings. Simulate a
+        // Windows-style path slipping through by sticking an absolute path
+        // with backslashes into the live set and making sure `rel_key` on
+        // the reconciler side still matches the forward-slash key.
+        let tmp = tempfile::tempdir().unwrap();
+        let ckpt_dir = tmp.path().to_path_buf();
+        let ckpt = ckpt_dir.join(CHECKPOINT_FILE);
+        let vault = tmp.path().join("v");
+        std::fs::create_dir_all(&vault).unwrap();
+        seed_checkpoint(&ckpt, &[("sub/a.md", "h")]);
+
+        let live: std::collections::HashSet<PathBuf> =
+            [vault.join("sub").join("a.md")].into_iter().collect();
+
+        let removed =
+            reconcile_checkpoint_with_live_paths(&ckpt_dir, &vault, &live).unwrap();
+        assert_eq!(removed, 0, "canonical live path must still match the checkpoint rel_key");
     }
 }
