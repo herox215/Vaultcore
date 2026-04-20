@@ -1,0 +1,80 @@
+// CodeMirror 6 CompletionSource for `{{ ... }}` template expressions (#284).
+//
+// Fires only when the cursor sits inside an open `{{ ... }}` block on the
+// current line (scan backwards for `{{` without an intervening `}}`).
+// Delegates all shape/type logic to `templateCompletion.ts` so the engine
+// stays DOM-free and testable. Frontmatter keys for `note.property.*` come
+// from the active editor doc — see #283 follow-up for full-vault scan.
+
+import type {
+  Completion,
+  CompletionContext,
+  CompletionResult,
+} from "@codemirror/autocomplete";
+import { analyzeCompletion } from "../../lib/templateCompletion";
+import { parseFrontmatter } from "../../lib/frontmatterIO";
+
+const COMPLETION_TYPE: Record<string, string> = {
+  variable: "variable",
+  property: "property",
+  method: "method",
+};
+
+/**
+ * Returns the column within `line` where the enclosing `{{` starts, or
+ * -1 when the cursor is not inside an open template block. A `}}` between
+ * `{{` and the cursor closes the block.
+ */
+function findOpenTemplate(lineText: string, col: number): number {
+  const before = lineText.slice(0, col);
+  const lastOpen = before.lastIndexOf("{{");
+  if (lastOpen < 0) return -1;
+  const lastClose = before.lastIndexOf("}}");
+  if (lastClose > lastOpen) return -1;
+  return lastOpen;
+}
+
+export function templateCompletionSource(
+  ctx: CompletionContext,
+): CompletionResult | null {
+  const line = ctx.state.doc.lineAt(ctx.pos);
+  const col = ctx.pos - line.from;
+  const openCol = findOpenTemplate(line.text, col);
+  if (openCol < 0) return null;
+
+  const exprStart = line.from + openCol + 2; // skip past `{{`
+  const input = ctx.state.doc.sliceString(exprStart, ctx.pos);
+
+  const dynamicKeys = collectFrontmatterKeys(ctx.state.doc.toString());
+  const analysis = analyzeCompletion(input, {
+    dynamicFrontmatterKeys: dynamicKeys,
+  });
+
+  if (analysis.items.length === 0 && !ctx.explicit) return null;
+
+  const options: Completion[] = analysis.items.map((item) => {
+    const opt: Completion = {
+      label: item.label,
+      detail: item.detail,
+      apply: item.insertText,
+      type: COMPLETION_TYPE[item.kind] ?? "text",
+    };
+    if (item.doc !== undefined) opt.info = item.doc;
+    return opt;
+  });
+
+  return {
+    from: exprStart + analysis.from,
+    options,
+    filter: true,
+  };
+}
+
+function collectFrontmatterKeys(docText: string): string[] {
+  try {
+    const { properties } = parseFrontmatter(docText);
+    return properties.map((p) => p.key);
+  } catch {
+    return [];
+  }
+}
