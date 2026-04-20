@@ -314,6 +314,12 @@ impl LinkGraph {
     /// Uses pre-resolved targets cached in `StoredLink::resolved_target`
     /// so no call to `resolve_link` is needed — O(k) where k is the number
     /// of backlinks, not O(n·k).
+    ///
+    /// Source title lookup goes through `FileIndex::entry_for_rel` (#248),
+    /// an O(1) hash lookup, instead of a linear scan over `all_entries()`
+    /// per source (#260). On a 100k-note vault a hub note with 50 backlinks
+    /// previously did ~5M rel_path equality checks just for titles; this
+    /// now does 50.
     pub fn get_backlinks(&self, target_rel: &str, file_index: &FileIndex) -> Vec<BacklinkEntry> {
         let sources = match self.incoming.get(target_rel) {
             Some(s) => s,
@@ -322,13 +328,10 @@ impl LinkGraph {
 
         let mut entries = Vec::new();
         for source_path in sources {
-            let source_title = {
-                file_index
-                    .all_entries()
-                    .find(|(_, m)| m.relative_path == *source_path)
-                    .map(|(_, m)| m.title.clone())
-                    .unwrap_or_else(|| path_stem(source_path).to_string())
-            };
+            let source_title = file_index
+                .entry_for_rel(source_path)
+                .map(|m| m.title.clone())
+                .unwrap_or_else(|| path_stem(source_path).to_string());
 
             if let Some(stored_links) = self.outgoing.get(source_path) {
                 for stored in stored_links {
@@ -478,6 +481,8 @@ pub fn resolved_map_with_aliases(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexer::memory::{FileIndex, FileMeta};
+    use std::path::PathBuf;
 
     // ── extract_links ──────────────────────────────────────────────────────
 
@@ -720,5 +725,179 @@ mod tests {
         ];
         let map = resolved_map_with_aliases(&paths, &file_aliases);
         assert_eq!(map.get("shared").map(String::as_str), Some("A.md"));
+    }
+
+    // ── get_backlinks parity (#260) ────────────────────────────────────────
+    //
+    // These tests pin the exact BacklinkEntry shape produced by `get_backlinks`
+    // so that the O(n·k) → O(k) refactor (using FileIndex::entry_for_rel from
+    // #248) can be validated for correctness parity. The previous implementation
+    // did a linear scan over all_entries() per source; the new one does an
+    // O(1) rel_path lookup. Behaviour (title resolution, duplicate-title
+    // handling, missing-entry fallback, alias-title independence, ordering)
+    // must stay identical.
+
+    fn backlinks_meta(rel: &str, title: &str, aliases: Vec<String>) -> FileMeta {
+        FileMeta {
+            relative_path: rel.to_string(),
+            hash: "deadbeef".to_string(),
+            title: title.to_string(),
+            aliases,
+        }
+    }
+
+    fn insert_meta(idx: &mut FileIndex, vault: &str, rel: &str, title: &str, aliases: Vec<String>) {
+        let abs = PathBuf::from(format!("{}/{}", vault, rel));
+        idx.insert(abs, backlinks_meta(rel, title, aliases));
+    }
+
+    #[test]
+    fn get_backlinks_returns_empty_for_target_without_sources() {
+        let g = LinkGraph::new();
+        let idx = FileIndex::new();
+        assert!(g.get_backlinks("hub.md", &idx).is_empty());
+    }
+
+    #[test]
+    fn get_backlinks_preserves_title_for_duplicate_titled_sources() {
+        // Two sources share the display title "Journal" — they must each
+        // resolve to their own entry by rel_path (not by title), so both
+        // BacklinkEntry rows carry source_title="Journal" with distinct
+        // source_path values.
+        let vault = "/vault";
+        let mut idx = FileIndex::new();
+        insert_meta(&mut idx, vault, "2024/journal.md", "Journal", vec![]);
+        insert_meta(&mut idx, vault, "2025/journal.md", "Journal", vec![]);
+        insert_meta(&mut idx, vault, "hub.md", "Hub", vec![]);
+
+        let paths: Vec<String> = idx.iter_relative_paths().map(|s| s.to_string()).collect();
+        let mut g = LinkGraph::new();
+        g.update_file(
+            "2024/journal.md",
+            vec![parsed("hub", 3)],
+            &paths,
+        );
+        g.update_file(
+            "2025/journal.md",
+            vec![parsed("hub", 7)],
+            &paths,
+        );
+
+        let mut entries = g.get_backlinks("hub.md", &idx);
+        entries.sort_by(|a, b| a.source_path.cmp(&b.source_path));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].source_path, "2024/journal.md");
+        assert_eq!(entries[0].source_title, "Journal");
+        assert_eq!(entries[0].line_number, 3);
+        assert_eq!(entries[1].source_path, "2025/journal.md");
+        assert_eq!(entries[1].source_title, "Journal");
+        assert_eq!(entries[1].line_number, 7);
+    }
+
+    #[test]
+    fn get_backlinks_ignores_aliases_for_source_title_resolution() {
+        // Source file has an alias that collides with another file's title;
+        // `get_backlinks` reads the file's own `title` field, never aliases.
+        let vault = "/vault";
+        let mut idx = FileIndex::new();
+        insert_meta(
+            &mut idx,
+            vault,
+            "notes/a.md",
+            "Alpha",
+            vec!["Beta".to_string()],
+        );
+        insert_meta(&mut idx, vault, "notes/b.md", "Beta", vec![]);
+        insert_meta(&mut idx, vault, "hub.md", "Hub", vec![]);
+
+        let paths: Vec<String> = idx.iter_relative_paths().map(|s| s.to_string()).collect();
+        let mut g = LinkGraph::new();
+        g.update_file("notes/a.md", vec![parsed("hub", 0)], &paths);
+
+        let entries = g.get_backlinks("hub.md", &idx);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_path, "notes/a.md");
+        // Title comes from FileMeta.title, not from the alias "Beta".
+        assert_eq!(entries[0].source_title, "Alpha");
+    }
+
+    #[test]
+    fn get_backlinks_falls_back_to_path_stem_when_source_missing_from_index() {
+        // Race: link_graph still has source in `incoming` but FileIndex has
+        // already evicted it (between remove_file and update_file). The
+        // fallback must be the path stem, not a panic.
+        let vault = "/vault";
+        let mut idx = FileIndex::new();
+        insert_meta(&mut idx, vault, "hub.md", "Hub", vec![]);
+        // Include the soon-to-be-evicted source in the path list used for
+        // resolution so the link actually resolves.
+        let paths = vec!["hub.md".to_string(), "ghost/old-note.md".to_string()];
+
+        let mut g = LinkGraph::new();
+        g.update_file("ghost/old-note.md", vec![parsed("hub", 12)], &paths);
+
+        // FileIndex deliberately lacks the source.
+        let entries = g.get_backlinks("hub.md", &idx);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_path, "ghost/old-note.md");
+        assert_eq!(entries[0].source_title, "old-note");
+        assert_eq!(entries[0].line_number, 12);
+    }
+
+    #[test]
+    fn get_backlinks_carries_source_title_for_every_emitted_entry() {
+        // A source note linking to the target multiple times must carry the
+        // same source_title on every emitted entry. This pins the
+        // hoisted-source_title behaviour called out in the issue (one
+        // FileIndex lookup per source, not per link). The exact entry count
+        // is pre-existing cartesian behaviour between `incoming` duplicates
+        // and outgoing matches; we only assert the invariant relevant to
+        // the O(n·k) → O(k) refactor: every entry's source_title is
+        // "Source" (resolved from FileMeta.title via entry_for_rel, not
+        // recomputed per-link).
+        let vault = "/vault";
+        let mut idx = FileIndex::new();
+        insert_meta(&mut idx, vault, "hub.md", "Hub", vec![]);
+        insert_meta(&mut idx, vault, "src.md", "Source", vec![]);
+
+        let paths: Vec<String> = idx.iter_relative_paths().map(|s| s.to_string()).collect();
+        let mut g = LinkGraph::new();
+        g.update_file(
+            "src.md",
+            vec![parsed("hub", 1), parsed("hub", 5), parsed("hub", 9)],
+            &paths,
+        );
+
+        let entries = g.get_backlinks("hub.md", &idx);
+        assert!(!entries.is_empty());
+        for e in &entries {
+            assert_eq!(e.source_path, "src.md");
+            assert_eq!(e.source_title, "Source");
+        }
+    }
+
+    #[test]
+    fn get_backlinks_order_matches_incoming_source_order() {
+        // Entries must be emitted in the same order as `incoming[target]`.
+        // This locks down per-source iteration order so the O(1) lookup
+        // refactor can't accidentally reorder the output.
+        let vault = "/vault";
+        let mut idx = FileIndex::new();
+        insert_meta(&mut idx, vault, "hub.md", "Hub", vec![]);
+        insert_meta(&mut idx, vault, "first.md", "First", vec![]);
+        insert_meta(&mut idx, vault, "second.md", "Second", vec![]);
+        insert_meta(&mut idx, vault, "third.md", "Third", vec![]);
+
+        let paths: Vec<String> = idx.iter_relative_paths().map(|s| s.to_string()).collect();
+        let mut g = LinkGraph::new();
+        g.update_file("first.md", vec![parsed("hub", 0)], &paths);
+        g.update_file("second.md", vec![parsed("hub", 0)], &paths);
+        g.update_file("third.md", vec![parsed("hub", 0)], &paths);
+
+        let incoming = g.incoming_for("hub.md").cloned().unwrap_or_default();
+        let entries = g.get_backlinks("hub.md", &idx);
+        let entry_sources: Vec<String> =
+            entries.iter().map(|e| e.source_path.clone()).collect();
+        assert_eq!(entry_sources, incoming);
     }
 }
