@@ -39,6 +39,7 @@ import { activeViewStore } from "../../store/activeViewStore";
 import { imageAttachmentExtension } from "./imageAttachment";
 import { inlineHtmlPlugin } from "./inlineHtml";
 import { tablePlugin } from "./tablePlugin";
+import { editorContextMenuExtension, type ContextMenuOpen } from "./editorContextMenu";
 
 // Debounce sidebar panel re-renders during typing: rapid docChanged updates
 // otherwise flood PropertiesPanel and OutgoingLinksPanel with re-parses on
@@ -58,6 +59,7 @@ const docVersionBumpListener = EditorView.updateListener.of((update) => {
 export function buildExtensions(
   onSave: (text: string) => void,
   paneId?: PaneId,
+  onContextMenu?: ContextMenuOpen,
 ): Extension[] {
   const extensions: Extension[] = [
     history(),
@@ -104,6 +106,10 @@ export function buildExtensions(
 
   if (paneId !== undefined) {
     extensions.push(countsPlugin(paneId));
+  }
+
+  if (onContextMenu) {
+    extensions.push(editorContextMenuExtension(onContextMenu));
   }
 
   return extensions;
