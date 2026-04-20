@@ -138,4 +138,166 @@ mod tests {
         assert_eq!(idx.len(), 1);
         assert!(!idx.is_empty());
     }
+
+    // ── #248: rel_path → entry O(1) index ──────────────────────────────────
+    //
+    // These tests pin the new contract: lookups and alias ops that previously
+    // scanned `entries` linearly now go through `rel_to_abs`. Parity with the
+    // pre-#248 behaviour is asserted on the original methods (`aliases_for_rel`,
+    // `all_relative_paths`) as well as on the new O(1) entry points.
+
+    #[test]
+    fn entry_for_rel_roundtrip() {
+        let mut idx = FileIndex::new();
+        idx.insert(PathBuf::from("/vault/a.md"), make_meta("a.md"));
+        idx.insert(PathBuf::from("/vault/sub/b.md"), make_meta("sub/b.md"));
+
+        let a = idx.entry_for_rel("a.md").expect("a.md entry");
+        assert_eq!(a.relative_path, "a.md");
+        let b = idx.entry_for_rel("sub/b.md").expect("sub/b.md entry");
+        assert_eq!(b.relative_path, "sub/b.md");
+        assert!(idx.entry_for_rel("missing.md").is_none());
+    }
+
+    #[test]
+    fn abs_for_rel_roundtrip() {
+        let mut idx = FileIndex::new();
+        let abs = PathBuf::from("/vault/sub/b.md");
+        idx.insert(abs.clone(), make_meta("sub/b.md"));
+        assert_eq!(idx.abs_for_rel("sub/b.md"), Some(abs.as_path()));
+        assert_eq!(idx.abs_for_rel("nope"), None);
+    }
+
+    #[test]
+    fn contains_rel_matches_entry_for_rel() {
+        let mut idx = FileIndex::new();
+        idx.insert(PathBuf::from("/vault/a.md"), make_meta("a.md"));
+        assert!(idx.contains_rel("a.md"));
+        assert!(!idx.contains_rel("missing.md"));
+    }
+
+    #[test]
+    fn iter_relative_paths_matches_all_relative_paths() {
+        let mut idx = FileIndex::new();
+        idx.insert(PathBuf::from("/vault/a.md"), make_meta("a.md"));
+        idx.insert(PathBuf::from("/vault/b.md"), make_meta("b.md"));
+        idx.insert(PathBuf::from("/vault/sub/c.md"), make_meta("sub/c.md"));
+
+        let mut from_iter: Vec<String> =
+            idx.iter_relative_paths().map(|s| s.to_string()).collect();
+        let mut from_vec = idx.all_relative_paths();
+        from_iter.sort();
+        from_vec.sort();
+        assert_eq!(from_iter, from_vec);
+    }
+
+    #[test]
+    fn set_aliases_for_rel_is_indexed() {
+        let mut idx = FileIndex::new();
+        idx.insert(PathBuf::from("/vault/a.md"), make_meta("a.md"));
+        idx.set_aliases_for_rel("a.md", vec!["alpha".into(), "alef".into()]);
+        assert_eq!(
+            idx.aliases_for_rel("a.md"),
+            vec!["alpha".to_string(), "alef".to_string()],
+        );
+        // No-op when the rel_path is not in the index (original contract).
+        idx.set_aliases_for_rel("missing.md", vec!["x".into()]);
+        assert_eq!(idx.aliases_for_rel("missing.md"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn remove_drops_rel_index_entry() {
+        let mut idx = FileIndex::new();
+        let path = PathBuf::from("/vault/a.md");
+        idx.insert(path.clone(), make_meta("a.md"));
+        assert!(idx.contains_rel("a.md"));
+        idx.remove(&path);
+        assert!(!idx.contains_rel("a.md"));
+        assert!(idx.abs_for_rel("a.md").is_none());
+        assert_eq!(idx.aliases_for_rel("a.md"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn clear_drops_rel_index_entries() {
+        let mut idx = FileIndex::new();
+        idx.insert(PathBuf::from("/vault/a.md"), make_meta("a.md"));
+        idx.insert(PathBuf::from("/vault/b.md"), make_meta("b.md"));
+        idx.clear();
+        assert!(!idx.contains_rel("a.md"));
+        assert!(!idx.contains_rel("b.md"));
+        assert_eq!(idx.iter_relative_paths().count(), 0);
+    }
+
+    #[test]
+    fn overwriting_insert_refreshes_rel_index() {
+        // Re-inserting the same abs_path with a different relative_path must
+        // drop the stale rel→abs mapping so lookups don't return ghosts.
+        let mut idx = FileIndex::new();
+        let abs = PathBuf::from("/vault/a.md");
+        idx.insert(abs.clone(), make_meta("old.md"));
+        assert!(idx.contains_rel("old.md"));
+
+        idx.insert(abs.clone(), make_meta("new.md"));
+        assert!(!idx.contains_rel("old.md"), "stale rel mapping should be removed");
+        assert!(idx.contains_rel("new.md"));
+        // Invariant: the two maps have the same size.
+        assert_eq!(idx.len(), idx.iter_relative_paths().count());
+    }
+
+    #[test]
+    fn rel_index_invariant_holds_under_churn() {
+        // Insert/remove churn — the invariant |entries| == |rel_to_abs| must
+        // survive every mutation (see issue #248 risk section).
+        let mut idx = FileIndex::new();
+        for i in 0..50 {
+            let rel = format!("n{:03}.md", i);
+            idx.insert(PathBuf::from(format!("/vault/{}", rel)), make_meta(&rel));
+        }
+        assert_eq!(idx.len(), 50);
+        assert_eq!(idx.iter_relative_paths().count(), 50);
+
+        for i in (0..50).step_by(2) {
+            idx.remove(&PathBuf::from(format!("/vault/n{:03}.md", i)));
+        }
+        assert_eq!(idx.len(), 25);
+        assert_eq!(idx.iter_relative_paths().count(), 25);
+
+        // Every surviving rel must resolve via the rel index.
+        for i in (1..50).step_by(2) {
+            let rel = format!("n{:03}.md", i);
+            assert!(idx.contains_rel(&rel));
+            assert_eq!(
+                idx.entry_for_rel(&rel).map(|m| m.relative_path.as_str()),
+                Some(rel.as_str()),
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_for_rel_parity_with_legacy_linear_scan() {
+        // Behavioural parity: the new O(1) path returns the same aliases the
+        // pre-#248 linear scan would have returned for each seeded entry.
+        let mut idx = FileIndex::new();
+        let seeds = [
+            ("a.md", vec!["alpha".to_string()]),
+            ("sub/b.md", vec!["beta".to_string(), "bravo".to_string()]),
+            ("c.md", Vec::<String>::new()),
+        ];
+        for (rel, aliases) in &seeds {
+            idx.insert(
+                PathBuf::from(format!("/vault/{}", rel)),
+                FileMeta {
+                    relative_path: (*rel).to_string(),
+                    hash: "h".into(),
+                    title: "t".into(),
+                    aliases: aliases.clone(),
+                },
+            );
+        }
+        for (rel, expected) in &seeds {
+            assert_eq!(&idx.aliases_for_rel(rel), expected);
+        }
+        // Absent path → empty vec (matches legacy behaviour).
+        assert_eq!(idx.aliases_for_rel("zzz.md"), Vec::<String>::new());
+    }
 }
