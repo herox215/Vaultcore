@@ -21,6 +21,7 @@
 
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
+use crate::indexer::memory::FileMeta;
 use crate::indexer::{walk_md_files, IndexCmd};
 use crate::VaultState;
 use regex::Regex;
@@ -389,10 +390,66 @@ pub fn rename_file_impl(state: &VaultState, old_path: String, new_name: String) 
 
     std::fs::rename(&canonical_old, &canonical_new).map_err(VaultError::Io)?;
 
+    // #277: update the in-memory FileIndex. The watcher's natural rename
+    // event is suppressed by `write_ignore` above, so without this the
+    // FileIndex would keep the stale OLD rel_path and never learn about
+    // the NEW one — breaking `resolve_link` for the renamed file and
+    // routing clicks on `[[new-name]]` into the frontend's create-at-root
+    // fallback. Only mutate after `fs::rename` succeeds; on disk failure
+    // we intentionally leave the index untouched.
+    sync_file_index_rename(state, &canonical_old, &canonical_new, &vault_root);
+
     Ok(RenameResult {
         new_path: canonical_new.to_string_lossy().into_owned(),
         link_count,
     })
+}
+
+/// Move the FileIndex entry at `canonical_old` to `canonical_new`, preserving
+/// hash/title/aliases and updating `relative_path` to match the new location.
+/// Used by both `rename_file_impl` and `move_file_impl` (#277).
+///
+/// Case-only rename (`canonical_old == canonical_new` on case-insensitive
+/// filesystems): update the stored `relative_path` in place and leave the
+/// entry otherwise intact, so hash/title/aliases survive.
+///
+/// No-op when the old entry is absent — tests that seed an empty index or
+/// renames that race an external rescan must not blow up.
+fn sync_file_index_rename(
+    state: &VaultState,
+    canonical_old: &Path,
+    canonical_new: &Path,
+    vault_root: &Path,
+) {
+    let Ok(mut fi) = state.file_index.write() else { return };
+
+    let new_rel = match canonical_new.strip_prefix(vault_root) {
+        Ok(p) => p.to_string_lossy().replace('\\', "/"),
+        Err(_) => return,
+    };
+
+    // Preserve prior metadata where possible; synthesize a minimal entry if
+    // the index wasn't previously populated for this path (cold-start race).
+    let prior = fi.remove(&canonical_old.to_path_buf());
+    let meta = match prior {
+        Some(mut m) => {
+            m.relative_path = new_rel;
+            m
+        }
+        None => {
+            let title = canonical_new
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            FileMeta {
+                relative_path: new_rel,
+                hash: String::new(),
+                title,
+                aliases: Vec::new(),
+            }
+        }
+    };
+    fi.insert(canonical_new.to_path_buf(), meta);
 }
 
 #[tauri::command]
@@ -408,14 +465,37 @@ pub async fn rename_file(
     // NEW path's vectors get embedded on the next save by the user.
     #[cfg(feature = "embeddings")]
     let old_canonical = std::fs::canonicalize(&old_path).ok();
+    let old_canonical_for_tantivy = std::fs::canonicalize(&old_path).ok();
 
     let result = rename_file_impl(&state, old_path, new_name)?;
+
+    // #277: the watcher would normally dispatch DeleteFile(old) + AddFile(new)
+    // on a rename event, but write_ignore suppresses that for self-mutations.
+    // Dispatch a Tantivy delete for the OLD path so fulltext search stops
+    // returning the stale doc; the NEW path is re-indexed on next user save.
+    if let Some(old) = old_canonical_for_tantivy {
+        dispatch_tantivy_delete(&state, old).await;
+    }
 
     #[cfg(feature = "embeddings")]
     if let Some(p) = old_canonical {
         dispatch_embed_delete(&state, p);
     }
     Ok(result)
+}
+
+/// Enqueue a Tantivy delete for `path`. Called from rename/move paths where
+/// write_ignore would otherwise suppress the watcher-driven DeleteFile.
+async fn dispatch_tantivy_delete(state: &VaultState, path: PathBuf) {
+    let tx = {
+        let Ok(guard) = state.index_coordinator.lock() else { return };
+        match guard.as_ref() {
+            Some(c) => c.tx.clone(),
+            None => return,
+        }
+    };
+    let _ = tx.send(IndexCmd::DeleteFile { path }).await;
+    let _ = tx.send(IndexCmd::Commit).await;
 }
 
 // ─── delete_file ─────────────────────────────────────────────────────────────
@@ -512,6 +592,11 @@ pub fn move_file_impl(state: &VaultState, from: String, to_folder: String) -> Re
 
     std::fs::rename(&canonical_from, &dest).map_err(VaultError::Io)?;
 
+    // #277: same staleness fix as rename_file_impl. Watcher's rename event is
+    // suppressed by write_ignore, so update the in-memory FileIndex directly.
+    let vault_root = get_vault_root(state)?;
+    sync_file_index_rename(state, &canonical_from, &dest, &vault_root);
+
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -526,8 +611,14 @@ pub async fn move_file(
     // watcher's Remove event.
     #[cfg(feature = "embeddings")]
     let old_canonical = std::fs::canonicalize(&from).ok();
+    let old_canonical_for_tantivy = std::fs::canonicalize(&from).ok();
 
     let result = move_file_impl(&state, from, to_folder)?;
+
+    // #277: same Tantivy parity as rename_file.
+    if let Some(old) = old_canonical_for_tantivy {
+        dispatch_tantivy_delete(&state, old).await;
+    }
 
     #[cfg(feature = "embeddings")]
     if let Some(p) = old_canonical {

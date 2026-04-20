@@ -11,12 +11,14 @@ pub mod embeddings;
 #[cfg(test)]
 mod tests;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 use notify_debouncer_full::{Debouncer, RecommendedCache};
 use notify_debouncer_full::notify::RecommendedWatcher;
+
+use indexer::memory::FileIndex;
 
 /// Write-ignore-list: records own-write events so the file watcher can
 /// suppress spurious self-triggered events (D-12).
@@ -65,6 +67,13 @@ pub struct VaultState {
     pub watcher_handle: Arc<Mutex<Option<Debouncer<RecommendedWatcher, RecommendedCache>>>>,
     /// Tantivy IndexCoordinator — created lazily on first open_vault call.
     pub index_coordinator: Arc<Mutex<Option<indexer::IndexCoordinator>>>,
+    /// Shared in-memory FileIndex. Owned by `VaultState` so user-initiated
+    /// rename/move commands can update it directly — without this, the
+    /// watcher's rename event is suppressed by `write_ignore` and the index
+    /// never learns about the new rel_path (issue #277). The IndexCoordinator
+    /// receives a clone of this Arc on construction so both sides observe
+    /// the same map.
+    pub file_index: Arc<RwLock<FileIndex>>,
     /// Embed-on-save coordinator (#196). `None` when the embeddings
     /// feature is off, the model isn't bundled, or ORT init failed.
     /// `write_file` skips the embed dispatch silently in that case.
@@ -92,6 +101,7 @@ impl Default for VaultState {
             vault_reachable: Arc::new(Mutex::new(false)),
             watcher_handle: Arc::new(Mutex::new(None)),
             index_coordinator: Arc::new(Mutex::new(None)),
+            file_index: Arc::new(RwLock::new(FileIndex::new())),
             #[cfg(feature = "embeddings")]
             embed_coordinator: Arc::new(Mutex::new(None)),
             #[cfg(feature = "embeddings")]

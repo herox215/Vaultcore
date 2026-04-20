@@ -16,6 +16,7 @@ mod aliases;
 mod snippets;
 mod file_index_contention;
 mod vault_walk;
+mod rename_link_resolution;
 #[cfg(feature = "embeddings")]
 mod embeddings;
 #[cfg(feature = "embeddings")]

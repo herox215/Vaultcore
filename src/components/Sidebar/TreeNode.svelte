@@ -13,6 +13,7 @@
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { tabStore } from "../../store/tabStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
+  import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { sortEntries, type SortBy } from "../../lib/treeState";
   import { onMount, onDestroy, untrack } from "svelte";
@@ -284,6 +285,9 @@
     } else {
       onPathChanged(entry.path, newPath);
       onRefreshParent();
+      // #277: tell EditorPane to re-fetch the stem->relPath map so clicks on
+      // [[new-name]] resolve to the renamed file instead of creating at root.
+      resolvedLinksStore.requestReload();
     }
   }
 
@@ -297,6 +301,8 @@
     pendingRename = null;
     onPathChanged(entry.path, newPath);
     onRefreshParent();
+    // #277: same rationale as handleRenameConfirm's no-link branch.
+    resolvedLinksStore.requestReload();
     try {
       const result = await updateLinksAfterRename(oldRelPath, newRelPath);
       // Reload any open tabs whose content was rewritten — the cascade writes
@@ -480,6 +486,9 @@
       }
       await loadChildren();
       onRefreshParent();
+      // #277: refresh the wiki-link resolution map so clicks on links to the
+      // moved file open the new location instead of creating at root.
+      resolvedLinksStore.requestReload();
     } catch (err) {
       const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -499,6 +508,8 @@
       }
       await loadChildren();
       onRefreshParent();
+      // #277: same rationale as the no-backlink branch above.
+      resolvedLinksStore.requestReload();
       const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
       // Reload open tabs for rewritten source files (see confirmRenameWithLinks).
       if (result.updatedPaths.length > 0) {
