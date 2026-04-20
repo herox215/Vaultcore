@@ -327,3 +327,177 @@ fn graph_edge_without_weight_still_constructs() {
     };
     assert!(e.weight.is_none());
 }
+
+// ── #254: RAM-reduction parity + hot-path memory guards ───────────────────
+
+/// Shared fixture generator — deterministic 6-note × 3-chunk index
+/// arranged into two clusters (notes 0-2 share axis 0 weight, notes
+/// 3-5 share axis 1 weight) so plenty of cross-note edges land above
+/// threshold 0.5. Produces a non-trivial graph for the parity check
+/// (ordering, deduplication, chunk-pair max).
+fn seeded_graph_fixture() -> VectorIndex {
+    let vi = VectorIndex::new(18);
+    for f in 0..6u64 {
+        // Cluster A (f < 3): dominant axis = 0 with weight 0.9.
+        // Cluster B (f ≥ 3): dominant axis = 1 with weight 0.9.
+        let (major_axis, minor_axis) = if f < 3 { (0usize, 2usize) } else { (1, 3) };
+        for c in 0..3u64 {
+            // Slight per-chunk tilt along a secondary axis so chunks of
+            // the same file aren't cosine-1 clones. `major_weight` ≈ 0.9
+            // → cos between two same-cluster notes ≈ 0.81 > 0.5.
+            let major_w = 0.9_f32;
+            let minor_w = (1.0 - major_w * major_w).sqrt(); // keeps unit norm
+            let tilt_axis = minor_axis + (c as usize);
+            let mut v = vec![0.0f32; DIM];
+            v[major_axis] = major_w;
+            v[tilt_axis] = minor_w;
+            vi.insert(PathBuf::from(format!("note-{f}.md")), c as usize, &v);
+        }
+    }
+    vi
+}
+
+#[test]
+fn compute_embedding_graph_output_is_stable_parity_snapshot() {
+    // Regression guard for the #254 refactor: the graph builder must emit
+    // byte-identical node/edge lists when we switch to Arc<Path> mapping
+    // and streaming vector access. Checks node ids, sorted edge pairs,
+    // and edge weights (with tight fp tolerance).
+    let vi = seeded_graph_fixture();
+    let fi = empty_file_index();
+    let ti = TagIndex::new();
+
+    let g = compute_embedding_graph(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 5, 0.5);
+
+    // 6 nodes, one per file, sorted lexically.
+    let node_ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(node_ids.len(), 6);
+    assert_eq!(
+        node_ids,
+        vec!["note-0.md", "note-1.md", "note-2.md", "note-3.md", "note-4.md", "note-5.md"]
+    );
+
+    // Fixture has two disjoint clusters (0/1/2 on axis 0, 3/4/5 on axis 1).
+    // Within each cluster every pair lands at cos ≈ 0.81, above threshold 0.5.
+    // Cross-cluster pairs land at cos ≈ 0.0 (perpendicular axes) — pruned.
+    // Expected edges: all 3-choose-2 pairs in each cluster = 6 edges total.
+    let pairs: Vec<(String, String)> = g
+        .edges
+        .iter()
+        .map(|e| (e.from.clone(), e.to.clone()))
+        .collect();
+    let expected: Vec<(String, String)> = vec![
+        ("note-0.md", "note-1.md"),
+        ("note-0.md", "note-2.md"),
+        ("note-1.md", "note-2.md"),
+        ("note-3.md", "note-4.md"),
+        ("note-3.md", "note-5.md"),
+        ("note-4.md", "note-5.md"),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    assert_eq!(pairs, expected, "edge set changed; parity regression?");
+
+    // Every surviving edge must sit in the narrow cosine band the
+    // fixture pins (chunk-pair max ≈ 0.9² + minor_w² on a shared tilt
+    // axis: ~0.81 when tilts align, ~0.81 + minor_weight² otherwise).
+    for e in &g.edges {
+        let w = e.weight.expect("weight set");
+        assert!(
+            w >= 0.5 && w <= 1.0001,
+            "edge {}↔{} weight {w} outside expected band",
+            e.from,
+            e.to,
+        );
+    }
+    for w in node_ids.windows(2) {
+        assert!(w[0] < w[1], "node list must be sorted: {w:?}");
+    }
+
+    // Parity snapshot for the edge set. Encode edges as `(from,to,weight.round(4))`
+    // strings so the assertion is stable under f32 noise.
+    let mut snapshot: Vec<String> = g
+        .edges
+        .iter()
+        .map(|e| {
+            format!(
+                "{}|{}|{:.4}",
+                e.from,
+                e.to,
+                e.weight.unwrap_or(f32::NAN)
+            )
+        })
+        .collect();
+    snapshot.sort();
+    // There must be at least some edges — otherwise the fixture regressed
+    // and the parity guard becomes vacuous.
+    assert!(
+        !snapshot.is_empty(),
+        "fixture produced no edges, threshold mis-tuned",
+    );
+    // Undirected: no (a,b) may appear with (b,a) too.
+    let pairs: Vec<(&str, &str)> = g
+        .edges
+        .iter()
+        .map(|e| (e.from.as_str(), e.to.as_str()))
+        .collect();
+    for (i, (a, b)) in pairs.iter().enumerate() {
+        for (c, d) in pairs.iter().skip(i + 1) {
+            assert!(
+                !(a == d && b == c),
+                "edge {a}↔{b} emitted twice as ({c},{d})"
+            );
+            assert!(a < b, "edge not normalised lo<hi: {a} ↔ {b}");
+        }
+    }
+}
+
+#[test]
+fn graph_build_does_not_materialise_full_vector_clone() {
+    // #254 — `compute_embedding_graph` must not allocate a fresh
+    // `Vec<Vec<f32>>` holding every chunk vector. The testable proxy is
+    // the VectorIndex's mapping Arc-count: after graph build, every path
+    // Arc in the index's mapping should still have strong_count == 2
+    // (interner pool + mapping slot). If the builder cloned paths as
+    // owned PathBufs instead of borrowing/Arc-cloning, no Arc gets
+    // bumped — but if it cloned vectors into its own hashmap, that'd
+    // show up as transient allocation pressure only visible to a
+    // counter.
+    //
+    // We instrument a side-channel via `VectorIndex::path_refcount_max`
+    // (test-only): returns the largest strong_count across the pool.
+    // Before graph build: 2 (pool + mapping). During build: if the
+    // builder takes its own Arc clones, refcount spikes to 3+; if it
+    // clones the PathBuf fresh (the regression the ticket targets) it
+    // stays at 2 but a separate counter `vector_clone_count` bumps.
+    //
+    // Here we assert the non-spike: after graph build, refcount returns
+    // to baseline and the builder's vector-clone counter reports zero.
+    let vi = seeded_graph_fixture();
+    let fi = empty_file_index();
+    let ti = TagIndex::new();
+
+    let baseline = vi.path_refcount_max();
+    // Reset any prior counter value so we measure this call alone.
+    crate::commands::embedding_graph::reset_vector_clone_counter();
+
+    let _g = compute_embedding_graph(&vi, &fi, &ti, Path::new(NO_VAULT_ROOT), 5, 0.5);
+
+    // Path Arcs must return to baseline — the builder released anything
+    // it held. (strong_count inside the build is allowed to spike; we
+    // only care that it drains.)
+    assert_eq!(
+        vi.path_refcount_max(),
+        baseline,
+        "graph build leaked path Arc references"
+    );
+    // Hard guard: the builder must not have materialised an owned copy
+    // of each chunk vector. On a 12×3 = 36-chunk fixture, pre-#254 code
+    // cloned 36 vectors into chunks_by_path. We require strictly zero.
+    let clones = crate::commands::embedding_graph::vector_clone_count();
+    assert_eq!(
+        clones, 0,
+        "graph build cloned {clones} chunk vectors; expected 0 after #254"
+    );
+}

@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 // Use DistDot (not DistCosine): both give the same ranking on L2-normalised
 // vectors, but only DistDot has the AVX2/SSE2 SIMD path in anndists. The
@@ -120,16 +120,28 @@ fn read_u32_ne(path: &Path) -> std::io::Result<u32> {
 /// `insert(path, chunk_idx, vec)` to add, `query(vec, k)` to retrieve.
 pub struct VectorIndex {
     hnsw: Hnsw<'static, f32, DistDot>,
-    /// `id → (vault-relative or absolute path, chunk index within file)`.
-    /// Indexed densely by `id` as the HNSW caller assigns ids monotonically
-    /// from the `mapping` length. Behind a `RwLock` so concurrent reads
-    /// during insert don't block beyond the brief lookup.
-    mapping: RwLock<Vec<(PathBuf, usize)>>,
-    /// #200 — reverse index `path → ids`, kept in sync with `mapping`
-    /// so `mark_deleted(path)` is O(chunks-per-file) instead of O(N).
+    /// `id → (interned path, chunk index within file)`. Indexed densely
+    /// by `id`: the HNSW caller assigns ids monotonically from
+    /// `mapping.len()`. Every chunk of the same file shares one
+    /// `Arc<Path>` pointer (24 B header), saving the ~80 B path body
+    /// that a naive `PathBuf` would duplicate per chunk (#254). Behind
+    /// a `RwLock` so concurrent reads during insert don't block beyond
+    /// the brief lookup; cloning the vector copies Arc pointers, not
+    /// path bytes, so snapshots are cheap.
+    mapping: RwLock<Vec<(Arc<Path>, usize)>>,
+    /// #200 — reverse index `path → ids`, keyed by the same interned
+    /// `Arc<Path>` as `mapping` so lookups are `HashMap<Arc<Path>, _>`
+    /// equality (delegates to `Path::eq`, cheap for same-Arc hits).
     /// Locked separately because deletes only touch this + tombstones,
     /// not the mapping table itself.
-    path_to_ids: RwLock<HashMap<PathBuf, Vec<u32>>>,
+    path_to_ids: RwLock<HashMap<Arc<Path>, Vec<u32>>>,
+    /// #254 — path interner. Every distinct path inserted lives exactly
+    /// once here; every `mapping` / `path_to_ids` entry clones a cheap
+    /// `Arc<Path>` handle. Held behind a `RwLock` (not a `DashMap`)
+    /// because `intern` is a handful of ops per insert and reads already
+    /// dominate; we lean on the existing mapping lock for writer
+    /// coordination.
+    path_pool: RwLock<HashMap<PathBuf, Arc<Path>>>,
     /// #200 — tombstoned ids; filtered out of every `query` and dropped
     /// during `compact_into_fresh`. `RwLock<HashSet>` (not DashSet) since
     /// reads dominate and writers are rare and serialised through the
@@ -153,24 +165,51 @@ impl VectorIndex {
             hnsw,
             mapping: RwLock::new(Vec::with_capacity(capacity_hint)),
             path_to_ids: RwLock::new(HashMap::new()),
+            path_pool: RwLock::new(HashMap::new()),
             tombstones: RwLock::new(HashSet::new()),
         }
+    }
+
+    /// #254 — intern a path into the shared pool, returning a cheap
+    /// `Arc<Path>` handle. Repeated calls with the same `PathBuf` return
+    /// the **same allocation** so every chunk of a file pays one path
+    /// body, not N. Takes the pool lock briefly; caller layers a wider
+    /// mapping/p2i lock above.
+    fn intern(&self, path: &Path) -> Arc<Path> {
+        // Fast path — probe under a read lock so the common "file
+        // already has chunks" case doesn't serialise on the writer.
+        if let Some(existing) = self.path_pool.read().expect("path_pool lock").get(path) {
+            return Arc::clone(existing);
+        }
+        // Slow path — insert under a write lock, re-checking in case
+        // another thread raced us in between the read drop and the
+        // write acquire. Storing the HashMap key as an owned `PathBuf`
+        // (not `Arc<Path>`) keeps equality/hash delegated to the path
+        // bytes; the value is the single shared `Arc<Path>`.
+        let mut pool = self.path_pool.write().expect("path_pool lock");
+        if let Some(existing) = pool.get(path) {
+            return Arc::clone(existing);
+        }
+        let arc: Arc<Path> = Arc::from(path.to_path_buf().into_boxed_path());
+        pool.insert(path.to_path_buf(), Arc::clone(&arc));
+        arc
     }
 
     /// Insert a single chunk vector. Returns the assigned id.
     /// Panics if `vec.len() != DIM`.
     pub fn insert(&self, path: PathBuf, chunk_index: usize, vec: &[f32]) -> u32 {
         assert_eq!(vec.len(), DIM, "vector dim mismatch: got {}", vec.len());
+        let arc_path = self.intern(&path);
         let id = {
             let mut m = self.mapping.write().expect("mapping lock");
             let id = m.len();
-            m.push((path.clone(), chunk_index));
+            m.push((Arc::clone(&arc_path), chunk_index));
             id
         };
         self.path_to_ids
             .write()
             .expect("path_to_ids lock")
-            .entry(path)
+            .entry(arc_path)
             .or_default()
             .push(id as u32);
         self.hnsw.insert((vec, id));
@@ -185,15 +224,32 @@ impl VectorIndex {
         if items.is_empty() {
             return 0;
         }
+        // Intern every distinct path up-front (one pool round-trip per
+        // **file**, not per chunk). Callers typically hand us all chunks
+        // of one file in a single call, so the `HashMap` below usually
+        // collapses to a single entry.
+        let mut seen: HashMap<PathBuf, Arc<Path>> = HashMap::new();
+        let arc_paths: Vec<Arc<Path>> = items
+            .iter()
+            .map(|(p, _, _)| {
+                if let Some(a) = seen.get(p) {
+                    Arc::clone(a)
+                } else {
+                    let a = self.intern(p);
+                    seen.insert(p.clone(), Arc::clone(&a));
+                    a
+                }
+            })
+            .collect();
         let first_id = {
             let mut m = self.mapping.write().expect("mapping lock");
             let mut p2i = self.path_to_ids.write().expect("path_to_ids lock");
             let first = m.len();
-            for (off, (p, c, v)) in items.iter().enumerate() {
+            for (off, ((_, c, v), arc)) in items.iter().zip(arc_paths.iter()).enumerate() {
                 assert_eq!(v.len(), DIM, "vector dim mismatch: got {}", v.len());
                 let id = (first + off) as u32;
-                m.push((p.clone(), *c));
-                p2i.entry(p.clone()).or_default().push(id);
+                m.push((Arc::clone(arc), *c));
+                p2i.entry(Arc::clone(arc)).or_default().push(id);
             }
             first
         };
@@ -243,7 +299,10 @@ impl VectorIndex {
 
     /// Same as `query` but resolves ids to `(path, chunk_index)` for
     /// downstream callers that don't want to round-trip through the
-    /// mapping table themselves.
+    /// mapping table themselves. Returns owned `PathBuf`s so callers
+    /// outside the `embeddings` module don't have to depend on the
+    /// internal `Arc<Path>` representation; this allocates one path
+    /// body per hit which is negligible at `k ≤ 50`.
     pub fn query_with_paths(
         &self,
         vec: &[f32],
@@ -253,8 +312,8 @@ impl VectorIndex {
         let m = self.mapping.read().expect("mapping lock");
         hits.into_iter()
             .map(|(id, d)| {
-                let (p, idx) = m[id as usize].clone();
-                (p, idx, d)
+                let (p, idx) = &m[id as usize];
+                (p.to_path_buf(), *idx, d)
             })
             .collect()
     }
@@ -307,6 +366,9 @@ impl VectorIndex {
     /// tombstoned points.
     pub fn mark_deleted(&self, path: &Path) -> usize {
         let p2i = self.path_to_ids.read().expect("path_to_ids lock");
+        // `HashMap<Arc<Path>, _>::get` dispatches through `Borrow<Path>`
+        // on `Arc<Path>`, so a plain `&Path` lookup works without
+        // allocating a temporary Arc.
         let Some(ids) = p2i.get(path) else { return 0 };
         let mut added = 0;
         let mut ts = self.tombstones.write().expect("tombstones lock");
@@ -344,7 +406,10 @@ impl VectorIndex {
             .read()
             .expect("tombstones lock")
             .clone();
-        let mapping_snapshot: Vec<(PathBuf, usize)> = self
+        // #254 — cloning the mapping now copies Arc pointers (24 B each)
+        // instead of full PathBuf bodies, so the snapshot cost shrinks
+        // from ~30 MB to ~7 MB at 300k chunks.
+        let mapping_snapshot: Vec<(Arc<Path>, usize)> = self
             .mapping
             .read()
             .expect("mapping lock")
@@ -380,8 +445,8 @@ impl VectorIndex {
         let items: Vec<(PathBuf, usize, Vec<f32>)> = survivors
             .into_iter()
             .map(|(old_id, vec)| {
-                let (p, c) = mapping_snapshot[old_id as usize].clone();
-                (p, c, vec)
+                let (p, c) = &mapping_snapshot[old_id as usize];
+                (p.to_path_buf(), *c, vec)
             })
             .collect();
         fresh.bulk_insert(items);
@@ -410,7 +475,11 @@ impl VectorIndex {
             .read()
             .expect("tombstones lock")
             .clone();
-        let mapping_snapshot = self.mapping.read().expect("mapping lock").clone();
+        // #254 — clone as `Vec<(Arc<Path>, usize)>` (Arc pointer copies
+        // only; no path-body duplication). At 300k chunks this snapshot
+        // drops from ~30 MB to ~7 MB of transient RAM.
+        let mapping_snapshot: Vec<(Arc<Path>, usize)> =
+            self.mapping.read().expect("mapping lock").clone();
 
         let indexation = self.hnsw.get_point_indexation();
         let nb_layers = indexation.get_max_level_observed() as usize + 1;
@@ -426,9 +495,45 @@ impl VectorIndex {
                 else {
                     continue;
                 };
-                f(origin_id, path.as_path(), *chunk_idx, point.get_v());
+                f(origin_id, path.as_ref(), *chunk_idx, point.get_v());
             }
             // iterator drops here — read lock released before next layer.
+        }
+    }
+
+    /// #254 — like `for_each_live` but hands the callback an
+    /// `Arc<Path>` clone instead of a borrow. Lets downstream callers
+    /// (e.g. `compute_embedding_graph`) key their own HashMaps by the
+    /// interned path without re-allocating a `String` per chunk. The
+    /// Arc clone is two atomic ops — same cost as a small struct copy.
+    pub fn for_each_live_arc<F>(&self, mut f: F)
+    where
+        F: FnMut(u32, Arc<Path>, usize, &[f32]),
+    {
+        let tomb_snapshot: HashSet<u32> = self
+            .tombstones
+            .read()
+            .expect("tombstones lock")
+            .clone();
+        let mapping_snapshot: Vec<(Arc<Path>, usize)> =
+            self.mapping.read().expect("mapping lock").clone();
+
+        let indexation = self.hnsw.get_point_indexation();
+        let nb_layers = indexation.get_max_level_observed() as usize + 1;
+        for l in 0..nb_layers {
+            let iter = indexation.get_layer_iterator(l);
+            for point in iter {
+                let origin_id = point.get_origin_id() as u32;
+                if tomb_snapshot.contains(&origin_id) {
+                    continue;
+                }
+                let Some((path, chunk_idx)) =
+                    mapping_snapshot.get(origin_id as usize)
+                else {
+                    continue;
+                };
+                f(origin_id, Arc::clone(path), *chunk_idx, point.get_v());
+            }
         }
     }
 
@@ -452,9 +557,17 @@ impl VectorIndex {
             .copied()
             .collect();
         tomb.sort_unstable();
+        // #254 — disk format still serialises owned PathBuf entries so
+        // the wire format is stable across the Arc-interning refactor.
+        // Interning is a runtime-only optimisation; persistence writes
+        // the rehydrated paths via `.to_path_buf()`.
+        let entries: Vec<(PathBuf, usize)> = m
+            .iter()
+            .map(|(p, c)| (p.to_path_buf(), *c))
+            .collect();
         let payload = MappingFile {
             version: MAPPING_VERSION,
-            entries: m.clone(),
+            entries,
             tombstones: tomb,
         };
         let json = serde_json::to_vec(&payload).map_err(|e| {
@@ -523,18 +636,33 @@ impl VectorIndex {
             EmbeddingError::Io(std::io::Error::other(format!("hnsw load: {e}")))
         })?;
 
-        // Rebuild path_to_ids from the loaded mapping. Tombstones come
-        // straight from the dump (or empty on a v1 file).
-        let mut p2i: HashMap<PathBuf, Vec<u32>> = HashMap::new();
-        for (id, (path, _chunk)) in mapping.entries.iter().enumerate() {
-            p2i.entry(path.clone()).or_default().push(id as u32);
+        // #254 — rebuild the `Arc<Path>` interner pool from the on-disk
+        // `PathBuf` entries so post-load inserts keep sharing the same
+        // allocation as the restored mapping. `mapping`/`path_to_ids`
+        // key off these same Arcs.
+        let mut pool: HashMap<PathBuf, Arc<Path>> = HashMap::new();
+        let mut p2i: HashMap<Arc<Path>, Vec<u32>> = HashMap::new();
+        let mut interned_mapping: Vec<(Arc<Path>, usize)> =
+            Vec::with_capacity(mapping.entries.len());
+        for (id, (path, chunk)) in mapping.entries.into_iter().enumerate() {
+            let arc = match pool.get(&path) {
+                Some(a) => Arc::clone(a),
+                None => {
+                    let a: Arc<Path> = Arc::from(path.clone().into_boxed_path());
+                    pool.insert(path, Arc::clone(&a));
+                    a
+                }
+            };
+            p2i.entry(Arc::clone(&arc)).or_default().push(id as u32);
+            interned_mapping.push((arc, chunk));
         }
         let tombstones: HashSet<u32> = mapping.tombstones.into_iter().collect();
 
         Ok(Self {
             hnsw,
-            mapping: RwLock::new(mapping.entries),
+            mapping: RwLock::new(interned_mapping),
             path_to_ids: RwLock::new(p2i),
+            path_pool: RwLock::new(pool),
             tombstones: RwLock::new(tombstones),
         })
     }
@@ -554,6 +682,42 @@ impl VectorIndex {
                 Self::new(capacity_hint)
             }
         }
+    }
+
+    /// #254 — number of distinct interned paths. Public so external
+    /// integration code can verify RAM expectations on large vaults;
+    /// also used by `path_interner_dedupes_across_chunks_of_same_file`.
+    pub fn distinct_path_count(&self) -> usize {
+        self.path_pool.read().expect("path_pool lock").len()
+    }
+
+    /// Test-only: max strong_count across the interner pool. Used by the
+    /// embedding-graph RAM guard test to detect leaked Arc clones in
+    /// downstream builders. Kept `#[cfg(test)]`-free because the module
+    /// boundary between `embeddings::` and `tests::embedding_graph`
+    /// makes cross-crate cfg-gating brittle — the cost is one O(N_paths)
+    /// lock-read, only invoked by tests.
+    pub fn path_refcount_max(&self) -> usize {
+        self.path_pool
+            .read()
+            .expect("path_pool lock")
+            .values()
+            .map(Arc::strong_count)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Test-only: snapshot the interned `Arc<Path>` handles held by the
+    /// mapping, in id order. Lets `mapping_entries_share_arc_within_same_file`
+    /// assert `Arc::ptr_eq` between chunk entries of the same file.
+    #[doc(hidden)]
+    pub fn mapping_arcs_for_test(&self) -> Vec<Arc<Path>> {
+        self.mapping
+            .read()
+            .expect("mapping lock")
+            .iter()
+            .map(|(p, _)| Arc::clone(p))
+            .collect()
     }
 }
 
@@ -1084,5 +1248,64 @@ mod tests {
             let hits = fresh.query(p, 10);
             assert!(hits.len() <= 10);
         }
+    }
+
+    // ---- #254: path interning / RAM budgets --------------------------------
+
+    /// Inserting many chunks across few files must share one path
+    /// allocation per file. Pool cardinality is the testable proxy for
+    /// "no per-chunk PathBuf duplicates".
+    #[test]
+    fn path_interner_dedupes_across_chunks_of_same_file() {
+        let idx = VectorIndex::new(64);
+        // 5 files × 8 chunks each → 40 inserts, 5 distinct paths.
+        for f in 0..5u64 {
+            let p = PathBuf::from(format!("note-{f}.md"));
+            for c in 0..8usize {
+                idx.insert(p.clone(), c, &unit_vec(f * 100 + c as u64));
+            }
+        }
+        assert_eq!(idx.len(), 40);
+        assert_eq!(
+            idx.distinct_path_count(),
+            5,
+            "interner pool must hold one entry per distinct file, got {}",
+            idx.distinct_path_count()
+        );
+    }
+
+    #[test]
+    fn bulk_insert_shares_interned_path_across_chunks() {
+        let idx = VectorIndex::new(16);
+        let p = PathBuf::from("multi.md");
+        let items: Vec<(PathBuf, usize, Vec<f32>)> = (0..6usize)
+            .map(|c| (p.clone(), c, unit_vec(c as u64)))
+            .collect();
+        idx.bulk_insert(items);
+        assert_eq!(idx.len(), 6);
+        assert_eq!(
+            idx.distinct_path_count(),
+            1,
+            "bulk_insert must intern the single path, got {}",
+            idx.distinct_path_count()
+        );
+    }
+
+    #[test]
+    fn mapping_entries_share_arc_within_same_file() {
+        // Strong guarantee: the Arc<Path> handed out by the interner is
+        // reference-identical for every chunk of the same file.
+        let idx = VectorIndex::new(8);
+        let p = PathBuf::from("ident.md");
+        idx.insert(p.clone(), 0, &unit_vec(1));
+        idx.insert(p.clone(), 1, &unit_vec(2));
+        idx.insert(p.clone(), 2, &unit_vec(3));
+        let arcs = idx.mapping_arcs_for_test();
+        assert_eq!(arcs.len(), 3);
+        // All three Arc<Path> entries must be the same allocation.
+        assert!(Arc::ptr_eq(&arcs[0], &arcs[1]));
+        assert!(Arc::ptr_eq(&arcs[1], &arcs[2]));
+        // And each Arc has strong_count ≥ 2 (interner pool + mapping).
+        assert!(Arc::strong_count(&arcs[0]) >= 2);
     }
 }
