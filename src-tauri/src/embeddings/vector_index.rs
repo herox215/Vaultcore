@@ -453,90 +453,6 @@ impl VectorIndex {
         Ok(fresh)
     }
 
-    /// #235 — yield every live (non-tombstoned) chunk via callback. Used
-    /// by the embedding-graph builder to enumerate source vectors
-    /// without copying the whole index.
-    ///
-    /// Walks HNSW layers one at a time and drops each layer's iterator
-    /// before stepping to the next — same pattern as `compact_into_fresh`,
-    /// for the same reason: holding a single iterator across all layers
-    /// would pin the `points_by_layer` read lock for the full walk and
-    /// stall concurrent inserts from the embed worker.
-    ///
-    /// Tombstones are snapshotted once at entry; ids tombstoned during
-    /// the walk continue to be yielded (consistent snapshot semantics).
-    /// Mapping is read once per yield to resolve `(path, chunk_index)`.
-    pub fn for_each_live<F>(&self, mut f: F)
-    where
-        F: FnMut(u32, &Path, usize, &[f32]),
-    {
-        let tomb_snapshot: HashSet<u32> = self
-            .tombstones
-            .read()
-            .expect("tombstones lock")
-            .clone();
-        // #254 — clone as `Vec<(Arc<Path>, usize)>` (Arc pointer copies
-        // only; no path-body duplication). At 300k chunks this snapshot
-        // drops from ~30 MB to ~7 MB of transient RAM.
-        let mapping_snapshot: Vec<(Arc<Path>, usize)> =
-            self.mapping.read().expect("mapping lock").clone();
-
-        let indexation = self.hnsw.get_point_indexation();
-        let nb_layers = indexation.get_max_level_observed() as usize + 1;
-        for l in 0..nb_layers {
-            let iter = indexation.get_layer_iterator(l);
-            for point in iter {
-                let origin_id = point.get_origin_id() as u32;
-                if tomb_snapshot.contains(&origin_id) {
-                    continue;
-                }
-                let Some((path, chunk_idx)) =
-                    mapping_snapshot.get(origin_id as usize)
-                else {
-                    continue;
-                };
-                f(origin_id, path.as_ref(), *chunk_idx, point.get_v());
-            }
-            // iterator drops here — read lock released before next layer.
-        }
-    }
-
-    /// #254 — like `for_each_live` but hands the callback an
-    /// `Arc<Path>` clone instead of a borrow. Lets downstream callers
-    /// (e.g. `compute_embedding_graph`) key their own HashMaps by the
-    /// interned path without re-allocating a `String` per chunk. The
-    /// Arc clone is two atomic ops — same cost as a small struct copy.
-    pub fn for_each_live_arc<F>(&self, mut f: F)
-    where
-        F: FnMut(u32, Arc<Path>, usize, &[f32]),
-    {
-        let tomb_snapshot: HashSet<u32> = self
-            .tombstones
-            .read()
-            .expect("tombstones lock")
-            .clone();
-        let mapping_snapshot: Vec<(Arc<Path>, usize)> =
-            self.mapping.read().expect("mapping lock").clone();
-
-        let indexation = self.hnsw.get_point_indexation();
-        let nb_layers = indexation.get_max_level_observed() as usize + 1;
-        for l in 0..nb_layers {
-            let iter = indexation.get_layer_iterator(l);
-            for point in iter {
-                let origin_id = point.get_origin_id() as u32;
-                if tomb_snapshot.contains(&origin_id) {
-                    continue;
-                }
-                let Some((path, chunk_idx)) =
-                    mapping_snapshot.get(origin_id as usize)
-                else {
-                    continue;
-                };
-                f(origin_id, Arc::clone(path), *chunk_idx, point.get_v());
-            }
-        }
-    }
-
     /// Persist the index to `dir` (created if missing). Writes three files:
     /// `vectors.hnsw.graph`, `vectors.hnsw.data`, `vectors.mapping.json`.
     /// Mapping is written atomically (tmp + rename); the hnsw_rs dump is not
@@ -713,22 +629,6 @@ impl VectorIndex {
             }
         }
         out
-    }
-
-    /// Test-only: max strong_count across the interner pool. Used by the
-    /// embedding-graph RAM guard test to detect leaked Arc clones in
-    /// downstream builders. Kept `#[cfg(test)]`-free because the module
-    /// boundary between `embeddings::` and `tests::embedding_graph`
-    /// makes cross-crate cfg-gating brittle — the cost is one O(N_paths)
-    /// lock-read, only invoked by tests.
-    pub fn path_refcount_max(&self) -> usize {
-        self.path_pool
-            .read()
-            .expect("path_pool lock")
-            .values()
-            .map(Arc::strong_count)
-            .max()
-            .unwrap_or(0)
     }
 
     /// Test-only: snapshot the interned `Arc<Path>` handles held by the
