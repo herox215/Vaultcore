@@ -28,6 +28,10 @@ import { mount, unmount } from "svelte";
 
 import { resolveAttachment } from "./embeds";
 import { resolveTarget } from "./wikiLink";
+import {
+  findTemplateExprRanges,
+  isInsideTemplateExpr,
+} from "./templateExprRanges";
 import { vaultStore } from "../../store/vaultStore";
 import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";
@@ -569,6 +573,7 @@ function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const text = view.state.doc.toString();
   const head = view.state.selection.main.head;
+  const exprRanges = findTemplateExprRanges(text);
 
   const matches: EmbedMatch[] = [];
 
@@ -583,6 +588,7 @@ function buildDecorations(view: EditorView): DecorationSet {
 
     // Skip code blocks / inline code.
     if (isInsideCodeBlock(view.state, from)) continue;
+    if (isInsideTemplateExpr(exprRanges, from, to)) continue;
 
     // Cursor inside → show raw syntax, do not replace.
     if (head >= from && head <= to) continue;
@@ -643,6 +649,7 @@ function buildDecorations(view: EditorView): DecorationSet {
     const to = from + m[0].length;
 
     if (isInsideCodeBlock(view.state, from)) continue;
+    if (isInsideTemplateExpr(exprRanges, from, to)) continue;
     if (head >= from && head <= to) continue;
 
     // Skip remote URLs — out of scope for this PR; the browser will fail the

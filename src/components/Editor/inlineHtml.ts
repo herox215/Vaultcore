@@ -39,6 +39,11 @@ import { syntaxTree } from "@codemirror/language";
 import DOMPurify from "dompurify";
 import type { Extension } from "@codemirror/state";
 
+import {
+  findTemplateExprRanges,
+  isInsideTemplateExpr,
+} from "./templateExprRanges";
+
 // ── Sanitizer config ─────────────────────────────────────────────────────────
 
 const PURIFY_CONFIG = {
@@ -244,6 +249,18 @@ function buildDecorations(state: EditorState): InlineHtmlValue {
   const doc = state.doc;
 
   const viewport = state.field(viewportField, false) ?? UNKNOWN_VIEWPORT;
+
+  // `{{ ... }}` bodies are template source, not Markdown. Anything an
+  // HTML-looking substring there represents is literal text of the user's
+  // expression — do not sanitize/render it as HTML (#295). We scan the same
+  // slice we're about to iterate so coordinates align.
+  const exprScanFrom = viewport.from === -1 ? 0 : viewport.from;
+  const exprScanTo = viewport.to === -1 ? doc.length : viewport.to;
+  const exprRanges = findTemplateExprRanges(
+    doc.sliceString(exprScanFrom, exprScanTo),
+    exprScanFrom,
+  );
+
   const iterateArgs: {
     from?: number;
     to?: number;
@@ -254,6 +271,8 @@ function buildDecorations(state: EditorState): InlineHtmlValue {
 
       const from = node.from;
       const to = node.to;
+
+      if (isInsideTemplateExpr(exprRanges, from, to)) return;
 
       nodeRanges.push({ from, to });
 

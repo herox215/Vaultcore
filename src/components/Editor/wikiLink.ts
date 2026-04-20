@@ -15,6 +15,11 @@ import { RangeSetBuilder } from "@codemirror/state";
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 
+import {
+  findTemplateExprRanges,
+  isInsideTemplateExpr,
+} from "./templateExprRanges";
+
 const HIDE = Decoration.replace({});
 
 // ── Wiki-link regex ────────────────────────────────────────────────────────────
@@ -109,6 +114,7 @@ function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const text = view.state.doc.toString();
   const head = view.state.selection.main.head;
+  const exprRanges = findTemplateExprRanges(text);
 
   const matches: WikiMatch[] = [];
 
@@ -122,6 +128,7 @@ function buildDecorations(view: EditorView): DecorationSet {
     const to = from + m[0].length;
 
     if (isInsideCodeBlock(view.state, from)) continue;
+    if (isInsideTemplateExpr(exprRanges, from, to)) continue;
 
     const stem: string = stripKnownExt(rawTarget);
     const resolved = resolvedLinks.has(stem.toLowerCase());
