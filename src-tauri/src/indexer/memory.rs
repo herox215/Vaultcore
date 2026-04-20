@@ -6,7 +6,7 @@
 // if the hash matches the previous entry the file is skipped (IDX-03).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Per-file metadata cached in memory.
 #[derive(Debug, Clone)]
@@ -23,9 +23,19 @@ pub struct FileMeta {
 }
 
 /// In-memory index of vault files keyed by canonical absolute path.
+///
+/// Issue #248 — a secondary `rel_to_abs` map turns previously O(n) lookups by
+/// relative path (alias ops, rel→entry access) into O(1). Both maps are kept
+/// in strict sync by every mutator; the invariant `entries.len() ==
+/// rel_to_abs.len()` is asserted by unit tests. Call sites outside this
+/// module must continue to go through the public API so the invariant holds.
 #[derive(Debug, Default)]
 pub struct FileIndex {
     entries: HashMap<PathBuf, FileMeta>,
+    /// Vault-relative path → absolute path. Enables O(1) `rel_path → entry`
+    /// lookup via `entries.get(abs_path)`. Kept in sync with `entries` by
+    /// every mutator in this module.
+    rel_to_abs: HashMap<String, PathBuf>,
 }
 
 impl FileIndex {
@@ -33,7 +43,26 @@ impl FileIndex {
         Self::default()
     }
 
+    /// Insert or overwrite the entry at `abs_path`.
+    ///
+    /// If a prior entry at `abs_path` mapped to a different `relative_path`,
+    /// the stale rel→abs entry is pruned so `rel_to_abs` never points at an
+    /// abs_path whose stored meta has a different `relative_path`.
     pub fn insert(&mut self, abs_path: PathBuf, meta: FileMeta) {
+        if let Some(existing) = self.entries.get(&abs_path) {
+            if existing.relative_path != meta.relative_path {
+                // Only drop the stale mapping if it still points at *this*
+                // abs_path — another entry may have claimed that rel_path
+                // between calls.
+                if let Some(mapped) = self.rel_to_abs.get(&existing.relative_path) {
+                    if mapped == &abs_path {
+                        self.rel_to_abs.remove(&existing.relative_path);
+                    }
+                }
+            }
+        }
+        self.rel_to_abs
+            .insert(meta.relative_path.clone(), abs_path.clone());
         self.entries.insert(abs_path, meta);
     }
 
@@ -42,11 +71,22 @@ impl FileIndex {
     }
 
     pub fn remove(&mut self, abs_path: &PathBuf) -> Option<FileMeta> {
-        self.entries.remove(abs_path)
+        let removed = self.entries.remove(abs_path)?;
+        // Only drop the rel→abs entry if it still points at the removed
+        // abs_path. This guards against the theoretical race where two entries
+        // briefly shared the same rel_path (shouldn't happen in practice, but
+        // cheap to be precise).
+        if let Some(mapped) = self.rel_to_abs.get(&removed.relative_path) {
+            if mapped == abs_path {
+                self.rel_to_abs.remove(&removed.relative_path);
+            }
+        }
+        Some(removed)
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.rel_to_abs.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -58,34 +98,61 @@ impl FileIndex {
     }
 
     /// Vault-relative paths of all indexed files (order not guaranteed).
+    ///
+    /// Allocates a fresh `Vec<String>` and clones every path — prefer
+    /// `iter_relative_paths` when the caller only needs to borrow (#248).
     pub fn all_relative_paths(&self) -> Vec<String> {
         self.entries.values().map(|m| m.relative_path.clone()).collect()
+    }
+
+    /// Borrowed iterator over vault-relative paths. Zero allocations, zero
+    /// clones — suitable for hot read-only paths that previously had to
+    /// `all_relative_paths` just to iterate (#248).
+    pub fn iter_relative_paths(&self) -> impl Iterator<Item = &str> {
+        self.rel_to_abs.keys().map(|s| s.as_str())
     }
 
     pub fn all_entries(&self) -> impl Iterator<Item = (&PathBuf, &FileMeta)> {
         self.entries.iter()
     }
 
+    /// O(1) lookup of a `FileMeta` by vault-relative path.
+    pub fn entry_for_rel(&self, rel_path: &str) -> Option<&FileMeta> {
+        let abs = self.rel_to_abs.get(rel_path)?;
+        self.entries.get(abs)
+    }
+
+    /// O(1) reverse lookup: rel_path → canonical absolute path.
+    pub fn abs_for_rel(&self, rel_path: &str) -> Option<&Path> {
+        self.rel_to_abs.get(rel_path).map(|p| p.as_path())
+    }
+
+    /// O(1) existence check — avoids the `Vec` allocation of
+    /// `all_relative_paths` when the caller only needs a yes/no.
+    pub fn contains_rel(&self, rel_path: &str) -> bool {
+        self.rel_to_abs.contains_key(rel_path)
+    }
+
     /// Update the aliases slot for the entry matching `rel_path`. No-op when
     /// the rel_path is not in the index (aliases are populated as part of
     /// `AddFile`; this is only used for in-place refreshes from `UpdateLinks`).
+    ///
+    /// O(1) via the `rel_to_abs` index (#248).
     pub fn set_aliases_for_rel(&mut self, rel_path: &str, aliases: Vec<String>) {
-        for meta in self.entries.values_mut() {
-            if meta.relative_path == rel_path {
+        if let Some(abs) = self.rel_to_abs.get(rel_path) {
+            if let Some(meta) = self.entries.get_mut(abs) {
                 meta.aliases = aliases;
-                return;
             }
         }
     }
 
     /// Return the aliases stored for `rel_path`, or an empty vector.
+    ///
+    /// O(1) via the `rel_to_abs` index (#248).
     pub fn aliases_for_rel(&self, rel_path: &str) -> Vec<String> {
-        for meta in self.entries.values() {
-            if meta.relative_path == rel_path {
-                return meta.aliases.clone();
-            }
-        }
-        Vec::new()
+        self.entry_for_rel(rel_path)
+            .map(|m| m.aliases.clone())
+            .unwrap_or_default()
     }
 }
 
