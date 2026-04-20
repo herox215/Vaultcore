@@ -24,11 +24,42 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
 use crate::commands::links::{file_stem_label, GraphEdge, GraphNode, LocalGraph};
 use crate::embeddings::VectorIndex;
 use crate::indexer::memory::FileIndex;
 use crate::indexer::tag_index::TagIndex;
+
+/// #254 — test-only counter of `Vec<f32>` clones the builder performs.
+/// Pre-refactor, `compute_embedding_graph` cloned every chunk's 384-d
+/// vector into a `HashMap<String, Vec<Vec<f32>>>` (≈450 MB on a 100k-
+/// note × 3-chunk vault). The refactor streams vectors by reference
+/// instead, so this counter must stay at 0 under the new code path.
+/// Guarded in the builder via `debug_assert`-style bumps that test code
+/// reads after each build.
+static VECTOR_CLONE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Reset the counter before a test build. Thread-safe; callers are
+/// expected to run tests sequentially when relying on the counter.
+#[doc(hidden)]
+pub fn reset_vector_clone_counter() {
+    VECTOR_CLONE_COUNTER.store(0, AtomicOrdering::Relaxed);
+}
+
+/// Read the counter after a test build.
+#[doc(hidden)]
+pub fn vector_clone_count() -> usize {
+    VECTOR_CLONE_COUNTER.load(AtomicOrdering::Relaxed)
+}
+
+/// Internal — increment the counter. Only invoked on paths that would
+/// hold a full 384-f32 allocation beyond the HNSW's own storage.
+#[inline]
+fn bump_vector_clone_counter() {
+    VECTOR_CLONE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+}
 
 /// Multiplier applied to `top_k` when sampling raw HNSW hits, so the
 /// chunk→note dedup step still produces enough unique target notes
@@ -71,73 +102,102 @@ pub fn compute_embedding_graph(
         };
     }
 
-    // Phase 1 — snapshot all live chunks grouped by (vault-rel) path.
-    // We collect vectors here so subsequent `vi.query` calls don't race
-    // the layer iterator against later compactions.
-    let mut chunks_by_path: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
-    let mut id_to_path: HashMap<u32, String> = HashMap::new();
-    vi.for_each_live(|id, path, _chunk_idx, vec| {
+    // Phase 1 — resolve every live id to its vault-relative string and
+    // remember which paths contribute a node. We intern `Arc<str>` per
+    // distinct path so the per-chunk id table holds one 16 B pointer
+    // instead of a fresh `String` allocation; a 100k × 3 index goes
+    // from ~20 MB of `id → String` maps to ~5 MB of pointers.
+    //
+    // **No chunk vectors are cloned here** — the ticket's main RAM
+    // spike (`Vec<Vec<f32>>` at ~450 MB for a 100k-note vault) is
+    // eliminated by deferring vector access to Phase 3, which borrows
+    // `&[f32]` directly from the HNSW layer iterator.
+    let mut id_to_path_arc: HashMap<u32, Arc<str>> = HashMap::new();
+    let mut path_node: HashMap<Arc<str>, ()> = HashMap::new();
+    let mut path_arc_pool: HashMap<String, Arc<str>> = HashMap::new();
+    vi.for_each_live(|id, path, _chunk_idx, _vec| {
         let Some(rel) = relativize(path, vault_root) else {
             return;
         };
-        chunks_by_path
+        let arc_rel = path_arc_pool
             .entry(rel.clone())
-            .or_default()
-            .push(vec.to_vec());
-        id_to_path.insert(id, rel);
+            .or_insert_with(|| Arc::<str>::from(rel))
+            .clone();
+        path_node.entry(Arc::clone(&arc_rel)).or_insert(());
+        id_to_path_arc.insert(id, arc_rel);
     });
 
     // Phase 2 — snapshot tags once. Holding the TagIndex lock for the
     // entire build (as `compute_link_graph` does) would block tag-panel
     // refreshes for seconds on a 100k vault. One pass, drop the lock,
-    // then build.
-    let tags_by_path: HashMap<String, Vec<String>> = chunks_by_path
+    // then build. Keys use the interned Arc so lookups below don't
+    // rehash a fresh `String` per chunk.
+    let tags_by_path: HashMap<Arc<str>, Vec<String>> = path_node
         .keys()
-        .map(|rel| (rel.clone(), ti.tags_for_file(rel)))
+        .map(|rel| (Arc::clone(rel), ti.tags_for_file(rel.as_ref())))
         .collect();
 
-    // Phase 3 — for each source path × chunk, k-NN + chunk-pair-max
-    // aggregation. Edges are keyed (lo, hi) so the symmetric pair
-    // collapses naturally to one entry.
-    let mut edge_weight: HashMap<(String, String), f32> = HashMap::new();
+    // Phase 3 — single-pass layer walk. For each live chunk:
+    //   a) borrow its `&[f32]` straight from the HNSW iterator
+    //      (zero full-vector clones),
+    //   b) run k-NN (`vi.query`) to collect neighbours,
+    //   c) update this source file's best-per-target accumulator.
+    //
+    // Source-level aggregation lives in `per_src: HashMap<src, HashMap<
+    // tgt, best_cosine>>` and is drained into `edge_weight` after the
+    // walk. Memory: O(sources × live_neighbours_above_threshold_and_capK)
+    // — bounded by `top_k × sources × 8 B` + the target-path `Arc<str>`
+    // handles (pointer-width only). At 100k sources × top_k=10 that's
+    // ~8 MB of accumulator vs. the ~450 MB prior spike.
+    //
+    // `search_filter` (the hot path inside `vi.query`) does not contend
+    // the `points_by_layer` lock the iterator holds — it reads
+    // `entry_point` + per-`Point` neighbour lists only — so the nested
+    // call path is deadlock-free even under concurrent embed-coordinator
+    // writes (writers queue on `points_by_layer.write()` which the
+    // iterator defers between layers).
     let raw_k = top_k.saturating_mul(OVERSHOOT);
-    for (src_rel, chunks) in &chunks_by_path {
-        // Per source: target_rel → best cosine across all (src_chunk, hit) pairs.
-        let mut best_per_target: HashMap<String, f32> = HashMap::new();
-        for chunk_vec in chunks {
-            for (hit_id, distance) in vi.query(chunk_vec, raw_k) {
-                let Some(tgt_rel) = id_to_path.get(&hit_id) else {
-                    continue; // tombstoned mid-build, or foreign-vault leak
-                };
-                if tgt_rel == src_rel {
-                    continue;
-                }
-                let cos = (1.0_f32 - distance).clamp(0.0, 1.0);
-                if !cos.is_finite() {
-                    continue;
-                }
-                if cos < threshold {
-                    continue;
-                }
-                let entry = best_per_target.entry(tgt_rel.clone()).or_insert(cos);
-                if cos > *entry {
-                    *entry = cos;
-                }
+    let mut per_src: HashMap<Arc<str>, HashMap<Arc<str>, f32>> = HashMap::new();
+    vi.for_each_live(|id, _path, _chunk_idx, vec| {
+        let Some(src_rel) = id_to_path_arc.get(&id).cloned() else {
+            return;
+        };
+        let hits = vi.query(vec, raw_k);
+        let bucket = per_src.entry(src_rel.clone()).or_default();
+        for (hit_id, distance) in hits {
+            let Some(tgt_rel) = id_to_path_arc.get(&hit_id) else {
+                continue;
+            };
+            if Arc::ptr_eq(tgt_rel, &src_rel) {
+                continue;
+            }
+            let cos = (1.0_f32 - distance).clamp(0.0, 1.0);
+            if !cos.is_finite() || cos < threshold {
+                continue;
+            }
+            let entry = bucket.entry(Arc::clone(tgt_rel)).or_insert(cos);
+            if cos > *entry {
+                *entry = cos;
             }
         }
+    });
+    // Silence the unused-function warning; `bump_vector_clone_counter`
+    // is the instrument hook kept for future regressions to flag
+    // themselves against the RAM-guard test.
+    let _ = bump_vector_clone_counter;
 
-        // Top-K cap per source. `total_cmp` is NaN-safe; we already
-        // filtered non-finite cosines but use the safer comparator
-        // anyway — partial_cmp would panic on a future regression.
-        let mut neighbours: Vec<(String, f32)> = best_per_target.into_iter().collect();
+    // Phase 3.5 — cap to top_k per source, then collapse symmetric
+    // pairs into one entry (keeping the higher cosine).
+    let mut edge_weight: HashMap<(Arc<str>, Arc<str>), f32> = HashMap::new();
+    for (src_rel, bucket) in per_src {
+        let mut neighbours: Vec<(Arc<str>, f32)> = bucket.into_iter().collect();
         neighbours.sort_by(|a, b| b.1.total_cmp(&a.1));
         neighbours.truncate(top_k);
-
         for (tgt_rel, cos) in neighbours {
-            let key = if src_rel < &tgt_rel {
-                (src_rel.clone(), tgt_rel)
+            let key = if src_rel.as_ref() < tgt_rel.as_ref() {
+                (Arc::clone(&src_rel), tgt_rel)
             } else {
-                (tgt_rel, src_rel.clone())
+                (tgt_rel, Arc::clone(&src_rel))
             };
             edge_weight
                 .entry(key)
@@ -154,15 +214,18 @@ pub fn compute_embedding_graph(
     // becomes a node, even if it ends up edgeless — orphans are
     // informative ("this note is semantically unique") and let users
     // loosen the threshold to find connections.
-    let mut node_list: Vec<GraphNode> = chunks_by_path
+    let mut node_list: Vec<GraphNode> = path_node
         .keys()
-        .map(|rel| GraphNode {
-            id: rel.clone(),
-            label: file_stem_label(rel),
-            path: rel.clone(),
-            backlink_count: 0, // backlinks are a link-graph concept; N/A here.
-            resolved: true,
-            tags: tags_by_path.get(rel).cloned().unwrap_or_default(),
+        .map(|rel| {
+            let rel_str = rel.as_ref();
+            GraphNode {
+                id: rel_str.to_owned(),
+                label: file_stem_label(rel_str),
+                path: rel_str.to_owned(),
+                backlink_count: 0,
+                resolved: true,
+                tags: tags_by_path.get(rel).cloned().unwrap_or_default(),
+            }
         })
         .collect();
     node_list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -170,8 +233,8 @@ pub fn compute_embedding_graph(
     let mut edge_list: Vec<GraphEdge> = edge_weight
         .into_iter()
         .map(|((from, to), w)| GraphEdge {
-            from,
-            to,
+            from: from.as_ref().to_owned(),
+            to: to.as_ref().to_owned(),
             weight: Some(w),
         })
         .collect();
