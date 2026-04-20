@@ -60,6 +60,7 @@ vi.mock("../../../store/editorStore", () => {
 import { templateLivePlugin } from "../templateLivePreview";
 // Pull the store handles to flip their values between tests.
 import { vaultStore } from "../../../store/vaultStore";
+import { setResolvedLinks } from "../wikiLink";
 
 function mount(doc: string, cursor = 0): EditorView {
   const anchor = Math.min(Math.max(cursor, 0), doc.length);
@@ -136,6 +137,52 @@ describe("templateLivePlugin — rendering", () => {
     const doc = "xxx {{vault.nonsense}} hi";
     const view = mount(doc, doc.length);
     expect(widgets(view)).toHaveLength(0);
+  });
+
+  it("parses [[...]] in rendered output into clickable wiki-link spans (#297)", () => {
+    // Seed the resolver so the target is known to be resolved.
+    setResolvedLinks(new Map([["first", "first.md"]]));
+
+    // An expression whose rendered string value includes `[[first]]`.
+    const doc = 'x {{"[[first]]"}} y';
+    const view = mount(doc, 0);
+
+    // The widget's `value` (pre-render string) still matches as before.
+    const ws = widgets(view);
+    expect(ws).toHaveLength(1);
+    expect(ws[0]!.text).toBe("[[first]]");
+
+    // The actual rendered DOM should contain an anchor-style span with the
+    // wiki-link data attributes and the resolved class.
+    const anchor = view.dom.querySelector(".vc-template-rendered [data-wiki-target]");
+    expect(anchor).not.toBeNull();
+    expect(anchor!.getAttribute("data-wiki-target")).toBe("first");
+    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    expect(anchor!.classList.contains("cm-wikilink-resolved")).toBe(true);
+    expect(anchor!.textContent).toBe("first");
+  });
+
+  it("marks unresolved targets with the unresolved class (#297)", () => {
+    setResolvedLinks(new Map());
+    const doc = 'x {{"[[ghost]]"}} y';
+    const view = mount(doc, 0);
+
+    const anchor = view.dom.querySelector(".vc-template-rendered [data-wiki-target]");
+    expect(anchor).not.toBeNull();
+    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("false");
+    expect(anchor!.classList.contains("cm-wikilink-unresolved")).toBe(true);
+  });
+
+  it("aliased [[target|alias]] shows the alias text but targets the stem (#297)", () => {
+    setResolvedLinks(new Map([["real", "real.md"]]));
+    const doc = 'x {{"[[real|Display]]"}} y';
+    const view = mount(doc, 0);
+
+    const anchor = view.dom.querySelector(".vc-template-rendered [data-wiki-target]");
+    expect(anchor).not.toBeNull();
+    expect(anchor!.textContent).toBe("Display");
+    expect(anchor!.getAttribute("data-wiki-target")).toBe("real");
+    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
   });
 
   it("re-renders when the backing store changes", () => {
