@@ -301,7 +301,40 @@ pub fn create_file_impl(state: &VaultState, parent: String, name: String) -> Res
     record_write(state, final_path.clone());
     std::fs::write(&final_path, "").map_err(VaultError::Io)?;
 
+    // #307: write_ignore (D-12) suppresses the watcher's natural create event,
+    // which would normally populate FileIndex. Insert directly so `resolve_link`
+    // (and anything else that reads FileIndex) finds the new file immediately,
+    // instead of falling back to the "create-at-root" path on the next click.
+    if let Ok(vault_root) = get_vault_root(state) {
+        sync_file_index_create(state, &final_path, &vault_root);
+    }
+
     Ok(final_path.to_string_lossy().into_owned())
+}
+
+/// Insert `canonical` into FileIndex with a minimal FileMeta. Used by
+/// `create_file_impl` to compensate for the write_ignore-suppressed watcher
+/// event. Hash stays empty until the file is saved with content; the title
+/// defaults to the filename stem so wiki-link resolution works right away.
+fn sync_file_index_create(state: &VaultState, canonical: &Path, vault_root: &Path) {
+    let Ok(mut fi) = state.file_index.write() else { return };
+    let rel = match canonical.strip_prefix(vault_root) {
+        Ok(p) => p.to_string_lossy().replace('\\', "/"),
+        Err(_) => return,
+    };
+    let title = canonical
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    fi.insert(
+        canonical.to_path_buf(),
+        FileMeta {
+            relative_path: rel,
+            hash: String::new(),
+            title,
+            aliases: Vec::new(),
+        },
+    );
 }
 
 #[tauri::command]

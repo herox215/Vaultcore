@@ -15,6 +15,7 @@
   import { backlinksStore } from "../../store/backlinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { vaultStore } from "../../store/vaultStore";
+  import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { commandRegistry } from "../../lib/commands/registry";
   import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
   import {
@@ -574,6 +575,15 @@
       if (cancelledStale) return;
       vaultStore.applyFileChange(payload);
       searchStore.setIndexStale(true);
+      // #307: wiki-link resolution uses a cached stem→relPath map populated
+      // once per vault-open (see wikiLink.ts setResolvedLinks). Creates,
+      // renames and deletes all shift the map — request a reload so that
+      // clicks on `[[new-name]]` rendered by template expressions open the
+      // real file instead of falling through to the create-at-root handler.
+      // `modify` leaves the topology untouched, so skip it.
+      if (payload.kind !== "modify") {
+        resolvedLinksStore.requestReload();
+      }
     }).then((fn) => {
       if (cancelledStale) { fn(); return; }
       unlistenStale = fn;
