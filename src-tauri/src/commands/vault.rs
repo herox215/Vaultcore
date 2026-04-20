@@ -179,7 +179,14 @@ pub async fn open_vault(
         let mut guard = state.index_coordinator.lock().map_err(|_| VaultError::LockPoisoned)?;
         *guard = None;
     }
-    let coordinator = crate::indexer::IndexCoordinator::new(&canonical).await.map_err(|e| {
+    // #277: hand the coordinator the state-owned FileIndex so user-initiated
+    // rename/move updates land in the same map the coordinator reads from.
+    let coordinator = crate::indexer::IndexCoordinator::new_with_file_index(
+        &canonical,
+        std::sync::Arc::clone(&state.file_index),
+    )
+    .await
+    .map_err(|e| {
         log::error!("Failed to create IndexCoordinator: {e:?}");
         e
     })?;

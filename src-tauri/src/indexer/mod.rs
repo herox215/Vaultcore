@@ -159,7 +159,27 @@ impl IndexCoordinator {
     /// task is spawned. This is what surfaces `IndexLocked` / `IndexCorrupt`
     /// errors back to the caller instead of letting the writer task die
     /// silently after `new` already returned `Ok` (issue #108).
+    ///
+    /// Test-only convenience: creates a fresh FileIndex. Production callers go
+    /// through `new_with_file_index` so the coordinator shares the state-owned
+    /// `Arc<RwLock<FileIndex>>` and user-initiated rename/move updates (#277)
+    /// are observable both here and in state-scoped lookups.
     pub async fn new(vault_path: &Path) -> Result<Self, VaultError> {
+        Self::new_with_file_index(vault_path, Arc::new(RwLock::new(FileIndex::new()))).await
+    }
+
+    /// Like `new`, but uses `file_index` as the shared in-memory FileIndex.
+    /// See the rationale in `VaultState::file_index` (#277).
+    pub async fn new_with_file_index(
+        vault_path: &Path,
+        file_index: Arc<RwLock<FileIndex>>,
+    ) -> Result<Self, VaultError> {
+        // Start from a clean in-memory map on every open_vault — a previous
+        // session's FileIndex may have stale entries that the upcoming
+        // `index_vault` walk wouldn't otherwise evict.
+        if let Ok(mut guard) = file_index.write() {
+            guard.clear();
+        }
         let (schema, path_field, title_field, body_field) = tantivy_index::build_schema();
 
         let vaultcore_dir = vault_path.join(".vaultcore");
@@ -189,7 +209,6 @@ impl IndexCoordinator {
 
         let index = Arc::new(index);
         let reader = Arc::new(reader);
-        let file_index = Arc::new(RwLock::new(FileIndex::new()));
         let matcher = Arc::new(Mutex::new(nucleo_matcher::Matcher::new(
             nucleo_matcher::Config::DEFAULT,
         )));
