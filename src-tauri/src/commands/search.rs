@@ -513,8 +513,8 @@ fn hydrate_hits(
     query: &str,
     fused: Vec<crate::embeddings::FusedHit>,
 ) -> Result<Vec<HybridHit>, VaultError> {
-    use tantivy::query::TermQuery;
-    use tantivy::schema::IndexRecordOption;
+    use std::collections::HashMap;
+    use tantivy::query::TermSetQuery;
     use tantivy::Term;
 
     let Some((index, reader)) = bm25_handles else {
@@ -549,32 +549,56 @@ fn hydrate_hits(
         .map_err(|_| VaultError::IndexCorrupt)?;
     snippet_gen.set_max_num_chars(200);
 
+    // #252: replace the per-hit TermQuery loop with a single TermSetQuery over
+    // `path_field` containing every fused path. Path is a STRING (untokenised)
+    // field so `Term::from_field_text` exact-matches. We then index the
+    // resolved docs by path and walk `fused` in its original order to
+    // reconstruct the output — ranking is fully preserved.
+    //
+    // We collect unscored doc addresses (`DocSetCollector`) since we only need
+    // to look up the stored title/body per path — the fused score is already
+    // authoritative for the output ordering.
+    let terms: Vec<Term> = fused
+        .iter()
+        .map(|h| Term::from_field_text(path_field, &h.path))
+        .collect();
+    let set_q = TermSetQuery::new(terms);
+    let resolved: std::collections::HashSet<tantivy::DocAddress> = searcher
+        .search(&set_q, &tantivy::collector::DocSetCollector)
+        .map_err(|_| VaultError::IndexCorrupt)?;
+
+    // Map path -> (title, snippet_html, match_count). Resolving doc + snippet
+    // once per unique path avoids the k×query-plan cost of the previous loop.
+    let mut by_path: HashMap<String, (String, String, usize)> =
+        HashMap::with_capacity(resolved.len());
+    for addr in resolved {
+        let doc = searcher
+            .doc::<TantivyDocument>(addr)
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        let path = doc
+            .get_first(path_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let title = doc
+            .get_first(title_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let snip = snippet_gen.snippet_from_doc(&doc);
+        let mc = snip.highlighted().len();
+        by_path.insert(path, (title, snip.to_html(), mc));
+    }
+
     let mut out = Vec::with_capacity(fused.len());
     for hit in fused {
-        // Look up the doc by exact path. Path field is stored as STRING
-        // (untokenised) so a TermQuery exact-matches.
-        let term = Term::from_field_text(path_field, &hit.path);
-        let term_q = TermQuery::new(term, IndexRecordOption::Basic);
-        let lookup: Vec<(f32, tantivy::DocAddress)> = searcher
-            .search(&term_q, &TopDocs::with_limit(1).order_by_score())
-            .map_err(|_| VaultError::IndexCorrupt)?;
-
-        let (title, snippet, match_count) = if let Some((_score, addr)) = lookup.first() {
-            let doc = searcher
-                .doc::<TantivyDocument>(*addr)
-                .map_err(|_| VaultError::IndexCorrupt)?;
-            let title = doc
-                .get_first(title_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let snip = snippet_gen.snippet_from_doc(&doc);
-            let mc = snip.highlighted().len();
-            (title, snip.to_html(), mc)
-        } else {
-            (filename_title(&hit.path), String::new(), 0)
+        let (title, snippet, match_count) = match by_path.remove(&hit.path) {
+            Some(v) => v,
+            None => (filename_title(&hit.path), String::new(), 0),
         };
-
         out.push(HybridHit {
             path: hit.path,
             title,
@@ -690,4 +714,149 @@ pub async fn rebuild_index(
     done_rx.await.map_err(|_| VaultError::IndexCorrupt)?;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "embeddings"))]
+mod hydrate_tests {
+    //! Parity tests for `hydrate_hits` (#252). The pre-fix implementation
+    //! ran one `TermQuery` lookup per fused hit; the fix runs a single
+    //! `TermSetQuery` pass. These tests lock down the output shape so the
+    //! rewrite cannot subtly change the hydrated result list.
+    use super::*;
+    use crate::embeddings::FusedHit;
+    use crate::indexer::tantivy_index::build_schema;
+    use tantivy::doc;
+    use tantivy::Index;
+
+    /// Build a tiny in-RAM index with three docs and return the
+    /// `(index, reader)` Arcs that `hydrate_hits` expects.
+    fn make_index() -> (
+        std::sync::Arc<tantivy::Index>,
+        std::sync::Arc<tantivy::IndexReader>,
+    ) {
+        let (schema, path_field, title_field, body_field) = build_schema();
+        let index = Index::create_in_ram(schema);
+        let mut writer = index.writer(15_000_000).unwrap();
+        writer
+            .add_document(doc!(
+                path_field => "a.md",
+                title_field => "Alpha",
+                body_field => "alpha bravo delta echo foxtrot",
+            ))
+            .unwrap();
+        writer
+            .add_document(doc!(
+                path_field => "sub/b.md",
+                title_field => "Bravo",
+                body_field => "bravo charlie and some other words about charlie here",
+            ))
+            .unwrap();
+        writer
+            .add_document(doc!(
+                path_field => "c.md",
+                title_field => "Charlie",
+                body_field => "charlie alpha alpha alpha",
+            ))
+            .unwrap();
+        writer.commit().unwrap();
+        let reader = index.reader().unwrap();
+        (std::sync::Arc::new(index), std::sync::Arc::new(reader))
+    }
+
+    fn fused(path: &str, score: f32, bm25_rank: Option<u32>, vec_rank: Option<u32>) -> FusedHit {
+        FusedHit {
+            path: path.to_string(),
+            score,
+            bm25_rank,
+            vec_rank,
+            bm25_score: bm25_rank.map(|_| 1.0),
+            vec_score: vec_rank.map(|_| 0.5),
+        }
+    }
+
+    #[test]
+    fn hydrate_preserves_fused_order_and_fields() {
+        let (index, reader) = make_index();
+        let handles = (index, reader);
+        let fused_list = vec![
+            fused("c.md", 0.9, Some(1), Some(1)),
+            fused("a.md", 0.5, Some(2), None),
+            fused("sub/b.md", 0.1, None, Some(2)),
+        ];
+
+        let out =
+            hydrate_hits(Some(&handles), "charlie", fused_list.clone()).expect("hydrate ok");
+
+        // Order matches the input fused list exactly (ranking preserved).
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].path, "c.md");
+        assert_eq!(out[1].path, "a.md");
+        assert_eq!(out[2].path, "sub/b.md");
+
+        // Titles come from the stored `title` field.
+        assert_eq!(out[0].title, "Charlie");
+        assert_eq!(out[1].title, "Alpha");
+        assert_eq!(out[2].title, "Bravo");
+
+        // Per-source metadata is passed through untouched.
+        assert_eq!(out[0].bm25_rank, Some(1));
+        assert_eq!(out[1].bm25_rank, Some(2));
+        assert_eq!(out[2].bm25_rank, None);
+        assert_eq!(out[0].vec_rank, Some(1));
+        assert_eq!(out[1].vec_rank, None);
+        assert_eq!(out[2].vec_rank, Some(2));
+
+        // Fused score unchanged.
+        assert!((out[0].score - 0.9).abs() < 1e-6);
+        assert!((out[1].score - 0.5).abs() < 1e-6);
+        assert!((out[2].score - 0.1).abs() < 1e-6);
+
+        // Snippets for docs that contain the query term have at least one
+        // highlighted match; `c.md` and `sub/b.md` both contain "charlie".
+        assert!(out[0].match_count >= 1, "c.md should highlight charlie");
+        assert!(out[0].snippet.contains("<b>"));
+        assert!(out[2].match_count >= 1, "sub/b.md should highlight charlie");
+        // `a.md` body does not contain "charlie" → snippet may be empty or
+        // un-highlighted, match_count == 0.
+        assert_eq!(out[1].match_count, 0);
+    }
+
+    #[test]
+    fn hydrate_falls_back_to_filename_for_missing_docs() {
+        let (index, reader) = make_index();
+        let handles = (index, reader);
+        let fused_list = vec![
+            fused("c.md", 0.9, Some(1), None),
+            // ghost path not in the index — simulates the race during
+            // initial indexing where the vec side knows a path that
+            // Tantivy has not committed yet.
+            fused("ghost/missing.md", 0.3, None, Some(1)),
+        ];
+
+        let out = hydrate_hits(Some(&handles), "alpha", fused_list).expect("hydrate ok");
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].path, "c.md");
+        assert_eq!(out[0].title, "Charlie");
+
+        // Missing doc keeps its path, title derived from filename stem,
+        // empty snippet, zero match_count.
+        assert_eq!(out[1].path, "ghost/missing.md");
+        assert_eq!(out[1].title, "missing");
+        assert_eq!(out[1].snippet, "");
+        assert_eq!(out[1].match_count, 0);
+    }
+
+    #[test]
+    fn hydrate_no_tantivy_handles_uses_filename_titles() {
+        let fused_list = vec![
+            fused("x.md", 0.8, None, Some(1)),
+            fused("dir/y.md", 0.4, None, Some(2)),
+        ];
+        let out = hydrate_hits(None, "anything", fused_list).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].title, "x");
+        assert_eq!(out[1].title, "y");
+        assert!(out.iter().all(|h| h.snippet.is_empty()));
+    }
 }
