@@ -22,6 +22,7 @@ export interface DefaultCommandContext {
   exportActiveNotePdf: () => void;
   toggleReadingMode: () => void;
   insertTemplate: () => void;
+  openHome: () => void;
 }
 
 /** Id constants — consumed by tests and anyone dispatching by id. */
@@ -41,6 +42,7 @@ export const CMD_IDS = {
   NEXT_TAB: "tabs:next",
   CLOSE_TAB: "tabs:close",
   OPEN_GRAPH: "vault:open-graph",
+  OPEN_HOME: "vault:open-home",
   COMMAND_PALETTE: "app:command-palette",
   TOGGLE_BOOKMARK: "vault:toggle-bookmark",
   OPEN_TODAY: "vault:open-today",
@@ -70,6 +72,7 @@ export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
   { id: CMD_IDS.NEXT_TAB, name: "Nächster Tab", hotkey: { meta: true, key: "Tab" } },
   { id: CMD_IDS.CLOSE_TAB, name: "Tab schließen", hotkey: { meta: true, key: "w" } },
   { id: CMD_IDS.OPEN_GRAPH, name: "Graph-Ansicht öffnen", hotkey: { meta: true, shift: true, key: "g" } },
+  { id: CMD_IDS.OPEN_HOME, name: "Vault-Startseite öffnen", hotkey: { meta: true, shift: true, key: "h" } },
   { id: CMD_IDS.COMMAND_PALETTE, name: "Befehlspalette", hotkey: { meta: true, key: "p" } },
   { id: CMD_IDS.TOGGLE_BOOKMARK, name: "Lesezeichen umschalten", hotkey: { meta: true, key: "d" } },
   { id: CMD_IDS.OPEN_TODAY, name: "Tagesnotiz öffnen", hotkey: { meta: true, shift: true, key: "d" } },
@@ -98,6 +101,7 @@ export function registerDefaultCommands(ctx: DefaultCommandContext): void {
     [CMD_IDS.NEXT_TAB]: ctx.cycleTabNext,
     [CMD_IDS.CLOSE_TAB]: ctx.closeActiveTab,
     [CMD_IDS.OPEN_GRAPH]: ctx.openGraph,
+    [CMD_IDS.OPEN_HOME]: ctx.openHome,
     [CMD_IDS.COMMAND_PALETTE]: ctx.openCommandPalette,
     [CMD_IDS.TOGGLE_BOOKMARK]: ctx.toggleBookmark,
     [CMD_IDS.OPEN_TODAY]: ctx.openTodayNote,

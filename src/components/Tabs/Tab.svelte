@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { X } from "lucide-svelte";
+  import { X, Home } from "lucide-svelte";
   import type { Tab } from "../../store/tabStore";
+  import { isHomeCanvasPath, homeTabLabel } from "../../lib/homeCanvas";
 
   let {
     tab,
@@ -14,12 +15,16 @@
     onclose: () => void;
   } = $props();
 
+  const isHome = $derived(isHomeCanvasPath(tab.filePath));
+
   // Derive the display filename from the full path. Graph tabs use a
-  // friendly label instead of the sentinel filePath.
+  // friendly label; the home canvas shows the vault name (#279).
   const filename = $derived(
     tab.type === "graph"
       ? "Graph"
-      : (tab.filePath.split("/").pop() ?? tab.filePath),
+      : isHome
+        ? homeTabLabel(tab.filePath)
+        : (tab.filePath.split("/").pop() ?? tab.filePath),
   );
 
   function handleClick(e: MouseEvent) {
@@ -67,6 +72,11 @@
   aria-selected={isActive}
   tabindex={isActive ? 0 : -1}
 >
+  {#if isHome}
+    <span class="vc-tab-home-icon" aria-hidden="true">
+      <Home size={14} strokeWidth={1.75} />
+    </span>
+  {/if}
   <span class="vc-tab-label">{filename}</span>
 
   {#if tab.isDirty}
@@ -134,6 +144,17 @@
     border-radius: 50%;
     background: var(--color-accent);
     flex-shrink: 0;
+  }
+
+  .vc-tab-home-icon {
+    display: flex;
+    align-items: center;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+
+  .vc-tab--active .vc-tab-home-icon {
+    color: var(--color-text);
   }
 
   .vc-tab-close {
