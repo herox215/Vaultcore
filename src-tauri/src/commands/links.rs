@@ -408,9 +408,13 @@ pub async fn update_links_after_rename(
     // For rewritten sources we use the in-memory `new_content` — it is byte-
     // identical to what we just wrote (the write just completed, nothing else
     // can race since write_ignore already suppresses the watcher loopback).
+    //
+    // Perf (#250): build the vault-wide StemIndex once so each
+    // `update_file_with_index` call avoids the old 2×O(N) scan per link.
     {
+        let stem_index = link_graph::StemIndex::build(&all_paths);
         let mut lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+        apply_rewrites_to_graph(&mut lg, &rewrites, &stem_index);
         // Also update the renamed file itself in the graph. This read stays:
         // this function never rewrote the renamed file, so we don't have its
         // content in memory. It's also a single read, not N, so outside the
@@ -419,7 +423,7 @@ pub async fn update_links_after_rename(
         let new_abs = vault_root.join(&new_path);
         if let Ok(content) = std::fs::read_to_string(&new_abs) {
             let links = link_graph::extract_links(&content);
-            lg.update_file(&new_path, links, &all_paths);
+            lg.update_file_with_index(&new_path, links, &stem_index);
         }
     }
 
@@ -438,15 +442,18 @@ pub async fn update_links_after_rename(
 /// Issue #258: takes `(rel_path, content)` pairs so the graph update does not
 /// re-read files that `update_links_after_rename` just wrote. The content is
 /// parsed in-place via `link_graph::extract_links`; the graph itself is updated
-/// via `LinkGraph::update_file`. No filesystem access.
+/// via `LinkGraph::update_file_with_index`. No filesystem access.
+///
+/// Issue #250: takes a pre-built `StemIndex` so the rewrites share a single
+/// `O(N)` build instead of re-building inside every `update_file` call.
 fn apply_rewrites_to_graph(
     lg: &mut LinkGraph,
     rewrites: &[(String, String)],
-    all_paths: &[String],
+    stem_index: &link_graph::StemIndex,
 ) {
     for (source_rel, content) in rewrites {
         let links = link_graph::extract_links(content);
-        lg.update_file(source_rel, links, all_paths);
+        lg.update_file_with_index(source_rel, links, stem_index);
     }
 }
 
@@ -985,7 +992,8 @@ mod tests {
         ];
 
         let mut lg = LinkGraph::new();
-        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+        let stem_index = link_graph::StemIndex::build(&all_paths);
+        apply_rewrites_to_graph(&mut lg, &rewrites, &stem_index);
 
         let out_a = lg.outgoing_for("src_a.md").expect("src_a must have outgoing");
         assert_eq!(out_a.len(), 1);
@@ -1014,8 +1022,9 @@ mod tests {
         let rewrites = vec![("src.md".to_string(), "[[Target]]".to_string())];
 
         let mut lg = LinkGraph::new();
-        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
-        apply_rewrites_to_graph(&mut lg, &rewrites, &all_paths);
+        let stem_index = link_graph::StemIndex::build(&all_paths);
+        apply_rewrites_to_graph(&mut lg, &rewrites, &stem_index);
+        apply_rewrites_to_graph(&mut lg, &rewrites, &stem_index);
 
         let out = lg.outgoing_for("src.md").unwrap();
         assert_eq!(out.len(), 1);

@@ -139,7 +139,94 @@ fn path_depth(p: &str) -> usize {
 /// Returns the vault-relative path of the resolved file, or `None` if no match.
 ///
 /// Security (T-04-01): returns a vault-relative path, never an absolute path.
+///
+/// Perf (#250): for bulk resolution (cold-start indexing, rename-link rewrite)
+/// prefer `resolve_link_with_index` + a shared `StemIndex` — this wrapper
+/// builds a single-shot index internally, which is O(N) once instead of the
+/// old O(N) per call. For isolated single-link resolution the wrapper still
+/// beats the legacy implementation: a single prebuild + hash lookup replaces
+/// two full scans with per-path `to_lowercase`.
 pub fn resolve_link(target_raw: &str, source_folder: &str, all_rel_paths: &[String]) -> Option<String> {
+    let index = StemIndex::build(all_rel_paths);
+    resolve_link_with_index(target_raw, source_folder, &index)
+}
+
+/// Pre-computed stem index over `all_rel_paths` for the hot link-resolution
+/// path (issue #250).
+///
+/// Replaces the two per-call `O(N)` scans with per-path `to_lowercase` inside
+/// `resolve_link` with a single prebuilt map. Each bucket is pre-sorted by
+/// `(path_depth, path)` so Stage 2 + Stage 3 collapse to `candidates[0]` —
+/// Stage 1 (same-folder) is a linear scan of the (typically ≤ 5-entry)
+/// candidate list.
+///
+/// Invariants:
+/// - `paths[idx]` is an owned clone of the original relative path so the
+///   returned `Option<String>` matches the legacy contract byte-for-byte.
+/// - Each value in `by_stem_lower` is sorted by `(path_depth, path)` and
+///   contains indices into `paths` (not paths directly) to keep memory flat.
+/// - Lowercased stems are computed **once per path at build time** instead of
+///   once per (path × link) inside the hot loop.
+#[derive(Debug, Default)]
+pub struct StemIndex {
+    /// Owned copies of the input relative paths. Indexed by the values in
+    /// `by_stem_lower`.
+    paths: Vec<String>,
+    /// Lowercased stem → sorted indices into `paths` (sorted by depth asc,
+    /// then alphabetical — matches the spec-prescribed tiebreak order).
+    by_stem_lower: HashMap<String, Vec<u32>>,
+}
+
+impl StemIndex {
+    /// Build a stem index from a slice of vault-relative paths.
+    ///
+    /// Cost: O(N log k) where N = number of paths and k = bucket size. In
+    /// practice k is small (1–5 per stem) so this is effectively linear.
+    pub fn build(all_rel_paths: &[String]) -> Self {
+        // Materialise the owned copy once so the build is self-contained and
+        // lookup can hand out owned `String`s without borrowing the caller's
+        // slice.
+        let paths: Vec<String> = all_rel_paths.to_vec();
+        let mut by_stem_lower: HashMap<String, Vec<u32>> = HashMap::with_capacity(paths.len());
+
+        for (idx, p) in paths.iter().enumerate() {
+            let stem_lower = path_stem(p).to_lowercase();
+            by_stem_lower
+                .entry(stem_lower)
+                .or_default()
+                .push(idx as u32);
+        }
+
+        // Pre-sort every bucket once so resolve can pick candidates[0] for
+        // Stage 2 + 3 without sorting at call time (Stage 3 falls out of the
+        // alphabetical secondary key).
+        for bucket in by_stem_lower.values_mut() {
+            bucket.sort_by(|&a, &b| {
+                let pa = &paths[a as usize];
+                let pb = &paths[b as usize];
+                let da = path_depth(pa);
+                let db = path_depth(pb);
+                da.cmp(&db).then_with(|| pa.cmp(pb))
+            });
+        }
+
+        StemIndex { paths, by_stem_lower }
+    }
+}
+
+/// Resolve a wiki-link target against a pre-built `StemIndex`.
+///
+/// Semantically identical to `resolve_link` but does no per-path
+/// `to_lowercase` and no full-vault scan — the stem bucket is typically
+/// ≤ 5 entries, so Stage 1 is O(k) and Stages 2+3 are O(1) via the
+/// pre-sorted bucket.
+///
+/// Security (T-04-01): returns a vault-relative path, never an absolute path.
+pub fn resolve_link_with_index(
+    target_raw: &str,
+    source_folder: &str,
+    index: &StemIndex,
+) -> Option<String> {
     // Strip .md or .canvas suffix from the target if the user included one.
     let stem = target_raw
         .strip_suffix(".md")
@@ -147,31 +234,20 @@ pub fn resolve_link(target_raw: &str, source_folder: &str, all_rel_paths: &[Stri
         .unwrap_or(target_raw);
     let stem_lower = stem.to_lowercase();
 
-    // Stage 1: exact stem match in the same folder as the source
-    for p in all_rel_paths {
-        if path_folder(p) == source_folder && path_stem(p).to_lowercase() == stem_lower {
+    let bucket = index.by_stem_lower.get(&stem_lower)?;
+
+    // Stage 1: exact stem match in the same folder as the source.
+    // Bucket is small — a linear scan is faster than any secondary map.
+    for &i in bucket {
+        let p = &index.paths[i as usize];
+        if path_folder(p) == source_folder {
             return Some(p.clone());
         }
     }
 
-    // Stage 2 + 3: collect all stem matches, sort by (depth, path), return first
-    let mut candidates: Vec<&String> = all_rel_paths
-        .iter()
-        .filter(|p| path_stem(p).to_lowercase() == stem_lower)
-        .collect();
-
-    if candidates.is_empty() {
-        return None;
-    }
-
-    // Sort ascending by depth first, then alphabetically
-    candidates.sort_by(|a, b| {
-        let da = path_depth(a);
-        let db = path_depth(b);
-        da.cmp(&db).then_with(|| a.cmp(b))
-    });
-
-    candidates.first().map(|p| (*p).clone())
+    // Stage 2 + 3: bucket is pre-sorted by (depth, path), so the winner is
+    // the first entry.
+    bucket.first().map(|&i| index.paths[i as usize].clone())
 }
 
 // ── StoredLink (internal) ──────────────────────────────────────────────────────
@@ -232,6 +308,25 @@ impl LinkGraph {
         links: Vec<ParsedLink>,
         all_rel_paths: &[String],
     ) {
+        // Perf (#250): build the stem index once for this file's link set.
+        // Bulk callers should prefer `update_file_with_index` so the index is
+        // shared across the batch.
+        let index = StemIndex::build(all_rel_paths);
+        self.update_file_with_index(source_rel, links, &index);
+    }
+
+    /// Same as `update_file` but reuses a pre-built `StemIndex` — the
+    /// bulk-indexing path (cold start, rename-link rewrite).
+    ///
+    /// Cuts the link-graph phase of `index_vault` from O(total_links × N)
+    /// down to O(N) + O(total_links × k) where k = average stem-bucket size.
+    /// See issue #250.
+    pub fn update_file_with_index(
+        &mut self,
+        source_rel: &str,
+        links: Vec<ParsedLink>,
+        index: &StemIndex,
+    ) {
         // Clear previous state for this source so updates are idempotent.
         self.remove_file(source_rel);
 
@@ -239,7 +334,8 @@ impl LinkGraph {
         let stored: Vec<StoredLink> = links
             .into_iter()
             .map(|link| {
-                let resolved = resolve_link(&link.target_raw, &source_folder, all_rel_paths);
+                let resolved =
+                    resolve_link_with_index(&link.target_raw, &source_folder, index);
                 if let Some(target) = &resolved {
                     self.incoming
                         .entry(target.clone())
@@ -392,25 +488,18 @@ impl LinkGraph {
 /// `resolve_link` from vault root (`""`) determines the winner (shortest path,
 /// then alphabetical).
 pub fn resolved_map(all_rel_paths: &[String]) -> HashMap<String, String> {
-    // Group files by lowercased stem
-    let mut by_stem: HashMap<String, Vec<String>> = HashMap::new();
-    for p in all_rel_paths {
-        let stem = path_stem(p).to_lowercase();
-        by_stem.entry(stem).or_default().push(p.clone());
-    }
-
-    let mut map = HashMap::new();
-    for (stem, paths) in by_stem {
-        if paths.len() == 1 {
-            map.insert(stem, paths.into_iter().next().unwrap());
-        } else {
-            // Ambiguous: use resolve_link from vault root to pick the winner
-            if let Some(winner) = resolve_link(&stem, "", all_rel_paths) {
-                map.insert(stem, winner);
-            }
+    // Perf (#250): reuse the pre-sorted stem buckets so the ambiguous-collision
+    // branch picks candidates[0] directly instead of rebuilding a StemIndex
+    // per colliding stem (`resolve_link` used to allocate one per call).
+    let index = StemIndex::build(all_rel_paths);
+    let mut map = HashMap::with_capacity(index.by_stem_lower.len());
+    for (stem, bucket) in &index.by_stem_lower {
+        // Bucket is pre-sorted (depth, path); the first entry is always the
+        // Stage 2/3 winner whether there's one candidate or several.
+        if let Some(&idx) = bucket.first() {
+            map.insert(stem.clone(), index.paths[idx as usize].clone());
         }
     }
-
     map
 }
 
@@ -616,6 +705,190 @@ mod tests {
     fn resolve_link_returns_none_for_missing_target() {
         let paths = vec!["Other.md".to_string()];
         assert!(resolve_link("Missing", "", &paths).is_none());
+    }
+
+    // ── #250: StemIndex parity ─────────────────────────────────────────────
+    //
+    // Issue #250: the hot-path optimisation replaces the 2×O(N) scan +
+    // per-link `to_lowercase` churn with a prebuilt `StemIndex`. Parity is
+    // the must-have — the optimised `resolve_link_with_index` must produce
+    // byte-for-byte identical `Option<String>` output for every input to
+    // the legacy 2-pass algorithm, across mixed-case stems, nested folders,
+    // `.md` / `.canvas` suffixes, and the 3 spec-prescribed tiebreak stages.
+
+    /// Reference implementation: the pre-#250 2-pass resolver, preserved
+    /// verbatim inside the test module so parity can be checked against the
+    /// exact legacy behaviour regardless of future edits to `resolve_link`.
+    fn resolve_link_legacy(
+        target_raw: &str,
+        source_folder: &str,
+        all_rel_paths: &[String],
+    ) -> Option<String> {
+        let stem = target_raw
+            .strip_suffix(".md")
+            .or_else(|| target_raw.strip_suffix(".canvas"))
+            .unwrap_or(target_raw);
+        let stem_lower = stem.to_lowercase();
+
+        for p in all_rel_paths {
+            if path_folder(p) == source_folder
+                && path_stem(p).to_lowercase() == stem_lower
+            {
+                return Some(p.clone());
+            }
+        }
+
+        let mut candidates: Vec<&String> = all_rel_paths
+            .iter()
+            .filter(|p| path_stem(p).to_lowercase() == stem_lower)
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(|a, b| {
+            let da = path_depth(a);
+            let db = path_depth(b);
+            da.cmp(&db).then_with(|| a.cmp(b))
+        });
+        candidates.first().map(|p| (*p).clone())
+    }
+
+    fn parity_fixture_paths() -> Vec<String> {
+        // Mixed-case stems across several folders, collisions at multiple
+        // depths, `.canvas` extension, and a same-folder duplicate candidate.
+        vec![
+            "Root.md".to_string(),
+            "Zeta.md".to_string(),
+            "alpha/Note.md".to_string(),
+            "alpha/nested/Note.md".to_string(),
+            "beta/NOTE.md".to_string(),
+            "beta/sub/note.md".to_string(),
+            "canvas/mycanvas.canvas".to_string(),
+            "gamma/Unique.md".to_string(),
+            "gamma/Dup.md".to_string(),
+            "delta/Dup.md".to_string(),
+            "epsilon/DÜSSELDORF.md".to_string(),
+            "epsilon/düsseldorf.md".to_string(),
+        ]
+    }
+
+    #[test]
+    fn resolve_link_with_index_parity_across_stages() {
+        let paths = parity_fixture_paths();
+        let index = StemIndex::build(&paths);
+
+        // Broad range of inputs: exact case, lowered case, suffix, unicode,
+        // from several source folders.
+        let sources = ["", "alpha/", "alpha/nested/", "beta/", "beta/sub/",
+                        "canvas/", "delta/", "epsilon/", "unrelated/"];
+        let targets = [
+            "Root", "root", "ROOT", "Root.md",
+            "Zeta", "zeta",
+            "Note", "note", "NOTE", "Note.md",
+            "mycanvas", "mycanvas.canvas", "MYCANVAS",
+            "Unique", "unique",
+            "Dup", "dup",
+            "Düsseldorf", "düsseldorf", "DÜSSELDORF",
+            "Missing", "",
+        ];
+
+        for source in &sources {
+            for target in &targets {
+                let legacy = resolve_link_legacy(target, source, &paths);
+                let fast = resolve_link_with_index(target, source, &index);
+                assert_eq!(
+                    legacy, fast,
+                    "parity mismatch: target={:?} source={:?}", target, source,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_link_delegates_to_stem_index_parity() {
+        // The public `resolve_link` wrapper must also be parity-identical
+        // against the preserved legacy — it now delegates to StemIndex but
+        // the contract is unchanged.
+        let paths = parity_fixture_paths();
+        let sources = ["", "alpha/", "beta/", "epsilon/"];
+        let targets = ["Note", "root", "DÜSSELDORF", "mycanvas", "Missing"];
+        for source in &sources {
+            for target in &targets {
+                assert_eq!(
+                    resolve_link_legacy(target, source, &paths),
+                    resolve_link(target, source, &paths),
+                    "wrapper parity: target={:?} source={:?}", target, source,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stem_index_scale_parity_5k_paths() {
+        // Microbench-flavoured parity smoke test: build a 5k-path vault with
+        // ~1.2k unique stems + collisions across depths and verify the fast
+        // path returns identical resolutions for a representative link set.
+        //
+        // Kept at 5k (not 100k) so the test stays unit-fast; the point is
+        // parity under realistic bucket-size distributions, not a timing
+        // assertion. Real 100k-scale perf is measured in the acceptance
+        // criteria on issue #250.
+        let mut paths: Vec<String> = Vec::with_capacity(5_000);
+        for i in 0..5_000 {
+            let depth = i % 4; // 0..=3 nested folders
+            let stem_id = i / 4; // creates 4-wide collisions per stem
+            let prefix = match depth {
+                0 => String::new(),
+                1 => format!("folder{}/", stem_id % 10),
+                2 => format!("folder{}/sub{}/", stem_id % 10, stem_id % 7),
+                _ => format!("a{}/b{}/c{}/", stem_id % 3, stem_id % 5, stem_id % 11),
+            };
+            // Mix cases in the stem so the lowercase step is exercised.
+            let stem = if i % 3 == 0 {
+                format!("Note{}", stem_id)
+            } else if i % 3 == 1 {
+                format!("NOTE{}", stem_id)
+            } else {
+                format!("note{}", stem_id)
+            };
+            paths.push(format!("{}{}.md", prefix, stem));
+        }
+
+        let index = StemIndex::build(&paths);
+        // Resolve 200 probes: mix of existing stems, missing stems, and
+        // suffix-bearing targets. Parity check against the legacy resolver.
+        let sources = ["", "folder1/", "folder2/sub3/", "a1/b2/c3/"];
+        for i in 0..200 {
+            let target = match i % 4 {
+                0 => format!("Note{}", i),
+                1 => format!("NOTE{}", i * 2),
+                2 => format!("missing{}", i),
+                _ => format!("note{}.md", i * 3),
+            };
+            let source = sources[i % sources.len()];
+            let legacy = resolve_link_legacy(&target, source, &paths);
+            let fast = resolve_link_with_index(&target, source, &index);
+            assert_eq!(
+                legacy, fast,
+                "scale-parity mismatch at i={}: target={:?} source={:?}",
+                i, target, source,
+            );
+        }
+    }
+
+    #[test]
+    fn stem_index_is_reusable_for_multiple_links() {
+        // The stem index is built once per batch; resolving N links against
+        // the same index must not mutate it nor alter later results.
+        let paths = parity_fixture_paths();
+        let index = StemIndex::build(&paths);
+
+        let first = resolve_link_with_index("Note", "alpha/", &index);
+        let _ = resolve_link_with_index("Missing", "zz/", &index);
+        let _ = resolve_link_with_index("root", "", &index);
+        let again = resolve_link_with_index("Note", "alpha/", &index);
+        assert_eq!(first, again);
     }
 
     // ── LinkGraph incremental semantics ────────────────────────────────────
