@@ -4,6 +4,7 @@
   import { activeViewStore } from "../../store/activeViewStore";
   import { listTemplates, readTemplate } from "../../ipc/commands";
   import { substituteTemplateVars } from "../../lib/templateSubstitution";
+  import { currentVaultRoot } from "../../lib/vaultApiStoreBridge";
   import { toastStore } from "../../store/toastStore";
   import { tabStore } from "../../store/tabStore";
   import type { EditorView } from "@codemirror/view";
@@ -96,7 +97,9 @@
     if (!currentVaultPath) return;
     try {
       const raw = await readTemplate(currentVaultPath, filename);
-      const content = substituteTemplateVars(raw, activeNoteTitle());
+      const content = substituteTemplateVars(raw, activeNoteTitle(), {
+        vaultRoot: currentVaultRoot(),
+      });
       insertAtCursor(content);
       onClose();
     } catch {

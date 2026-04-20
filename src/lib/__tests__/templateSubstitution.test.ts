@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { substituteTemplateVars } from "../templateSubstitution";
+import { createVaultRoot } from "../vaultApi";
 
 describe("substituteTemplateVars", () => {
   beforeEach(() => {
@@ -82,5 +83,60 @@ describe("substituteTemplateVars", () => {
     expect(substituteTemplateVars("{{date}} {{time}}", "x")).toBe(
       "2026-12-31 00:00",
     );
+  });
+});
+
+describe("substituteTemplateVars — vault expressions (#283)", () => {
+  // Reuse the fake-timer setup from the outer block for date-sensitive tests.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 4, 7, 3));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const vaultRoot = createVaultRoot({
+    readVault: () => ({
+      name: "MyVault",
+      path: "/v/MyVault",
+      fileList: ["a.md", "b.md", "c.md"],
+    }),
+    readTags: () => [{ tag: "#idea", count: 2 }],
+    readBookmarks: () => [],
+    readNoteContent: () => null,
+  });
+
+  it("substitutes {{vault.name}} with the current vault name", () => {
+    expect(
+      substituteTemplateVars("Vault: {{vault.name}}", "t", { vaultRoot }),
+    ).toBe("Vault: MyVault");
+  });
+
+  it("substitutes {{vault.notes.count()}} with the note count", () => {
+    expect(
+      substituteTemplateVars("{{vault.notes.count()}} notes", "t", { vaultRoot }),
+    ).toBe("3 notes");
+  });
+
+  it("evaluates where/select chains to comma-separated strings", () => {
+    expect(
+      substituteTemplateVars(
+        "{{vault.notes.where(n => n.name == 'a.md').select(n => n.title).toArray()}}",
+        "t",
+        { vaultRoot },
+      ),
+    ).toBe("a");
+  });
+
+  it("renders unknown identifiers as inline errors (not crashes)", () => {
+    const out = substituteTemplateVars("{{bogus}}", "t", { vaultRoot });
+    expect(out).toMatch(/^\{\{!err:/);
+  });
+
+  it("still renders {{date}}/{{time}}/{{title}} when vaultRoot is given", () => {
+    expect(
+      substituteTemplateVars("{{title}} @ {{date}}", "x", { vaultRoot }),
+    ).toBe("x @ 2026-01-04");
   });
 });
