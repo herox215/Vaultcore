@@ -30,8 +30,22 @@
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import QuickSwitcherRow from "./QuickSwitcherRow.svelte";
   import SearchResultRow from "./SearchResultRow.svelte";
+  import {
+    computeRecentFiles,
+    recentsSignature,
+    type RecentEntry,
+  } from "./recentFiles";
 
   type OmniMode = "filename" | "content";
+
+  // #261 — content mode used to request k=100 per keystroke; the result list
+  // only shows ~8–15 rows before the user has to scroll or re-type. Start
+  // with a viewport-sized window and let the user opt into more via a
+  // "Mehr laden" button at the bottom. Each click grows the k by the same
+  // increment so the UX is "show me another page" without having to pick a
+  // number.
+  const CONTENT_SEARCH_INITIAL_K = 20;
+  const CONTENT_SEARCH_K_INCREMENT = 30;
 
   interface Props {
     open: boolean;
@@ -69,8 +83,17 @@
   // status line can show a transient error.
   let rebuildError = $state(false);
 
-  // Recent files (filename empty-state).
-  let recentFiles = $state<Array<{ filename: string; path: string }>>([]);
+  // Recent files (filename empty-state). Memoised by a signature of the
+  // first-N reversed filePaths — tabStore emits on every per-tab field
+  // change (dirty flag, scroll/cursor pos, lastSavedHash), and we must not
+  // rebuild this list on each of those. #261.
+  let recentFiles = $state<RecentEntry[]>([]);
+  let recentFilesSig = "";
+
+  // Current k cap for content-mode hybrid_search. Grows monotonically as
+  // the user clicks "Mehr laden"; resets to the small default whenever the
+  // query or mode changes (a new query is a new intent).
+  let contentK = $state(CONTENT_SEARCH_INITIAL_K);
 
   // Reset state when the active vault changes — a filename hit from vault A
   // would otherwise still render after switching to vault B.
@@ -87,23 +110,19 @@
       query = "";
       fileResults = [];
       selectedIndex = 0;
+      contentK = CONTENT_SEARCH_INITIAL_K;
     }
   });
 
   const unsubTab = tabStore.subscribe((state) => {
-    const seen = new Set<string>();
-    const unique: string[] = [];
-    for (const tab of [...state.tabs].reverse()) {
-      if (!seen.has(tab.filePath)) {
-        seen.add(tab.filePath);
-        unique.push(tab.filePath);
-      }
-      if (unique.length >= 8) break;
-    }
-    recentFiles = unique.map((p) => ({
-      path: p,
-      filename: p.split("/").pop() ?? p,
-    }));
+    // Cheap signature check first — short-circuit the common case where
+    // the emission is an unrelated per-tab field flip (isDirty,
+    // scrollPos, lastSavedHash) and the recents list is unchanged. Avoids
+    // the Set + map allocation on the keystroke / auto-save hot path.
+    const sig = recentsSignature(state.tabs);
+    if (sig === recentFilesSig) return;
+    recentFilesSig = sig;
+    recentFiles = computeRecentFiles(state.tabs);
   });
 
   // Content-mode results + counts flow through searchStore so the
@@ -133,6 +152,7 @@
       fileResults = [];
       selectedIndex = 0;
       rebuildError = false;
+      contentK = CONTENT_SEARCH_INITIAL_K;
       searchStore.setQuery(query);
 
       void tick().then(() => inputEl?.focus());
@@ -194,7 +214,7 @@
     }
   }
 
-  async function runContentSearch(q: string) {
+  async function runContentSearch(q: string, k: number = contentK) {
     const trimmed = q.trim();
     contentSearchGen += 1;
     const myGen = contentSearchGen;
@@ -208,7 +228,10 @@
       // #204 — hybrid_search fuses BM25 + HNSW via RRF. Falls back to
       // BM25-only transparently when embeddings aren't ready, so the UX
       // stays identical while embeddings bootstrap.
-      const results = await hybridSearch(trimmed, 100);
+      // #261 — k starts at CONTENT_SEARCH_INITIAL_K (viewport-sized) and
+      // grows only when the user clicks "Mehr laden". Previously fixed at
+      // k=100 which wasted IPC + backend scoring budget on every keystroke.
+      const results = await hybridSearch(trimmed, k);
       if (myGen !== contentSearchGen) return;
       const uniqueFiles = new Set(results.map((r) => r.path)).size;
       searchStore.setResults(results, uniqueFiles);
@@ -223,6 +246,19 @@
     }
   }
 
+  function loadMoreContent() {
+    // Grow the k cap and re-run immediately (bypass debounce — user
+    // clicked, intent is explicit). The generation counter in
+    // runContentSearch keeps any in-flight smaller-k request from
+    // overwriting this larger one.
+    contentK += CONTENT_SEARCH_K_INCREMENT;
+    if (contentDebounce) {
+      clearTimeout(contentDebounce);
+      contentDebounce = undefined;
+    }
+    if (query.trim()) void runContentSearch(query, contentK);
+  }
+
   function handleInput(e: Event) {
     // Use explicit value read instead of `bind:value`. Bind paired with a
     // store subscription that reassigns $state objects caused the caret to
@@ -233,6 +269,9 @@
     if (mode === "filename") {
       void runFilenameSearch(query);
     } else {
+      // New query = new intent → reset the load-more cap so the debounced
+      // search uses the small default k, not a previously-expanded k.
+      contentK = CONTENT_SEARCH_INITIAL_K;
       if (contentDebounce) clearTimeout(contentDebounce);
       contentDebounce = setTimeout(() => runContentSearch(query), 200);
     }
@@ -243,7 +282,9 @@
     mode = next;
     selectedIndex = 0;
     // Re-run the current query against the new mode so results update
-    // immediately instead of requiring a keystroke.
+    // immediately instead of requiring a keystroke. Mode flip also resets
+    // the content-mode k cap — a fresh mode is fresh intent.
+    if (next === "content") contentK = CONTENT_SEARCH_INITIAL_K;
     if (query.trim()) {
       if (next === "filename") void runFilenameSearch(query);
       else void runContentSearch(query);
@@ -447,10 +488,16 @@
                 onclick={() => openContentResult(result as HybridHit)}
               />
             {/each}
-            {#if storeState.results.length >= 100}
-              <p class="vc-search-results-overflow">
-                Zeige 100 Treffer — Suche verfeinern
-              </p>
+            {#if storeState.results.length >= contentK}
+              <!-- #261 — the backend saturated the requested k, so there
+                   may be more hits. Load-more grows k by an increment and
+                   re-runs; we avoid fetching k=100 preemptively on every
+                   keystroke. -->
+              <button
+                type="button"
+                class="vc-omni-load-more"
+                onclick={loadMoreContent}
+              >Mehr laden</button>
             {/if}
           {/if}
         {/if}
@@ -558,13 +605,30 @@
     font-weight: 600;
   }
 
-  .vc-qs-empty,
-  .vc-search-results-overflow {
+  .vc-qs-empty {
     font-size: 12px;
     color: var(--color-text-muted);
     text-align: center;
     padding: 16px;
     margin: 0;
+  }
+
+  .vc-omni-load-more {
+    display: block;
+    width: 100%;
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 10px 16px;
+    cursor: pointer;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .vc-omni-load-more:hover {
+    background: var(--color-accent-bg);
   }
 
   .vc-search-results-counter {
