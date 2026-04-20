@@ -15,6 +15,7 @@
   import { backlinksStore } from "../../store/backlinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { vaultStore } from "../../store/vaultStore";
+  import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { commandRegistry } from "../../lib/commands/registry";
   import { registerDefaultCommands } from "../../lib/commands/defaultCommands";
   import {
@@ -563,10 +564,26 @@
     // #174 — any FS change flips the search index to "stale". The omni-search
     // modal will auto-rebuild on next open. Subscription lives here (not in
     // OmniSearch) so the flag is tracked even while the modal is closed.
+    // #307 — same callback also forwards the payload to the vault store so
+    // `fileList` reflects new/deleted/renamed notes in real time (e.g. for
+    // template expressions that query the vault). Store update first, then
+    // the stale flag, so any subscriber reading `fileList` in response to
+    // the flip sees fresh data.
     let cancelledStale = false;
     let unlistenStale: (() => void) | undefined;
-    void listenFileChange(() => {
-      if (!cancelledStale) searchStore.setIndexStale(true);
+    void listenFileChange((payload) => {
+      if (cancelledStale) return;
+      vaultStore.applyFileChange(payload);
+      searchStore.setIndexStale(true);
+      // #307: wiki-link resolution uses a cached stem→relPath map populated
+      // once per vault-open (see wikiLink.ts setResolvedLinks). Creates,
+      // renames and deletes all shift the map — request a reload so that
+      // clicks on `[[new-name]]` rendered by template expressions open the
+      // real file instead of falling through to the create-at-root handler.
+      // `modify` leaves the topology untouched, so skip it.
+      if (payload.kind !== "modify") {
+        resolvedLinksStore.requestReload();
+      }
     }).then((fn) => {
       if (cancelledStale) { fn(); return; }
       unlistenStale = fn;

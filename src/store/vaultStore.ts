@@ -9,6 +9,7 @@
 import { writable } from "svelte/store";
 import type { VaultStatus } from "../types/vault";
 import type { DirEntry } from "../types/tree";
+import type { FileChangePayload } from "../ipc/events";
 
 export interface VaultState {
   currentPath: string | null;
@@ -73,6 +74,70 @@ export const vaultStore = {
 
   setVaultReachable(reachable: boolean): void {
     _store.update((s) => ({ ...s, vaultReachable: reachable }));
+  },
+
+  // #307 — incremental fileList updater driven by vault://file_changed events.
+  // Keeps the list in sync with the filesystem without re-listing the whole
+  // vault (O(log n) per event, survives 100k-note vaults). Out-of-root and
+  // non-.md paths are ignored; the vault root is read from `currentPath`.
+  applyFileChange(payload: FileChangePayload): void {
+    _store.update((s) => {
+      if (s.currentPath === null) return s;
+      const root = s.currentPath.replace(/\\/g, "/");
+
+      const toRel = (abs: string): string | null => {
+        const normalized = abs.replace(/\\/g, "/");
+        if (!normalized.startsWith(root)) return null;
+        let rel = normalized.slice(root.length);
+        if (rel.startsWith("/")) rel = rel.slice(1);
+        if (!rel.endsWith(".md")) return null;
+        return rel;
+      };
+
+      const insert = (list: string[], rel: string): string[] => {
+        if (list.includes(rel)) return list;
+        let idx = 0;
+        while (idx < list.length && list[idx]! < rel) idx++;
+        const next = list.slice();
+        next.splice(idx, 0, rel);
+        return next;
+      };
+
+      const remove = (list: string[], rel: string): string[] => {
+        const idx = list.indexOf(rel);
+        if (idx === -1) return list;
+        const next = list.slice();
+        next.splice(idx, 1);
+        return next;
+      };
+
+      let list = s.fileList;
+      switch (payload.kind) {
+        case "create": {
+          const rel = toRel(payload.path);
+          if (rel !== null) list = insert(list, rel);
+          break;
+        }
+        case "delete": {
+          const rel = toRel(payload.path);
+          if (rel !== null) list = remove(list, rel);
+          break;
+        }
+        case "rename": {
+          if (payload.new_path === undefined) break;
+          const oldRel = toRel(payload.path);
+          const newRel = toRel(payload.new_path);
+          if (oldRel !== null) list = remove(list, oldRel);
+          if (newRel !== null) list = insert(list, newRel);
+          break;
+        }
+        case "modify":
+          break;
+      }
+
+      if (list === s.fileList) return s;
+      return { ...s, fileList: list, fileCount: list.length };
+    });
   },
 
   // Tree cache helpers (module-level Map, not in store state)
