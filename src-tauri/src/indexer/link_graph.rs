@@ -618,6 +618,137 @@ mod tests {
         assert!(resolve_link("Missing", "", &paths).is_none());
     }
 
+    // ── #250: StemIndex parity ─────────────────────────────────────────────
+    //
+    // Issue #250: the hot-path optimisation replaces the 2×O(N) scan +
+    // per-link `to_lowercase` churn with a prebuilt `StemIndex`. Parity is
+    // the must-have — the optimised `resolve_link_with_index` must produce
+    // byte-for-byte identical `Option<String>` output for every input to
+    // the legacy 2-pass algorithm, across mixed-case stems, nested folders,
+    // `.md` / `.canvas` suffixes, and the 3 spec-prescribed tiebreak stages.
+
+    /// Reference implementation: the pre-#250 2-pass resolver, preserved
+    /// verbatim inside the test module so parity can be checked against the
+    /// exact legacy behaviour regardless of future edits to `resolve_link`.
+    fn resolve_link_legacy(
+        target_raw: &str,
+        source_folder: &str,
+        all_rel_paths: &[String],
+    ) -> Option<String> {
+        let stem = target_raw
+            .strip_suffix(".md")
+            .or_else(|| target_raw.strip_suffix(".canvas"))
+            .unwrap_or(target_raw);
+        let stem_lower = stem.to_lowercase();
+
+        for p in all_rel_paths {
+            if path_folder(p) == source_folder
+                && path_stem(p).to_lowercase() == stem_lower
+            {
+                return Some(p.clone());
+            }
+        }
+
+        let mut candidates: Vec<&String> = all_rel_paths
+            .iter()
+            .filter(|p| path_stem(p).to_lowercase() == stem_lower)
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(|a, b| {
+            let da = path_depth(a);
+            let db = path_depth(b);
+            da.cmp(&db).then_with(|| a.cmp(b))
+        });
+        candidates.first().map(|p| (*p).clone())
+    }
+
+    fn parity_fixture_paths() -> Vec<String> {
+        // Mixed-case stems across several folders, collisions at multiple
+        // depths, `.canvas` extension, and a same-folder duplicate candidate.
+        vec![
+            "Root.md".to_string(),
+            "Zeta.md".to_string(),
+            "alpha/Note.md".to_string(),
+            "alpha/nested/Note.md".to_string(),
+            "beta/NOTE.md".to_string(),
+            "beta/sub/note.md".to_string(),
+            "canvas/mycanvas.canvas".to_string(),
+            "gamma/Unique.md".to_string(),
+            "gamma/Dup.md".to_string(),
+            "delta/Dup.md".to_string(),
+            "epsilon/DÜSSELDORF.md".to_string(),
+            "epsilon/düsseldorf.md".to_string(),
+        ]
+    }
+
+    #[test]
+    fn resolve_link_with_index_parity_across_stages() {
+        let paths = parity_fixture_paths();
+        let index = StemIndex::build(&paths);
+
+        // Broad range of inputs: exact case, lowered case, suffix, unicode,
+        // from several source folders.
+        let sources = ["", "alpha/", "alpha/nested/", "beta/", "beta/sub/",
+                        "canvas/", "delta/", "epsilon/", "unrelated/"];
+        let targets = [
+            "Root", "root", "ROOT", "Root.md",
+            "Zeta", "zeta",
+            "Note", "note", "NOTE", "Note.md",
+            "mycanvas", "mycanvas.canvas", "MYCANVAS",
+            "Unique", "unique",
+            "Dup", "dup",
+            "Düsseldorf", "düsseldorf", "DÜSSELDORF",
+            "Missing", "",
+        ];
+
+        for source in &sources {
+            for target in &targets {
+                let legacy = resolve_link_legacy(target, source, &paths);
+                let fast = resolve_link_with_index(target, source, &index);
+                assert_eq!(
+                    legacy, fast,
+                    "parity mismatch: target={:?} source={:?}", target, source,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_link_delegates_to_stem_index_parity() {
+        // The public `resolve_link` wrapper must also be parity-identical
+        // against the preserved legacy — it now delegates to StemIndex but
+        // the contract is unchanged.
+        let paths = parity_fixture_paths();
+        let sources = ["", "alpha/", "beta/", "epsilon/"];
+        let targets = ["Note", "root", "DÜSSELDORF", "mycanvas", "Missing"];
+        for source in &sources {
+            for target in &targets {
+                assert_eq!(
+                    resolve_link_legacy(target, source, &paths),
+                    resolve_link(target, source, &paths),
+                    "wrapper parity: target={:?} source={:?}", target, source,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stem_index_is_reusable_for_multiple_links() {
+        // The stem index is built once per batch; resolving N links against
+        // the same index must not mutate it nor alter later results.
+        let paths = parity_fixture_paths();
+        let index = StemIndex::build(&paths);
+
+        let first = resolve_link_with_index("Note", "alpha/", &index);
+        let _ = resolve_link_with_index("Missing", "zz/", &index);
+        let _ = resolve_link_with_index("root", "", &index);
+        let again = resolve_link_with_index("Note", "alpha/", &index);
+        assert_eq!(first, again);
+    }
+
     // ── LinkGraph incremental semantics ────────────────────────────────────
 
     fn parsed(target: &str, line: u32) -> ParsedLink {
