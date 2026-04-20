@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { PanelRight, Settings as SettingsIcon } from "lucide-svelte";
   import Sidebar from "../Sidebar/Sidebar.svelte";
   import EditorPane from "../Editor/EditorPane.svelte";
@@ -137,11 +138,9 @@
     e.preventDefault();
     isRightDragging = true;
     rightDragStartX = e.clientX;
-    // Read current width from store
-    let currentWidth = 240;
-    const unsub = backlinksStore.subscribe((s) => { currentWidth = s.width; });
-    unsub();
-    rightDragStartWidth = currentWidth;
+    // Snapshot the current width via get(); avoids the throwaway
+    // subscribe/unsub closure allocation pattern (#259).
+    rightDragStartWidth = get(backlinksStore).width;
   }
 
   // Split pane divider drag
@@ -187,12 +186,11 @@
   onMount(() => {
     unsubBacklinksTab = tabStore.subscribe((state) => {
       const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
-      const vault = (() => {
-        let v: string | null = null;
-        const u = vaultStore.subscribe((s) => { v = s.currentPath; });
-        u();
-        return v;
-      })();
+      // #259: snapshot vault path via get() — tabStore emits on every
+      // per-keystroke mutation (setDirty, scroll, cursor) and a throwaway
+      // vaultStore.subscribe/unsub here would allocate a fresh closure and
+      // run the full subscriber cycle on every keypress.
+      const vault = get(vaultStore).currentPath;
 
       let nextRelPath: string | null;
       if (!activeTab || !vault) {
@@ -200,7 +198,7 @@
       } else {
         const absPath = activeTab.filePath;
         nextRelPath = absPath.startsWith(vault + "/")
-          ? absPath.slice((vault as string).length + 1)
+          ? absPath.slice(vault.length + 1)
           : absPath;
       }
 
@@ -221,9 +219,9 @@
   onMount(() => {
     unsubActiveTabReveal = tabStore.subscribe((state) => {
       const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
-      let vault: string | null = null;
-      const u = vaultStore.subscribe((s) => { vault = s.currentPath; });
-      u();
+      // #259: snapshot vault path via get() — see the backlinks-sync
+      // subscription above for the per-keystroke hot-path rationale.
+      const vault = get(vaultStore).currentPath;
       const relPath = resolveRevealRelPath(activeTab, vault);
       if (relPath === lastRevealedRelPath) return;
       lastRevealedRelPath = relPath;
@@ -256,9 +254,7 @@
 
   /** EDIT-11 / D-12: Create "Unbenannte Notiz.md" at vault root and open in a new tab. */
   async function createNewNote() {
-    let vaultPath: string | null = null;
-    const unsub = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
-    unsub();
+    const vaultPath = get(vaultStore).currentPath;
     if (!vaultPath) return;
     try {
       const newPath = await createFile(vaultPath, "Unbenannte Notiz.md");
@@ -275,9 +271,7 @@
   // palette shortcut always drops the new item at the vault root (the palette
   // is reachable even when no tree row is selected).
   async function createNewCanvas() {
-    let vaultPath: string | null = null;
-    const unsub = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
-    unsub();
+    const vaultPath = get(vaultStore).currentPath;
     if (!vaultPath) return;
     try {
       const newPath = await createFile(vaultPath, "Untitled.canvas");
@@ -290,9 +284,7 @@
   }
 
   async function createNewFolder() {
-    let vaultPath: string | null = null;
-    const unsub = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
-    unsub();
+    const vaultPath = get(vaultStore).currentPath;
     if (!vaultPath) return;
     try {
       await createFolder(vaultPath, "");
@@ -319,22 +311,15 @@
    *     new file. Unreadable template silently falls back to empty.
    */
   async function openTodayNote() {
-    let vaultPath: string | null = null;
-    const unsubVault = vaultStore.subscribe((s) => { vaultPath = s.currentPath; });
-    unsubVault();
+    const vaultPath = get(vaultStore).currentPath;
     if (!vaultPath) return;
 
-    let folder = "";
-    let format = DEFAULT_DAILY_DATE_FORMAT;
-    let template = "";
-    const unsubSettings = settingsStore.subscribe((s) => {
-      folder = s.dailyNotesFolder;
-      format = s.dailyNotesDateFormat.trim().length > 0
-        ? s.dailyNotesDateFormat
-        : DEFAULT_DAILY_DATE_FORMAT;
-      template = s.dailyNotesTemplate.trim();
-    });
-    unsubSettings();
+    const settings = get(settingsStore);
+    const folder = settings.dailyNotesFolder;
+    const format = settings.dailyNotesDateFormat.trim().length > 0
+      ? settings.dailyNotesDateFormat
+      : DEFAULT_DAILY_DATE_FORMAT;
+    const template = settings.dailyNotesTemplate.trim();
 
     try {
       // 1. Resolve / create folder chain.
@@ -499,10 +484,7 @@
 
   /** Issue #12: toggle bookmark on the active tab's file path. */
   async function toggleActiveBookmark() {
-    let captured: string | null = null;
-    const u1 = vaultStore.subscribe((s) => { captured = s.currentPath; });
-    u1();
-    const vaultPath: string | null = captured;
+    const vaultPath = get(vaultStore).currentPath;
     if (vaultPath === null) return;
     const active = tabStore.getActiveTab();
     if (!active || active.type === "graph") return;
@@ -555,9 +537,7 @@
       cycleTabNext: () => { tabStore.cycleTab(1); },
       cycleTabPrev: () => { tabStore.cycleTab(-1); },
       closeActiveTab: () => {
-        let activeId: string | null = null;
-        const unsub = tabStore.subscribe((s) => { activeId = s.activeTabId; });
-        unsub();
+        const activeId = get(tabStore).activeTabId;
         if (activeId) tabStore.closeTab(activeId);
       },
       createNewNote: () => { void createNewNote(); },
