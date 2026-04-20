@@ -1,13 +1,9 @@
-// @fontsource CSS must precede Tailwind to keep @font-face declarations intact (RESEARCH Pitfall 7).
-// 400 = regular, 700 = bold. MVP ships these two weights only per D-08.
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/700.css";
-import "@fontsource/lora/400.css";
-import "@fontsource/lora/700.css";
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/700.css";
-import "@fontsource/fira-code/400.css";
-import "@fontsource/fira-code/700.css";
+// Entry point. Font CSS is intentionally NOT imported here — every
+// eager `@fontsource/*` import pulls a woff2 binary onto the first-paint
+// critical path and competes with JS parse/execute on cold start (#255).
+// Webfonts are now loaded lazily by `settingsStore.init()` + the font
+// setters, so only the family actually selected by the user is fetched,
+// and even that happens after Svelte mount instead of before it.
 import { mount } from 'svelte';
 import './styles/tailwind.css';
 import App from './App.svelte';
