@@ -12,6 +12,7 @@
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import type { LocalGraph, GraphNode } from "../../types/links";
   import { clusterGraph } from "./clusterGraph";
+  import { tabContentSignature } from "./graphVisibility";
 
   // ── Persistence ─────────────────────────────────────────────────────────────
   const CAMERA_KEY_PREFIX = "vaultcore-graph-camera-";
@@ -247,6 +248,17 @@
   let embeddingClusterThreshold = $state<number>(CLUSTER_THRESHOLD_DEFAULT);
   let embeddingClusterThresholdApplied = $state<number>(CLUSTER_THRESHOLD_DEFAULT);
   let clusterTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // #257 — visibility tracking. The graph tab is kept mounted (hidden via
+  // style:display=none, see EditorPane.svelte) when not the active tab in
+  // its pane. Without tracking visibility, the d3-force simulation + sigma
+  // render loop keep ticking in the background — 5–15% CPU continuously
+  // while the user is typing in another tab. We pause on hide, resume on
+  // show, and defer any pending refetch triggered while hidden.
+  let rootEl = $state<HTMLDivElement | undefined>();
+  let isVisible = $state<boolean>(true);
+  let pendingRefetchWhileHidden = $state<boolean>(false);
+  let intersectionObserver: IntersectionObserver | null = null;
 
   let unlistenFileChange: UnlistenFn | null = null;
   let refetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -538,6 +550,17 @@
     if (vaultPath) saveFrozen(vaultPath, next);
   }
 
+  // #257 — combined freeze state fed to the canvas.
+  //   - user-frozen (pin-button in the forces panel), OR
+  //   - graph tab not visible on screen (pauses d3-force + sigma render).
+  // GraphCanvas treats this as a single boolean and calls
+  // setLayoutFrozen(handle, effectivelyFrozen) — stopping the simulation
+  // when true and re-heating it at alpha=0.3 when false, all without
+  // touching the simulation object identity (positions survive).
+  const effectivelyFrozen = $derived.by<boolean>(() => {
+    return frozen || !isVisible;
+  });
+
   function onNodeClick(_id: string, node: GraphNode): void {
     if (!node.resolved || !vaultPath || !node.path) return;
     tabStore.openTab(`${vaultPath}/${node.path}`);
@@ -567,28 +590,68 @@
         payload.kind === "rename" ||
         payload.kind === "modify"
       ) {
+        // Hidden → defer; visible → debounce.
+        if (!isVisible) {
+          pendingRefetchWhileHidden = true;
+          return;
+        }
         scheduleRefetch();
       }
     });
+
+    // #257 — IntersectionObserver handles every "hidden" case uniformly:
+    // tab not active (display:none collapses clientRect to 0), sidebar
+    // rearrangement moving the pane off-screen, app minimized, etc.
+    // rootMargin 0 with threshold 0 = "any pixel on screen counts as
+    // visible", which is what we want (we only need the d3-force ticks
+    // to pay their cost when the graph could actually be seen).
+    if (rootEl && typeof IntersectionObserver !== "undefined") {
+      intersectionObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          isVisible = entry.isIntersecting;
+        }
+      });
+      intersectionObserver.observe(rootEl);
+    }
   });
 
-  // Detect content changes on open tabs whose lastSavedContent moved. Keeps
-  // behavior parity with LocalGraphPanel's docVersion debounce for global
-  // link structure updates after auto-save.
-  let lastSavedSignatures = new Map<string, string>();
-  const unsubTabsContent = tabStore.subscribe((s) => {
-    let anyChanged = false;
-    const nextSig = new Map<string, string>();
-    for (const t of s.tabs) {
-      if (t.type === "graph") continue;
-      nextSig.set(t.id, t.lastSavedContent);
-      const prev = lastSavedSignatures.get(t.id);
-      if (prev !== undefined && prev !== t.lastSavedContent) {
-        anyChanged = true;
-      }
+  // #257 — catch up on deferred refetches once the tab becomes visible.
+  // A single scheduled refetch covers any number of file-change /
+  // tab-save events that accumulated while hidden.
+  $effect(() => {
+    if (isVisible && pendingRefetchWhileHidden) {
+      pendingRefetchWhileHidden = false;
+      scheduleRefetch();
     }
-    lastSavedSignatures = nextSig;
-    if (anyChanged) scheduleRefetch();
+  });
+
+  // #257 — narrow, cheap content-change detection.
+  //
+  // tabStore emits on every per-keystroke setDirty, cursor move, scroll
+  // update, and hash write. The previous implementation iterated every
+  // tab and string-compared lastSavedContent on every emission — O(tabs *
+  // content-size) per keystroke, on the editor hot path, even when the
+  // graph tab wasn't visible. Swap that for a stable scalar signature
+  // (`id:lastSaved`) that only changes when a tab actually saves. First
+  // emission just seeds the baseline so we don't trigger a redundant
+  // refetch on mount (the onMount below already kicks off the initial
+  // load).
+  let lastTabContentSig: string | null = null;
+  const unsubTabsContent = tabStore.subscribe((s) => {
+    const sig = tabContentSignature(s.tabs);
+    if (lastTabContentSig === null) {
+      lastTabContentSig = sig;
+      return;
+    }
+    if (sig === lastTabContentSig) return;
+    lastTabContentSig = sig;
+    // If the graph tab is hidden, defer the refetch — mark as dirty and
+    // catch up when the tab becomes visible again.
+    if (!isVisible) {
+      pendingRefetchWhileHidden = true;
+      return;
+    }
+    scheduleRefetch();
   });
 
   onDestroy(() => {
@@ -599,12 +662,14 @@
     if (refetchTimer) clearTimeout(refetchTimer);
     if (thresholdTimer) clearTimeout(thresholdTimer);
     if (clusterTimer) clearTimeout(clusterTimer);
+    intersectionObserver?.disconnect();
+    intersectionObserver = null;
   });
 </script>
 
 <svelte:document onkeydown={handleKeydown} />
 
-<div class="vc-graph-view" role="region" aria-label="Graph-Ansicht">
+<div class="vc-graph-view" role="region" aria-label="Graph-Ansicht" bind:this={rootEl}>
   <div class="vc-graph-mode-toolbar" role="group" aria-label="Graph-Modus">
     <div class="vc-graph-mode-pills">
       <button
@@ -681,7 +746,7 @@
       {onCameraChange}
       datasetVersion={datasetVersion}
       forceSettings={forces}
-      {frozen}
+      frozen={effectivelyFrozen}
     />
     <GraphFilters
       state={filters}
