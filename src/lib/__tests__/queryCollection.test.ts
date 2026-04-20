@@ -32,6 +32,33 @@ describe("Collection — terminal ops", () => {
     expect(byKey[1]).toEqual([1, 3, 5]);
     expect(byKey[0]).toEqual([2, 4]);
   });
+
+  it("join concatenates string elements with the separator", () => {
+    expect(new Collection(["a", "b", "c"]).join(", ")).toBe("a, b, c");
+  });
+
+  it("join coerces non-string elements via String()", () => {
+    expect(new Collection([1, 2, 3]).join("-")).toBe("1-2-3");
+  });
+
+  it("join on an empty collection returns an empty string", () => {
+    expect(new Collection<string>([]).join(", ")).toBe("");
+  });
+
+  it("join with a newline separator preserves newlines verbatim", () => {
+    const out = new Collection([1, 2, 3])
+      .select((n) => "- " + n)
+      .join("\n");
+    expect(out).toBe("- 1\n- 2\n- 3");
+  });
+
+  it("join composes after where/select just like any other terminal op", () => {
+    const out = new Collection([1, 2, 3, 4])
+      .where((n) => n % 2 === 0)
+      .select((n) => "#" + n)
+      .join(" ");
+    expect(out).toBe("#2 #4");
+  });
 });
 
 describe("Collection — chaining", () => {

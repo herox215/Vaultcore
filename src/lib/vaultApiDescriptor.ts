@@ -120,6 +120,8 @@ const COLLECTION: TypeDescriptor = {
       doc: "Group by a key selector" },
     { kind: "method", name: "toArray", returns: "any",
       doc: "Materialize as an array" },
+    { kind: "method", name: "join", returns: "string",
+      doc: "Materialize as a string, separator between elements" },
   ],
 };
 
