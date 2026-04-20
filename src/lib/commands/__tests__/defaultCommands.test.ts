@@ -40,6 +40,7 @@ function makeCtx(overrides: Partial<DefaultCommandContext> = {}): DefaultCommand
     exportActiveNotePdf: noop,
     toggleReadingMode: noop,
     insertTemplate: noop,
+    openHome: noop,
     ...overrides,
   };
 }

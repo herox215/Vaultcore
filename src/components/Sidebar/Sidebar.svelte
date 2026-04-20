@@ -28,6 +28,7 @@
   } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { tabStore } from "../../store/tabStore";
+  import { openHomeCanvas } from "../../lib/homeCanvas";
   import { searchStore } from "../../store/searchStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
@@ -364,9 +365,15 @@
         <span class="vc-sidebar-bulk-count">{bulkCount.toLocaleString()} files</span>
       </div>
     {:else}
-      <span class="vc-sidebar-vaultname" title={$vaultStore.currentPath ?? ""}>
+      <button
+        type="button"
+        class="vc-sidebar-vaultname"
+        title={`Open home (${$vaultStore.currentPath ?? ""})`}
+        onclick={() => { void openHomeCanvas(); }}
+        data-testid="sidebar-vaultname-home"
+      >
         {vaultName}
-      </span>
+      </button>
       <div class="vc-sidebar-actions" style="position: relative;">
         <!-- #145: split/dropdown "+ New ▾". Primary click = new note (parity
              with the previous lone FilePlus button); chevron toggles a menu
@@ -512,6 +519,23 @@
     flex: 1;
     min-width: 0;
     margin-right: 8px;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    margin-left: -6px;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 4px;
+    font-family: inherit;
+  }
+
+  .vc-sidebar-vaultname:hover {
+    background: var(--color-bg);
+  }
+
+  .vc-sidebar-vaultname:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
   }
 
   .vc-sidebar-actions {

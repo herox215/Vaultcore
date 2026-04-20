@@ -294,6 +294,12 @@ impl IndexCoordinator {
     ) -> Result<VaultInfo, VaultError> {
         let vaultcore_dir = vault_path.join(".vaultcore");
 
+        // Issue #279: self-healing bootstrap of the per-vault home canvas.
+        // Runs every open so filesystem-level deletion recreates the file.
+        if let Err(e) = ensure_home_canvas(vault_path) {
+            log::warn!("ensure_home_canvas failed: {e:?}");
+        }
+
         // Collect all .md paths (skip dot-dirs and .vaultcore).
         let md_paths = collect_md_paths(vault_path);
         let total = md_paths.len();
@@ -651,6 +657,58 @@ pub(crate) fn walk_md_files(vault_path: &Path) -> impl Iterator<Item = PathBuf> 
 /// front for progress throttling.
 fn collect_md_paths(vault_path: &Path) -> Vec<PathBuf> {
     walk_md_files(vault_path).collect()
+}
+
+/// Ensure `<vault>/.vaultcore/home.canvas` exists.
+///
+/// Writes a minimal welcome canvas the first time a vault is opened so the
+/// sidebar vault-name click always has something to open. Living under
+/// `.vaultcore/` keeps it out of the tree walker, link graph, backlinks, and
+/// search — but wiki-links inside it still resolve outward because resolution
+/// is target-based.
+///
+/// Existing files are left untouched — never overwrite user edits.
+/// If the user deletes the file via the filesystem, the next vault open
+/// recreates this template.
+pub fn ensure_home_canvas(vault_path: &Path) -> Result<(), VaultError> {
+    let home_path = vault_path.join(".vaultcore").join("home.canvas");
+    if home_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = home_path.parent() {
+        std::fs::create_dir_all(parent).map_err(VaultError::Io)?;
+    }
+
+    let vault_name = vault_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Vault");
+    let welcome_text = format!(
+        "# {}\n\nEdit this canvas — it's your personal home.",
+        vault_name
+    );
+
+    let doc = serde_json::json!({
+        "nodes": [{
+            "id": "welcome",
+            "type": "text",
+            "x": 0,
+            "y": 0,
+            "width": 400,
+            "height": 120,
+            "text": welcome_text,
+        }],
+        "edges": [],
+    });
+
+    let mut buf = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+    let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+    serde::Serialize::serialize(&doc, &mut ser).map_err(|e| {
+        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    })?;
+    std::fs::write(&home_path, &buf).map_err(VaultError::Io)?;
+    Ok(())
 }
 
 /// Collect all `.canvas` relative paths (forward-slash, vault-relative) under
