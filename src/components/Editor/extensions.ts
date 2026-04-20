@@ -29,6 +29,7 @@ import { flashField } from "./flashHighlight";
 import { wikiLinkPlugin } from "./wikiLink";
 import { embedPlugin } from "./embedPlugin";
 import { livePreviewPlugin } from "./livePreview";
+import { templateLivePlugin } from "./templateLivePreview";
 import { frontmatterPlugin } from "./frontmatterPlugin";
 import { calloutPlugin } from "./callouts";
 import { taskListPlugin } from "./taskList";
@@ -91,6 +92,7 @@ export function buildExtensions(
     wikiLinkPlugin,
     embedPlugin,
     livePreviewPlugin,
+    templateLivePlugin,
     frontmatterPlugin,
     calloutPlugin,
     taskListPlugin,
