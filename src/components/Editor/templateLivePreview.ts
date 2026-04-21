@@ -31,6 +31,7 @@ import { noteContentCacheVersion } from "../../lib/noteContentCache";
 import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
 import { bookmarksStore } from "../../store/bookmarksStore";
+import { resolvedLinksStore } from "../../store/resolvedLinksStore";
 import { resolveTarget, stripKnownExt } from "./wikiLink";
 import { parseTableText, renderStaticTableDom } from "./tablePlugin";
 import type { ParsedTable } from "./tablePlugin";
@@ -79,10 +80,52 @@ function sameTable(a: ParsedTable, b: ParsedTable): boolean {
   return true;
 }
 
+// #309 — the rendered widget's DOM bakes in each embedded `[[target]]`'s
+// resolution status at build time. When the resolved-links map changes but
+// the rendered string stays identical, the default identity check in
+// WidgetType.eq would tell CM6 to reuse the stale DOM, leaving
+// `data-wiki-resolved="false"` on a link the user now expects to resolve.
+// Snapshot the resolution state of every `[[target]]` in the rendered text
+// so eq() can detect "same text, different resolution" and force a rebuild.
+//
+// COUPLING: this function and `appendValueWithWikiLinks` MUST share the same
+// link-matching semantics (regex `WIKI_LINK_IN_RENDER_RE`). If snapshotting
+// missed a form that the DOM-builder emits, eq() could false-positive and
+// leave stale `data-wiki-resolved` on that specific form. Both sites already
+// use the same module-level regex — keep them in sync if you change one.
+function wikiLinkResolutionSnapshot(text: string): string {
+  const parts: string[] = [];
+  WIKI_LINK_IN_RENDER_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WIKI_LINK_IN_RENDER_RE.exec(text)) !== null) {
+    const rawTarget = m[1]!;
+    const resolved = resolveTarget(rawTarget) !== null;
+    parts.push(`${rawTarget}=${resolved ? "1" : "0"}`);
+  }
+  return parts.join("|");
+}
+
+function tableWikiLinkResolutionSnapshot(table: ParsedTable): string {
+  const parts: string[] = [];
+  for (const row of table.rows) {
+    for (const cell of row) {
+      const snap = wikiLinkResolutionSnapshot(cell);
+      if (snap.length > 0) parts.push(snap);
+    }
+  }
+  return parts.join("||");
+}
+
 class RenderedTableWidget extends WidgetType {
-  constructor(readonly table: ParsedTable) { super(); }
+  readonly linkResolutionSnapshot: string;
+  constructor(readonly table: ParsedTable) {
+    super();
+    this.linkResolutionSnapshot = tableWikiLinkResolutionSnapshot(table);
+  }
   override eq(other: WidgetType): boolean {
-    return other instanceof RenderedTableWidget && sameTable(other.table, this.table);
+    return other instanceof RenderedTableWidget
+      && sameTable(other.table, this.table)
+      && other.linkResolutionSnapshot === this.linkResolutionSnapshot;
   }
   toDOM(): HTMLElement {
     const wrap = renderStaticTableDom(this.table, (cell, text) =>
@@ -99,9 +142,15 @@ class RenderedTableWidget extends WidgetType {
 }
 
 class RenderedValueWidget extends WidgetType {
-  constructor(readonly value: string) { super(); }
+  readonly linkResolutionSnapshot: string;
+  constructor(readonly value: string) {
+    super();
+    this.linkResolutionSnapshot = wikiLinkResolutionSnapshot(value);
+  }
   override eq(other: WidgetType): boolean {
-    return other instanceof RenderedValueWidget && other.value === this.value;
+    return other instanceof RenderedValueWidget
+      && other.value === this.value
+      && other.linkResolutionSnapshot === this.linkResolutionSnapshot;
   }
   toDOM(): HTMLElement {
     const el = document.createElement("span");
@@ -214,6 +263,10 @@ export const templateLivePlugin = ViewPlugin.fromClass(
         if (!ready) return;
         view.dispatch({ effects: refreshEffect.of(undefined) });
       };
+      // #309: track the readyToken we last reacted to so the svelte
+      // synchronous-initial-value quirk doesn't trigger on mount and
+      // idempotent re-emits don't cause spurious rebuilds.
+      let prevReadyToken: string | null = null;
       this.unsubs.push(
         vaultStore.subscribe(trigger),
         tagsStore.subscribe(trigger),
@@ -222,6 +275,20 @@ export const templateLivePlugin = ViewPlugin.fromClass(
         // `{{vault.notes.where(n => n.content.contains("X"))}}` fills in
         // once the backing note contents have been read from disk.
         noteContentCacheVersion.subscribe(trigger),
+        // #309: rebuild after `setResolvedLinks()` lands a fresh stem->path
+        // map so `[[Untitled]]` in rendered output flips from unresolved to
+        // resolved without waiting for an unrelated vault tick. Guard on
+        // `readyToken` only — firing on `requestToken` would rebuild against
+        // the still-stale map.
+        resolvedLinksStore.subscribe((state) => {
+          if (
+            state.readyToken &&
+            state.readyToken !== prevReadyToken
+          ) {
+            prevReadyToken = state.readyToken;
+            trigger();
+          }
+        }),
       );
       ready = true;
     }
