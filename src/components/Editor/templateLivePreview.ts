@@ -26,7 +26,7 @@ import {
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 
 import { evaluateProgram } from "../../lib/templateProgram";
-import { buildTemplateScope } from "../../lib/templateScope";
+import { buildTemplateScope, TEMPLATE_EXPR_RE } from "../../lib/templateScope";
 import { noteContentCacheVersion } from "../../lib/noteContentCache";
 import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
@@ -149,8 +149,6 @@ function appendValueWithWikiLinks(parent: HTMLElement, value: string): void {
   }
 }
 
-const EXPR_RE = /\{\{([^{}]+?)\}\}/g;
-
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { from, to } = view.viewport;
@@ -161,9 +159,9 @@ function buildDecorations(view: EditorView): DecorationSet {
   let scope: ReturnType<typeof buildTemplateScope> | null = null;
   const now = new Date();
 
-  EXPR_RE.lastIndex = 0;
+  TEMPLATE_EXPR_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = EXPR_RE.exec(text)) !== null) {
+  while ((m = TEMPLATE_EXPR_RE.exec(text)) !== null) {
     const absFrom = from + m.index;
     const absTo = absFrom + m[0].length;
 

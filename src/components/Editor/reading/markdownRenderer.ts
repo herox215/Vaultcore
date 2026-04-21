@@ -22,19 +22,25 @@ import { get } from "svelte/store";
 import { resolveTarget } from "../wikiLink";
 import { resolveAttachment } from "../embeds";
 import { vaultStore } from "../../../store/vaultStore";
-import { evaluateProgram } from "../../../lib/templateProgram";
-import { buildTemplateScope } from "../../../lib/templateScope";
+import { splitSegments } from "../../../lib/templateProgram";
+import { evaluate, renderValue } from "../../../lib/templateExpression";
+import { buildTemplateScope, TEMPLATE_EXPR_RE } from "../../../lib/templateScope";
 
 /**
  * Single shared instance — markdown-it is stateless between render() calls so
  * module-level reuse is safe and keeps the plugin-registration cost out of
  * the hot path.
  */
+// `typographer: false` because the evaluator output for `{{ ... }}` templates
+// flows through this parser before the user sees it — markdown-it's smartquote
+// / replacement rules would silently rewrite `--`, `...`, `"..."` etc. inside
+// evaluated strings, producing output that diverges from what the CM6 live-
+// preview widget shows. Reading Mode must match the editor's text verbatim.
 const md: MarkdownIt = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: false,
-  typographer: true,
+  typographer: false,
 });
 
 // ── Wiki-embed inline rule (`![[target]]`) ────────────────────────────────────
@@ -211,40 +217,143 @@ function renderTaskListCheckboxes(html: string): string {
 // normal markdown pipeline — tables, lists, and wiki-links inside template
 // output render without any Reading-Mode-specific widget logic.
 //
-// Semantics mirror the CM6 live-preview plugin (`templateLivePreview.ts`):
-// on parse/evaluation failure and on empty output, the original `{{ ... }}`
-// source stays visible instead of collapsing to nothing. That keeps broken
-// expressions debuggable when flipping between edit and read views.
+// Two behaviours worth calling out:
+//   1. Code regions (fenced ``` / ~~~ blocks and inline backtick spans) are
+//      masked with placeholders before the replace so `{{ ... }}` inside a
+//      code example is preserved verbatim. Docs demonstrating the feature
+//      can safely render `{{date}}` inside a code block.
+//   2. Evaluator *errors* keep the original `{{ ... }}` source visible so
+//      the author can debug them across edit/read flips. Evaluator
+//      *success with empty output* emits the empty string — a deliberate
+//      conditional like `{{ flag ? "x" : "" }}` collapses cleanly rather
+//      than leaking the template source to the reader.
 
-const EXPR_RE = /\{\{([^{}]+?)\}\}/g;
+function expandTemplates(markdown: string, title: string | undefined): string {
+  const { masked, restore } = maskCodeRegions(markdown);
 
-function expandTemplates(markdown: string, title: string): string {
   // Build the scope once per render, even if there are zero `{{ ... }}`
   // matches — `replace` lazily calls the callback so the cost is tied to
   // matches, not to the scope builder itself (which touches svelte stores).
   let scope: ReturnType<typeof buildTemplateScope> | null = null;
-  return markdown.replace(EXPR_RE, (full, body: string) => {
-    try {
-      if (scope === null) scope = buildTemplateScope({ title });
-      const out = evaluateProgram(body, scope);
-      return out === "" ? full : out;
-    } catch {
-      return full;
+
+  const expanded = masked.replace(TEMPLATE_EXPR_RE, (full, body: string) => {
+    if (scope === null) scope = buildTemplateScope({ title });
+
+    // Evaluate segment-by-segment using the primitives rather than
+    // `evaluateProgram`, because `evaluateProgram` swallows per-segment
+    // errors into empty strings and we need to distinguish "all segments
+    // succeeded, concatenated output is empty" (emit the empty string) from
+    // "a segment threw" (keep source visible so the author can debug).
+    let result = "";
+    let anyError = false;
+    for (const seg of splitSegments(body)) {
+      const trimmed = seg.trim();
+      if (trimmed === "") continue;
+      try {
+        result += renderValue(evaluate(trimmed, scope));
+      } catch {
+        anyError = true;
+        break;
+      }
     }
+    return anyError ? full : result;
   });
+
+  return restore(expanded);
+}
+
+// ── Code-region masking ──────────────────────────────────────────────────────
+//
+// The placeholder uses Private-Use-Area delimiters (U+E000 / U+E001) rather
+// than NUL — CommonMark requires NUL to be replaced with U+FFFD before
+// parsing, which would destroy a NUL-based marker. Private-Use Area code
+// points are opaque to markdown-it and extremely unlikely to appear in a
+// user's notes, so placeholders survive the round-trip through the parser
+// untouched. `maskCodeRegions` guarantees that any `{{ ... }}` sequence
+// inside a mask is kept verbatim; `restore` swaps the placeholders back
+// for the original text after template expansion has run.
+
+const PLACEHOLDER_PREFIX = "VC_CODE_";
+const PLACEHOLDER_SUFFIX = "";
+const PLACEHOLDER_RE = /VC_CODE_(\d+)/g;
+
+/**
+ * Fenced-block opener or closer at the start of a line (with up to 3 spaces
+ * of indent). Captures the full backtick/tilde run so the closer can be
+ * matched against the opener's char + length per CommonMark.
+ */
+const FENCE_LINE_RE = /^[ ]{0,3}(`{3,}|~{3,})[ \t]*(?:[^`\n]*)?$/;
+
+/**
+ * Matched backtick-run inline code: the outer run must be the same length as
+ * the closer and not escaped or adjacent to another backtick. `[\s\S]+?`
+ * allows newlines since CommonMark permits multi-line inline code, though
+ * most real spans stay on one line.
+ */
+const INLINE_CODE_RE = /(`+)([\s\S]+?)\1/g;
+
+function maskCodeRegions(markdown: string): {
+  masked: string;
+  restore: (s: string) => string;
+} {
+  const slots: string[] = [];
+  const save = (s: string): string => {
+    const id = slots.length;
+    slots.push(s);
+    return `${PLACEHOLDER_PREFIX}${id}${PLACEHOLDER_SUFFIX}`;
+  };
+
+  // Pass 1: fenced code blocks. A line-level state machine is simpler and
+  // more forgiving than a regex for unclosed or nested-looking fences —
+  // an unclosed fence consumes through EOF, matching markdown-it.
+  const lines = markdown.split("\n");
+  const outLines: string[] = [];
+  let fenceChar: string | null = null;
+  let fenceLen = 0;
+  let buf: string[] = [];
+  for (const line of lines) {
+    if (fenceChar === null) {
+      const m = line.match(FENCE_LINE_RE);
+      if (m) {
+        fenceChar = m[1]![0]!;
+        fenceLen = m[1]!.length;
+        buf = [line];
+      } else {
+        outLines.push(line);
+      }
+    } else {
+      buf.push(line);
+      const closer = line.match(/^[ ]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (
+        closer &&
+        closer[1]![0] === fenceChar &&
+        closer[1]!.length >= fenceLen
+      ) {
+        outLines.push(save(buf.join("\n")));
+        fenceChar = null;
+        fenceLen = 0;
+        buf = [];
+      }
+    }
+  }
+  if (fenceChar !== null) {
+    // Unclosed fence — mask through EOF so `{{...}}` inside stays verbatim.
+    outLines.push(save(buf.join("\n")));
+  }
+  const afterFences = outLines.join("\n");
+
+  // Pass 2: inline code spans. Scanned on the post-fence text so placeholders
+  // introduced above are immune to accidental backtick pairing.
+  const masked = afterFences.replace(INLINE_CODE_RE, (m) => save(m));
+
+  const restore = (s: string): string =>
+    s.replace(PLACEHOLDER_RE, (_, id: string) => slots[parseInt(id, 10)] ?? "");
+
+  return { masked, restore };
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Render a markdown string to sanitized HTML suitable for injection via
- * `innerHTML`. Wiki-links reuse the existing resolution map so click-through
- * can dispatch the same handler the editor uses.
- *
- * `noteTitle` feeds the `{{title}}` binding — pass the tab's file basename so
- * template output matches what the editor shows. When omitted, templates fall
- * back to the active editor tab's title (the CM6 plugin's behaviour).
- */
 /**
  * Allow Tauri's `asset://` and the Tauri-Windows `http(s)://ipc.localhost`
  * convention that `convertFileSrc()` produces. Without this, DOMPurify strips
@@ -252,7 +361,21 @@ function expandTemplates(markdown: string, title: string): string {
  */
 const ALLOWED_URI_REGEXP = /^(?:(?:https?|ftp|mailto|tel|asset|file):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
 
-export function renderMarkdownToHtml(markdown: string, noteTitle = ""): string {
+/**
+ * Render a markdown string to sanitized HTML suitable for injection via
+ * `innerHTML`. Wiki-links reuse the existing resolution map so click-through
+ * can dispatch the same handler the editor uses.
+ *
+ * `noteTitle` feeds the `{{title}}` binding in template expressions — pass
+ * the tab's file basename so template output matches what the editor shows.
+ * When omitted (not when passed as `""`), templates fall back to the active
+ * editor tab's basename, matching the CM6 plugin's behaviour. Pass `""`
+ * explicitly to bind `{{title}}` to the empty string.
+ */
+export function renderMarkdownToHtml(
+  markdown: string,
+  noteTitle?: string,
+): string {
   // Strip YAML frontmatter — readers don't want to see --- blocks at the top
   // of every note. Same rule the editor frontmatter plugin applies.
   const stripped = stripFrontmatter(markdown);
