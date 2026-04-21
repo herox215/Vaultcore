@@ -22,6 +22,8 @@ import { get } from "svelte/store";
 import { resolveTarget } from "../wikiLink";
 import { resolveAttachment } from "../embeds";
 import { vaultStore } from "../../../store/vaultStore";
+import { evaluateProgram } from "../../../lib/templateProgram";
+import { buildTemplateScope } from "../../../lib/templateScope";
 
 /**
  * Single shared instance — markdown-it is stateless between render() calls so
@@ -201,12 +203,47 @@ function renderTaskListCheckboxes(html: string): string {
   });
 }
 
+// ── Template expression expansion (#322) ─────────────────────────────────────
+//
+// Runs before markdown-it so any `{{ ... }}` body is replaced with its
+// evaluated string first. The evaluator returns plain text (including full
+// GFM tables, joined wiki-link fragments, …), which then flows through the
+// normal markdown pipeline — tables, lists, and wiki-links inside template
+// output render without any Reading-Mode-specific widget logic.
+//
+// Semantics mirror the CM6 live-preview plugin (`templateLivePreview.ts`):
+// on parse/evaluation failure and on empty output, the original `{{ ... }}`
+// source stays visible instead of collapsing to nothing. That keeps broken
+// expressions debuggable when flipping between edit and read views.
+
+const EXPR_RE = /\{\{([^{}]+?)\}\}/g;
+
+function expandTemplates(markdown: string, title: string): string {
+  // Build the scope once per render, even if there are zero `{{ ... }}`
+  // matches — `replace` lazily calls the callback so the cost is tied to
+  // matches, not to the scope builder itself (which touches svelte stores).
+  let scope: ReturnType<typeof buildTemplateScope> | null = null;
+  return markdown.replace(EXPR_RE, (full, body: string) => {
+    try {
+      if (scope === null) scope = buildTemplateScope({ title });
+      const out = evaluateProgram(body, scope);
+      return out === "" ? full : out;
+    } catch {
+      return full;
+    }
+  });
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Render a markdown string to sanitized HTML suitable for injection via
  * `innerHTML`. Wiki-links reuse the existing resolution map so click-through
  * can dispatch the same handler the editor uses.
+ *
+ * `noteTitle` feeds the `{{title}}` binding — pass the tab's file basename so
+ * template output matches what the editor shows. When omitted, templates fall
+ * back to the active editor tab's title (the CM6 plugin's behaviour).
  */
 /**
  * Allow Tauri's `asset://` and the Tauri-Windows `http(s)://ipc.localhost`
@@ -215,13 +252,17 @@ function renderTaskListCheckboxes(html: string): string {
  */
 const ALLOWED_URI_REGEXP = /^(?:(?:https?|ftp|mailto|tel|asset|file):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
 
-export function renderMarkdownToHtml(markdown: string): string {
+export function renderMarkdownToHtml(markdown: string, noteTitle = ""): string {
   // Strip YAML frontmatter — readers don't want to see --- blocks at the top
   // of every note. Same rule the editor frontmatter plugin applies.
   const stripped = stripFrontmatter(markdown);
+  // Expand `{{ ... }}` template expressions before markdown-it sees the text
+  // so tables / wiki-links produced by templates flow through the normal
+  // markdown rendering path.
+  const expanded = expandTemplates(stripped, noteTitle);
   // Fresh env per render — the heading_open rule uses `env._slugCounts` to
   // disambiguate repeated heading texts within a single document.
-  const rawHtml = renderTaskListCheckboxes(md.render(stripped, {}));
+  const rawHtml = renderTaskListCheckboxes(md.render(expanded, {}));
   return DOMPurify.sanitize(rawHtml, {
     ADD_ATTR: ["data-wiki-target", "data-wiki-resolved", "data-embed-target", "id"],
     ALLOW_DATA_ATTR: true,

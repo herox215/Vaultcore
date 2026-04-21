@@ -140,4 +140,63 @@ describe("renderMarkdownToHtml (#63)", () => {
     expect(html).toContain('href="#hello"');
     expect(html).toContain('id="hello"');
   });
+
+  // ── Template expression expansion (#322) ───────────────────────────────
+  describe("template expression expansion (#322)", () => {
+    it("renders {{title}} using the basename passed in", () => {
+      const html = renderMarkdownToHtml("Hello {{title}}!", "MyNote");
+      expect(html).toContain("Hello MyNote!");
+      expect(html).not.toContain("{{title}}");
+    });
+
+    it("renders {{date}} as an ISO-style yyyy-mm-dd string", () => {
+      const html = renderMarkdownToHtml("Today: {{date}}", "n");
+      expect(html).toMatch(/Today: \d{4}-\d{2}-\d{2}/);
+    });
+
+    it("evaluates multi-segment programs separated by `;`", () => {
+      const html = renderMarkdownToHtml(
+        '{{ "prefix-"; title }}',
+        "MyNote",
+      );
+      expect(html).toContain("prefix-MyNote");
+    });
+
+    it("leaves the source visible on evaluation error", () => {
+      // `nonexistent.whatever` throws an unknown-identifier error; the
+      // renderer must keep the literal `{{ ... }}` text rather than
+      // collapsing to an empty string.
+      const html = renderMarkdownToHtml(
+        "Broken {{nonexistent.whatever}} here",
+        "n",
+      );
+      expect(html).toContain("{{nonexistent.whatever}}");
+    });
+
+    it("preserves wiki-links produced inside a template expression as anchors", () => {
+      // `"[[foo]]"` as a string literal → same `[[foo]]` text after
+      // evaluation → markdown-it's wiki-link rule then turns it into an
+      // anchor with data-wiki-target.
+      setResolvedLinks(new Map([["foo", "notes/foo.md"]]));
+      const html = renderMarkdownToHtml('{{ "[[foo]]" }}', "n");
+      expect(html).toMatch(/<a[^>]*data-wiki-target="foo"[^>]*>/);
+    });
+
+    it("does not disturb plain markdown when no `{{ ... }}` is present", () => {
+      const html = renderMarkdownToHtml("# Hello\n\nWorld", "n");
+      expect(html).toMatch(/<h1[^>]*>Hello<\/h1>/);
+      expect(html).toContain("<p>World</p>");
+    });
+
+    it("leaves empty-output templates as source to keep them debuggable", () => {
+      // `""` evaluates to the empty string; per the semantics documented in
+      // `expandTemplates`, empty output leaves the source visible so an
+      // accidentally-empty template is not silently swallowed in Reading
+      // Mode. markdown-it's typographer converts the straight quotes to
+      // curly quotes during rendering — assert on the `{{`/`}}` markers
+      // rather than the inner chars.
+      const html = renderMarkdownToHtml('{{ "" }}', "n");
+      expect(html).toMatch(/\{\{.*\}\}/);
+    });
+  });
 });

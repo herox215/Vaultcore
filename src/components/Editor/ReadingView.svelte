@@ -18,6 +18,11 @@
   import { toastStore } from "../../store/toastStore";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
+  import { vaultStore } from "../../store/vaultStore";
+  import { tagsStore } from "../../store/tagsStore";
+  import { bookmarksStore } from "../../store/bookmarksStore";
+  import { noteContentCacheVersion } from "../../lib/noteContentCache";
+  import { titleFromPath } from "../../lib/templateScope";
 
   interface Props {
     tab: Tab;
@@ -38,7 +43,7 @@
     if (!tab) return;
     try {
       const content = await readFile(tab.filePath);
-      html = renderMarkdownToHtml(content);
+      html = renderMarkdownToHtml(content, titleFromPath(tab.filePath));
       loadError = null;
     } catch (err) {
       loadError = "Datei konnte nicht gelesen werden.";
@@ -55,6 +60,33 @@
       loadedForId = id;
       void load();
     }
+  });
+
+  // #322 — Reading Mode must re-render when the data a `{{ ... }}` template
+  // expression reads over changes on disk, otherwise a template like
+  // `{{vault.notes.where(n => n.content.contains("X"))}}` would stay frozen
+  // with whatever the vault looked like when the tab opened. Subscribe to the
+  // same stores the CM6 live-preview plugin watches (vaultStore / tagsStore /
+  // bookmarksStore / noteContentCacheVersion) and re-read the file on any
+  // tick. The svelte subscribe contract invokes the callback synchronously
+  // with the current value, so a `ready` latch suppresses the initial burst
+  // that would otherwise double-load on mount.
+  onMount(() => {
+    let ready = false;
+    const trigger = (): void => {
+      if (!ready) return;
+      if (loadedForId !== null) void load();
+    };
+    const unsubs: Array<() => void> = [
+      vaultStore.subscribe(trigger),
+      tagsStore.subscribe(trigger),
+      bookmarksStore.subscribe(trigger),
+      noteContentCacheVersion.subscribe(trigger),
+    ];
+    ready = true;
+    return () => {
+      for (const u of unsubs) u();
+    };
   });
 
   // Save the current scroll position when this view deactivates (tab switch
