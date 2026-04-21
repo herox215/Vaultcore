@@ -445,6 +445,35 @@ describe("templateLivePlugin — rendering", () => {
     expect(widgets(view)[0]!.text).toBe("OtherVault");
   });
 
+  // #309 two-token invariant: `requestReload()` is the "map stale, refetch"
+  // edge and must NOT trigger a decoration rebuild — rebuilding at that edge
+  // would paint against the still-stale map. Only `markReady()`, fired after
+  // `setResolvedLinks()` lands, is a valid trigger. This test locks the
+  // invariant so a future regression (e.g. subscribing to every store tick
+  // indiscriminately) is caught.
+  it("does NOT rebuild decorations when resolvedLinksStore.requestReload() fires alone (#309)", () => {
+    setResolvedLinks(new Map());
+    const doc = 'x {{"[[Ghost]]"}} y';
+    const view = mount(doc, 0);
+
+    const before = view.dom.querySelector(
+      ".vc-template-rendered [data-wiki-target]",
+    );
+    expect(before).not.toBeNull();
+    const beforeNode = before as HTMLElement;
+    expect(beforeNode.getAttribute("data-wiki-resolved")).toBe("false");
+
+    // Simulate the stale-edge only — the map is NOT updated.
+    resolvedLinksStore.requestReload();
+
+    // The exact same DOM node must still be present (no rebuild happened).
+    const after = view.dom.querySelector(
+      ".vc-template-rendered [data-wiki-target]",
+    );
+    expect(after).toBe(beforeNode);
+    expect(after!.getAttribute("data-wiki-resolved")).toBe("false");
+  });
+
   // #309 — regression: a file created between render and click left the
   // rendered wiki-link span with `data-wiki-resolved="false"`, routing the
   // click into the create-at-root fallback even after the resolved-links map

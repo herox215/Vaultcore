@@ -315,18 +315,16 @@
     // tick before the async resolvedLinks refetch lands), the attribute can
     // be stale-`false` while the live map now resolves the target. Re-check
     // synchronously here so a stale decoration never routes into the
-    // create-at-root fallback.
+    // create-at-root fallback. Zero IPC — `resolveTarget` is a `Map.get`.
     const liveRelPath = resolveTarget(detail.target);
-    const effectivelyResolved = detail.resolved || liveRelPath !== null;
 
-    if (effectivelyResolved) {
-      // LINK-03: synchronous lookup — zero IPC at click time
-      const relPath = liveRelPath ?? resolveTarget(detail.target);
-      if (!relPath) {
+    if (detail.resolved || liveRelPath !== null) {
+      if (!liveRelPath) {
         // Map out of sync (rare: file deleted between decoration and click)
         void reloadResolvedLinks();
         return;
       }
+      const relPath = liveRelPath;
       const absPath = `${vault}/${relPath}`;
       // #147 — `.canvas` targets need the canvas viewer; plain notes keep
       // the synchronous `openTab` fast path so markdown clicks stay on the

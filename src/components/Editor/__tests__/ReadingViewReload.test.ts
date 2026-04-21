@@ -126,6 +126,29 @@ describe("ReadingView live-reload on vault-store ticks (#321)", () => {
     expect(readFileMock.mock.calls).toHaveLength(2);
   });
 
+  // #309 two-token invariant: a bare `requestReload()` must NOT cause Reading
+  // Mode to re-read. `requestReload` is the "map is stale, please refetch"
+  // edge; re-rendering at that edge would paint against the still-stale map.
+  // Only `markReady()` — fired after `setResolvedLinks()` has landed — is a
+  // valid trigger. This test locks that invariant so a future regression
+  // (e.g. subscribing to every store change indiscriminately) is caught.
+  it("does NOT re-read when resolvedLinksStore.requestReload() fires alone (#309)", async () => {
+    render(ReadingView, {
+      props: { tab: makeTab(), isActive: true },
+    });
+
+    await waitForReadCount(1);
+    expect(readFileMock.mock.calls).toHaveLength(1);
+
+    resolvedLinksStore.requestReload();
+
+    // Give ample time for any errant subscriber to fire — then confirm the
+    // read count did not increase.
+    for (let i = 0; i < 10; i++) await tick();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(readFileMock.mock.calls).toHaveLength(1);
+  });
+
   it("coalesces synchronous same-tick vaultStore ticks into a single reload", async () => {
     render(ReadingView, {
       props: { tab: makeTab(), isActive: true },
