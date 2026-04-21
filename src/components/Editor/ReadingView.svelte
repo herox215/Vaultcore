@@ -21,6 +21,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { tagsStore } from "../../store/tagsStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
+  import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { noteContentCacheVersion } from "../../lib/noteContentCache";
   import { titleFromPath } from "../../lib/templateScope";
 
@@ -108,11 +109,23 @@
         void load();
       });
     };
+    // #309: re-read + re-render when the resolved-links map becomes fresh so
+    // `[[New Note]]` rendered from a `{{ ... }}` template expression flips
+    // from unresolved to resolved without a manual tab reload. Guard on
+    // `readyToken` only — firing on `requestToken` would re-render against
+    // the still-stale map.
+    let prevReadyToken: string | null = null;
     const unsubs: Array<() => void> = [
       vaultStore.subscribe(trigger),
       tagsStore.subscribe(trigger),
       bookmarksStore.subscribe(trigger),
       noteContentCacheVersion.subscribe(trigger),
+      resolvedLinksStore.subscribe((state) => {
+        if (state.readyToken && state.readyToken !== prevReadyToken) {
+          prevReadyToken = state.readyToken;
+          trigger();
+        }
+      }),
     ];
     ready = true;
     // Teardown lives next to the subscriptions rather than in a separate
