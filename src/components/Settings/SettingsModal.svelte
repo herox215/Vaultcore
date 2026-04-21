@@ -582,6 +582,19 @@
           <p class="vc-shortcut-error" role="alert" data-testid="shortcut-error">{recordError}</p>
         {/if}
       </section>
+
+      <!-- Section — Build (#313) -->
+      <section class="vc-settings-section" data-testid="settings-build">
+        <h3 class="vc-settings-section-title">BUILD</h3>
+        <div class="vc-settings-row">
+          <label for="build-version">Version</label>
+          <code id="build-version" class="vc-build-version" data-testid="settings-build-version">{__VC_BUILD_VERSION__}</code>
+        </div>
+        <p class="vc-settings-hint">
+          Format: <code>&lt;commits-auf-main&gt;-g&lt;short-sha&gt; · &lt;commit-datum&gt;</code>.
+          Höhere Commit-Zahl = neuer.
+        </p>
+      </section>
     </div>
   </div>
 
@@ -969,6 +982,18 @@
     margin: 8px 16px 0;
     font-size: 12px;
     color: var(--color-danger, #c62828);
+  }
+
+  /* Build version (#313) */
+  .vc-build-version {
+    font-family: var(--vc-font-mono);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    padding: 2px 6px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    user-select: text;
   }
 
   /* Conflict modal (#65) */
