@@ -39,8 +39,9 @@ import { listenFileChange } from "../../ipc/events";
 import {
   readCached as readCachedNote,
   requestLoad as requestLoadNote,
-  onCacheChanged as onNoteCacheChanged,
+  noteContentCacheVersion,
 } from "../../lib/noteContentCache";
+import { toVaultRel as toVaultRelHelper, absFromRel as absFromRelHelper } from "../../lib/vaultPath";
 import { parseCanvas } from "../../lib/canvas/parse";
 import type { CanvasNode } from "../../lib/canvas/types";
 import { DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from "../../lib/canvas/types";
@@ -110,16 +111,11 @@ function kickAllEmbedViews(): void {
 
 /**
  * Convert an absolute path to a vault-relative forward-slash path, or return
- * null when the path is outside the vault (or no vault is open).
+ * null when the path is outside the vault (or no vault is open). Thin
+ * wrapper around the shared helper so all call-sites here stay terse.
  */
 function toVaultRel(absPath: string): string | null {
-  const vault = get(vaultStore).currentPath;
-  if (!vault) return null;
-  const absFwd = absPath.replace(/\\/g, "/");
-  const vaultFwd = vault.replace(/\\/g, "/").replace(/\/$/, "");
-  if (absFwd === vaultFwd) return "";
-  if (!absFwd.startsWith(vaultFwd + "/")) return null;
-  return absFwd.slice(vaultFwd.length + 1);
+  return toVaultRelHelper(absPath, get(vaultStore).currentPath ?? null);
 }
 
 // ── Canvas-cache invalidation: external file changes ─────────────────────────
@@ -172,9 +168,15 @@ tabStore.subscribe((state) => {
 });
 
 // #319: the shared note-content cache lives in its own module. Subscribe to
-// its change signal so embed decorations refresh when a background fetch
-// lands — same UX as the legacy per-view dispatch had.
-onNoteCacheChanged(kickAllEmbedViews);
+// its version store so embed decorations refresh when a background fetch
+// lands — same UX as the legacy per-view dispatch had. Svelte stores fire
+// synchronously with the current value on subscribe; a `ready` latch
+// swallows that initial call so we don't kick on module import.
+let noteCacheReady = false;
+noteContentCacheVersion.subscribe(() => {
+  if (noteCacheReady) kickAllEmbedViews();
+});
+noteCacheReady = true;
 
 /**
  * #154 — mirror of scheduleNoteFetch for `.canvas` embeds. Runs when
@@ -184,9 +186,8 @@ onNoteCacheChanged(kickAllEmbedViews);
  */
 function scheduleCanvasFetch(view: EditorView, relPath: string): void {
   if (canvasContentCache.has(relPath) || canvasFetchInFlight.has(relPath)) return;
-  const vault = get(vaultStore).currentPath;
-  if (!vault) return;
-  const abs = `${vault}/${relPath}`;
+  const abs = absFromRel(relPath);
+  if (abs === null) return;
   canvasFetchInFlight.add(relPath);
   void readFile(abs)
     .then((content) => {
@@ -218,10 +219,7 @@ function isImageFilename(name: string): boolean {
  * `convertFileSrc` tolerates either.
  */
 function absFromRel(relPath: string): string | null {
-  const vault = get(vaultStore).currentPath;
-  if (!vault) return null;
-  const v = vault.replace(/\\/g, "/").replace(/\/$/, "");
-  return `${v}/${relPath}`;
+  return absFromRelHelper(relPath, get(vaultStore).currentPath ?? null);
 }
 
 class ImageEmbedWidget extends WidgetType {

@@ -34,7 +34,6 @@ import {
   requestLoad,
   invalidate,
   clear,
-  onCacheChanged,
   noteContentCacheVersion,
   __cacheForTests,
 } from "../noteContentCache";
@@ -179,6 +178,52 @@ describe("noteContentCache — generation tokens (race safety)", () => {
     await flushMicrotasks();
     expect(readCached("a.md")).toBe("fresh");
   });
+
+  // Review B2: before the fix, invalidate() bumped generation but left the
+  // inFlight slot set, so the very next requestLoad(rel) was a silent no-op.
+  // The stale fetch resolved and got dropped as intended — but then no new
+  // fetch was scheduled, and the path stayed missing until the next outside
+  // invalidation. Pin the fix: after invalidate, requestLoad must enqueue
+  // a fresh fetch that actually lands.
+  it("invalidate mid-load releases the slot so requestLoad can re-enqueue", async () => {
+    const resolvers: Array<(v: string) => void> = [];
+    readerSlot.impl = () =>
+      new Promise<string>((r) => {
+        resolvers.push(r);
+      });
+    requestLoad("a.md");
+    expect(__cacheForTests.inFlightSize()).toBe(1);
+    invalidate("a.md");
+    expect(__cacheForTests.inFlightSize()).toBe(0);
+    requestLoad("a.md");
+    expect(__cacheForTests.inFlightSize()).toBe(1);
+    // Two fetches are now open; the first-bumped one drops, the second lands.
+    resolvers[0]!("stale");
+    resolvers[1]!("fresh");
+    await flushMicrotasks();
+    expect(readCached("a.md")).toBe("fresh");
+  });
+
+  // Review B1: same story for clear() — it used to leave inFlight populated,
+  // wedging the path until an external invalidation fired. The fix clears
+  // inFlight too and a fresh requestLoad after clear() must work.
+  it("clear mid-load releases the slot so requestLoad can re-enqueue", async () => {
+    const resolvers: Array<(v: string) => void> = [];
+    readerSlot.impl = () =>
+      new Promise<string>((r) => {
+        resolvers.push(r);
+      });
+    requestLoad("a.md");
+    expect(__cacheForTests.inFlightSize()).toBe(1);
+    clear();
+    expect(__cacheForTests.inFlightSize()).toBe(0);
+    requestLoad("a.md");
+    expect(__cacheForTests.inFlightSize()).toBe(1);
+    resolvers[0]!("stale-vault-a");
+    resolvers[1]!("fresh-vault-b");
+    await flushMicrotasks();
+    expect(readCached("a.md")).toBe("fresh-vault-b");
+  });
 });
 
 describe("noteContentCache — failure handling", () => {
@@ -200,6 +245,20 @@ describe("noteContentCache — failure handling", () => {
     requestLoad("bad.md");
     await flushMicrotasks();
     expect(calls).toBe(1);
+  });
+
+  // Pins the documented trade-off from the module header: failed reads
+  // cache as `""` so `.contains("X")` returns false for permanently
+  // unreadable files. The side effect — `.contains("")` returns `true` for
+  // both legit empty files and failed reads — is intentional; users who
+  // care can filter via `n.content.length > 0` first.
+  it("treats failed reads as indistinguishable from empty files by design", async () => {
+    readerSlot.impl = () => Promise.reject(new Error("permission-denied"));
+    requestLoad("failed.md");
+    await flushMicrotasks();
+    expect(readCached("failed.md")).toBe("");
+    expect(readCached("failed.md")?.includes("anything")).toBe(false);
+    expect(readCached("failed.md")?.includes("")).toBe(true);
   });
 });
 
@@ -270,40 +329,32 @@ describe("noteContentCache — concurrency cap", () => {
   });
 });
 
-describe("noteContentCache — subscriber notifications", () => {
+describe("noteContentCache — store-based change notifications", () => {
   beforeEach(() => {
     __cacheForTests.reset();
     vaultStore.setReady({ currentPath: "/vault", fileList: [], fileCount: 0 });
   });
 
-  it("onCacheChanged fires after a successful load", async () => {
-    let fired = 0;
-    const unsub = onCacheChanged(() => { fired++; });
+  it("bumps noteContentCacheVersion after a successful load", async () => {
+    const before = get(noteContentCacheVersion);
     readerSlot.impl = () => Promise.resolve("x");
     requestLoad("a.md");
     await flushMicrotasks();
-    expect(fired).toBeGreaterThan(0);
-    unsub();
+    expect(get(noteContentCacheVersion)).toBeGreaterThan(before);
   });
 
-  it("onCacheChanged unsubscribe stops firing", async () => {
+  it("subscriber unsubscribe stops firing", async () => {
     let fired = 0;
-    const unsub = onCacheChanged(() => { fired++; });
+    let ready = false;
+    const unsub = noteContentCacheVersion.subscribe(() => {
+      if (ready) fired++;
+    });
+    ready = true;
     unsub();
     readerSlot.impl = () => Promise.resolve("x");
     requestLoad("a.md");
     await flushMicrotasks();
     expect(fired).toBe(0);
-  });
-
-  it("isolates errors thrown by one subscriber from the others", async () => {
-    let second = 0;
-    onCacheChanged(() => { throw new Error("boom"); });
-    onCacheChanged(() => { second++; });
-    readerSlot.impl = () => Promise.resolve("x");
-    requestLoad("a.md");
-    await flushMicrotasks();
-    expect(second).toBeGreaterThan(0);
   });
 });
 
