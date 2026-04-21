@@ -225,3 +225,106 @@ describe("createVaultRoot — content-based filtering across all notes (#319)", 
     expect(hits).toEqual(["sub/b.md", "sub/c.md"]);
   });
 });
+
+// #325: template bodies in a note's own text must NOT contribute to `.content`
+// searches, otherwise a template like
+// `{{vault.notes.where(n => n.content.contains("todo"))}}` matches the host
+// note itself because the literal "todo" appears inside the expression body.
+describe("createVaultRoot — n.content strips `{{ ... }}` regions (#325)", () => {
+  it("a template body literal does not make the host note match itself", () => {
+    const bodies: Record<string, string> = {
+      // Only contains "todo" inside a template expression body.
+      "a.md": "# Index\n\n{{vault.notes.where(n => n.content.contains(\"todo\")).select(f => f.name)}}\n",
+      // Genuine prose mention — this is the note the filter should return.
+      "sub/b.md": "- todo: call the landlord\n",
+      // No mention at all.
+      "sub/c.md": "unrelated content\n",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const hits = v.notes
+      .where((n) => n.content.includes("todo"))
+      .select((n) => n.path)
+      .toArray();
+    expect(hits).toEqual(["sub/b.md"]);
+  });
+
+  it("strips every `{{ ... }}` region, including multi-line template bodies", () => {
+    const bodies: Record<string, string> = {
+      "a.md":
+        "prefix {{ line1;\nline2 }} middle {{ another }} suffix\n",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const content = v.notes.first()!.content;
+    expect(content).not.toContain("line1");
+    expect(content).not.toContain("line2");
+    expect(content).not.toContain("another");
+    expect(content).toContain("prefix");
+    expect(content).toContain("middle");
+    expect(content).toContain("suffix");
+  });
+
+  it("does not strip the second user-report shape — table-prefixed template", () => {
+    // The template concatenates a table header string with a notes query.
+    // The `"todo"` literal sits inside the expression body and must not
+    // make the host note self-match.
+    const bodies: Record<string, string> = {
+      "a.md":
+        "{{(\"|test|test|\\n|-|-|\\n\"); vault.notes.where(n => n.content.contains(\"todo\")).select(f => \"|[[\" + f.name + \"]]|-|\").join(\"\\n\")}}\n",
+      "sub/b.md": "- todo: call the landlord\n",
+      "sub/c.md": "irrelevant",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const hits = v.notes
+      .where((n) => n.content.includes("todo"))
+      .select((n) => n.path)
+      .toArray();
+    expect(hits).toEqual(["sub/b.md"]);
+  });
+
+  it("strips adjacent expressions without leaving a fragment between them", () => {
+    // Guards the `g`-flag contract: consecutive `{{ a }}{{ b }}` match as
+    // two separate regions. A regex bug that folded them into one "greedy"
+    // match, or skipped the second, would leave stray text behind.
+    const bodies: Record<string, string> = {
+      "a.md": "start {{ a }}{{ b }} end\n",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const content = v.notes.first()!.content;
+    expect(content).toBe("start  end\n");
+  });
+
+  it("frontmatter parsing is unaffected by the strip (uses raw content)", () => {
+    // Frontmatter must see the verbatim file so YAML parses correctly even
+    // when a `{{ ... }}` region lives in the body below it.
+    const bodies: Record<string, string> = {
+      "a.md":
+        "---\ntitle: Hello\ntags: [one]\n---\n\n{{ vault.notes.count() }}\n",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const a = v.notes.first()!;
+    expect(a.property.title).toBe("Hello");
+    expect(a.property.tags).toEqual(["one"]);
+    // And `.content` on the same note still has the template stripped.
+    expect(a.content).not.toContain("vault.notes.count()");
+  });
+});
