@@ -36,6 +36,11 @@ import { vaultStore } from "../../store/vaultStore";
 import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";
 import { listenFileChange } from "../../ipc/events";
+import {
+  readCached as readCachedNote,
+  requestLoad as requestLoadNote,
+  onCacheChanged as onNoteCacheChanged,
+} from "../../lib/noteContentCache";
 import { parseCanvas } from "../../lib/canvas/parse";
 import type { CanvasNode } from "../../lib/canvas/types";
 import { DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from "../../lib/canvas/types";
@@ -57,23 +62,12 @@ const WIKI_EMBED_RE = /!\[\[([^\]|#]+?)(?:#([^\]|]+))?(?:\|([^\]]*))?\]\]/g;
 /** Matches `![alt](path)` — captures the path. */
 const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
 
-// ── Cache for note-embed content ──────────────────────────────────────────────
-
-/**
- * Vault-relative path → file content. Entries are invalidated selectively by
- * two module-level subscriptions installed at import time:
- *   - `listenFileChange` for external modifications the watcher sees
- *   - `tabStore.subscribe` for internal auto-saves (which suppress the watcher
- *     via write_ignore, so we'd otherwise miss them)
- * Previously the cache was cleared on every local `docChanged`, which caused
- * the `…` placeholder to flash on every keystroke — see #27.
- */
-const noteContentCache: Map<string, string> = new Map();
-/**
- * Paths whose `readFile` call is already in flight, used to suppress duplicate
- * IPC requests from back-to-back plugin rebuilds.
- */
-const noteFetchInFlight: Set<string> = new Set();
+// ── Cache for canvas-embed content ────────────────────────────────────────────
+//
+// Note-embed content moved to `src/lib/noteContentCache.ts` (#319) so the
+// template expression path (`n.content`) and the embed path share a single
+// source of truth. Canvas JSON keeps its own cache here — it's only consumed
+// by this plugin, not by the vault API.
 
 /**
  * Canvas embeds (#147) share the same caching contract as note embeds (#27):
@@ -128,12 +122,12 @@ function toVaultRel(absPath: string): string | null {
   return absFwd.slice(vaultFwd.length + 1);
 }
 
-// ── Cache invalidation: external file changes ─────────────────────────────────
+// ── Canvas-cache invalidation: external file changes ─────────────────────────
 //
-// The watcher only fires for modifications NOT initiated by our own IPC writes
-// (write_ignore suppresses self-writes). That means this catches edits made by
-// tools outside the app — Finder rename, shell `cp`, other editors. Internal
-// auto-saves are handled by the tabStore subscription below.
+// Note-content invalidation lives in `noteContentCache.ts` now. This handler
+// keeps the canvas-specific portion of the old behaviour in place: external
+// watcher events (Finder rename, shell `cp`, other editors) drop the cached
+// JSON for the affected path and kick mounted views.
 //
 // Guarded try/catch because the subscription is module-level and the test
 // environment has no Tauri IPC — a synchronous throw here would break imports.
@@ -141,19 +135,11 @@ try {
   void listenFileChange((payload) => {
     let changed = false;
     const rel = toVaultRel(payload.path);
-    if (rel !== null) {
-      if (noteContentCache.delete(rel)) changed = true;
-      if (canvasContentCache.delete(rel)) changed = true;
-    }
+    if (rel !== null && canvasContentCache.delete(rel)) changed = true;
     if (payload.new_path) {
       const newRel = toVaultRel(payload.new_path);
-      if (newRel !== null) {
-        if (noteContentCache.delete(newRel)) changed = true;
-        if (canvasContentCache.delete(newRel)) changed = true;
-      }
+      if (newRel !== null && canvasContentCache.delete(newRel)) changed = true;
     }
-    // #154: refresh inline canvas previews (and note embeds) in every open
-    // editor without waiting for the next keystroke.
     if (changed) kickAllEmbedViews();
   }).catch(() => {
     /* Tauri not initialized — tests run without the IPC backend. */
@@ -162,59 +148,33 @@ try {
   /* same reason — swallow so the module still loads under vitest. */
 }
 
-// ── Cache invalidation: internal auto-saves via other tabs ────────────────────
+// ── Canvas-cache invalidation: internal auto-saves via other tabs ────────────
 //
-// tabStore.setLastSavedContent fires after writeFile returns successfully. We
-// snapshot each tab's lastSavedContent the first time we see it and diff on
-// subsequent store emissions — when the snapshot changes, the file was just
-// saved (by any tab, including ones in other panes), so invalidate its cache
-// entry. This lets the next embed rebuild re-fetch the fresh content.
-const lastSavedByTabId: Map<string, string> = new Map();
+// Mirror of the original snapshot-diff pattern (#154). Note-content writes
+// fire the same snapshot change but are now handled in noteContentCache.ts;
+// this handler only touches the canvas-JSON side.
+const lastSavedCanvasByTabId: Map<string, string> = new Map();
 tabStore.subscribe((state) => {
   let changed = false;
   for (const tab of state.tabs) {
-    const prev = lastSavedByTabId.get(tab.id);
+    const prev = lastSavedCanvasByTabId.get(tab.id);
     if (prev !== tab.lastSavedContent) {
-      lastSavedByTabId.set(tab.id, tab.lastSavedContent);
+      lastSavedCanvasByTabId.set(tab.id, tab.lastSavedContent);
       const rel = toVaultRel(tab.filePath);
-      if (rel !== null) {
-        if (noteContentCache.delete(rel)) changed = true;
-        // #154: CanvasView calls setLastSavedContent after every autosave, so
-        // the same diff-on-snapshot path that catches note writes now catches
-        // canvas writes too — the watcher's write_ignore would otherwise hide
-        // our own saves from the file-change listener.
-        if (canvasContentCache.delete(rel)) changed = true;
-      }
+      if (rel !== null && canvasContentCache.delete(rel)) changed = true;
     }
   }
-  // Clean up snapshots for tabs that have closed so the map doesn't grow.
   const liveIds = new Set(state.tabs.map((t) => t.id));
-  for (const id of Array.from(lastSavedByTabId.keys())) {
-    if (!liveIds.has(id)) lastSavedByTabId.delete(id);
+  for (const id of Array.from(lastSavedCanvasByTabId.keys())) {
+    if (!liveIds.has(id)) lastSavedCanvasByTabId.delete(id);
   }
   if (changed) kickAllEmbedViews();
 });
 
-function scheduleNoteFetch(view: EditorView, relPath: string): void {
-  if (noteContentCache.has(relPath) || noteFetchInFlight.has(relPath)) return;
-  const vault = get(vaultStore).currentPath;
-  if (!vault) return;
-  const abs = `${vault}/${relPath}`;
-  noteFetchInFlight.add(relPath);
-  void readFile(abs)
-    .then((content) => {
-      noteContentCache.set(relPath, content);
-    })
-    .catch(() => {
-      noteContentCache.set(relPath, "");
-    })
-    .finally(() => {
-      noteFetchInFlight.delete(relPath);
-      // Kick the plugin to re-render now that we have content.
-      if (!view.dom.isConnected) return;
-      view.dispatch({ effects: [] });
-    });
-}
+// #319: the shared note-content cache lives in its own module. Subscribe to
+// its change signal so embed decorations refresh when a background fetch
+// lands — same UX as the legacy per-view dispatch had.
+onNoteCacheChanged(kickAllEmbedViews);
 
 /**
  * #154 — mirror of scheduleNoteFetch for `.canvas` embeds. Runs when
@@ -622,9 +582,10 @@ function buildDecorations(view: EditorView): DecorationSet {
             deco = Decoration.replace({ widget: new CanvasEmbedWidget(rel, sizePx, cachedCanvas) });
           }
         } else {
-          const cached = noteContentCache.get(rel);
-          if (cached === undefined) {
-            scheduleNoteFetch(view, rel);
+          // #319: note-content cache is shared with the vault API.
+          const cached = readCachedNote(rel);
+          if (cached === null) {
+            requestLoadNote(rel);
             // Show a muted placeholder while the fetch is in flight so the UI
             // doesn't flash with a stale version of the target note.
             deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, "…") });
@@ -701,9 +662,10 @@ export const embedPlugin = ViewPlugin.fromClass(
     private view: EditorView;
 
     constructor(view: EditorView) {
-      // Clear caches so stale content from a previous vault does not leak into
-      // the freshly-mounted view. Cheap because the caches are module-level.
-      noteContentCache.clear();
+      // Canvas cache clears on mount so stale JSON from a previous vault
+      // doesn't leak into the freshly-mounted view. The note-content cache
+      // is managed by `noteContentCache.ts` and already clears on vault
+      // switch via its own vaultStore subscription.
       canvasContentCache.clear();
       this.view = view;
       // #154: register so module-level invalidation hooks can kick a rebuild.
@@ -730,12 +692,12 @@ export const embedPlugin = ViewPlugin.fromClass(
 );
 
 /**
- * Test-only hook: clear both caches so unit tests start from a clean slate.
+ * Test-only hook: clear the canvas cache so unit tests start from a clean
+ * slate. The note-content cache lives in its own module now — tests that
+ * exercise that surface should reset it via `__cacheForTests.reset()`.
  * Not part of the public API.
  */
 export function __resetEmbedCachesForTests(): void {
-  noteContentCache.clear();
-  noteFetchInFlight.clear();
   canvasContentCache.clear();
 }
 

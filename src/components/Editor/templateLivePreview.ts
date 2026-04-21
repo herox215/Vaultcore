@@ -28,6 +28,7 @@ import { get } from "svelte/store";
 
 import { evaluateProgram } from "../../lib/templateProgram";
 import { currentVaultRoot } from "../../lib/vaultApiStoreBridge";
+import { noteContentCacheVersion } from "../../lib/noteContentCache";
 import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
 import { bookmarksStore } from "../../store/bookmarksStore";
@@ -246,6 +247,10 @@ export const templateLivePlugin = ViewPlugin.fromClass(
         vaultStore.subscribe(trigger),
         tagsStore.subscribe(trigger),
         bookmarksStore.subscribe(trigger),
+        // #319: trigger re-decoration when an async `requestLoad` lands so
+        // `{{vault.notes.where(n => n.content.contains("X"))}}` fills in
+        // once the backing note contents have been read from disk.
+        noteContentCacheVersion.subscribe(trigger),
       );
       ready = true;
     }

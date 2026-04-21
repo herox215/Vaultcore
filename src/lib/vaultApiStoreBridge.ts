@@ -9,6 +9,7 @@ import { bookmarksStore } from "../store/bookmarksStore";
 import { editorStore } from "../store/editorStore";
 import { createVaultRoot } from "./vaultApi";
 import type { VaultStores, VaultRoot } from "./vaultApi";
+import { readCached, requestLoad } from "./noteContentCache";
 
 function vaultNameFromPath(path: string | null): string {
   if (!path) return "";
@@ -30,10 +31,16 @@ function currentStores(): VaultStores {
     readTags: () => get(tagsStore).tags,
     readBookmarks: () => get(bookmarksStore).paths,
     readNoteContent: (relPath: string) => {
-      // In-memory only: the active editor tab. Non-active notes have no
-      // content available synchronously. See #283 follow-up.
+      // Active tab → live buffer (reflects unsaved edits).
       const s = get(editorStore);
-      return s.activePath === relPath ? s.content : null;
+      if (s.activePath === relPath) return s.content;
+      // Otherwise fall back to the shared on-disk cache (#319). A miss
+      // kicks an async load; the next render-tick — triggered by the
+      // `noteContentCacheVersion` store — will see the filled entry.
+      const cached = readCached(relPath);
+      if (cached !== null) return cached;
+      requestLoad(relPath);
+      return null;
     },
   };
 }
