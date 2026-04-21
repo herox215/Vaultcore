@@ -62,7 +62,7 @@
     }
   });
 
-  // #322 — Reading Mode must re-render when the data a `{{ ... }}` template
+  // #321 — Reading Mode must re-render when the data a `{{ ... }}` template
   // expression reads over changes on disk, otherwise a template like
   // `{{vault.notes.where(n => n.content.contains("X"))}}` would stay frozen
   // with whatever the vault looked like when the tab opened. Subscribe to the

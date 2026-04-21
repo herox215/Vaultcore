@@ -141,8 +141,8 @@ describe("renderMarkdownToHtml (#63)", () => {
     expect(html).toContain('id="hello"');
   });
 
-  // ── Template expression expansion (#322) ───────────────────────────────
-  describe("template expression expansion (#322)", () => {
+  // ── Template expression expansion (#321) ───────────────────────────────
+  describe("template expression expansion (#321)", () => {
     it("renders {{title}} using the basename passed in", () => {
       const html = renderMarkdownToHtml("Hello {{title}}!", "MyNote");
       expect(html).toContain("Hello MyNote!");

@@ -203,7 +203,7 @@ function renderTaskListCheckboxes(html: string): string {
   });
 }
 
-// ── Template expression expansion (#322) ─────────────────────────────────────
+// ── Template expression expansion (#321) ─────────────────────────────────────
 //
 // Runs before markdown-it so any `{{ ... }}` body is replaced with its
 // evaluated string first. The evaluator returns plain text (including full

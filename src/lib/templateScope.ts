@@ -1,4 +1,4 @@
-// Shared scope construction for `{{ ... }}` template expressions (#322).
+// Shared scope construction for `{{ ... }}` template expressions (#321).
 //
 // The CM6 live-preview plugin (`templateLivePreview.ts`) and the Reading Mode
 // renderer (`reading/markdownRenderer.ts`) must expose the same identifiers

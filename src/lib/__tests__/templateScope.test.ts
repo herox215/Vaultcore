@@ -1,4 +1,4 @@
-// Tests for the shared template scope builder (#322).
+// Tests for the shared template scope builder (#321).
 // The scope returned by `buildTemplateScope` feeds both the CM6 live-preview
 // and the Reading Mode renderer; keeping its shape locked down via tests
 // prevents a drift where one view resolves an identifier the other doesn't.
