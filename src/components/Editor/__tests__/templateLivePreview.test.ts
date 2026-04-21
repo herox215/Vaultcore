@@ -95,9 +95,23 @@ function widgets(view: EditorView): Array<{ from: number; to: number; text: stri
   return out;
 }
 
+const DEFAULT_VAULT_STATE = {
+  currentPath: "/v/MyVault",
+  status: "ready",
+  fileList: ["first.md", "second.md"],
+  fileCount: 2,
+  errorMessage: null,
+  sidebarWidth: 240,
+  vaultReachable: true,
+};
+
 describe("templateLivePlugin — rendering", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    // Reset the mocked vaultStore so per-test mutations don't leak across.
+    (vaultStore as unknown as { _set: (v: unknown) => void })._set(
+      DEFAULT_VAULT_STATE,
+    );
   });
 
   it("renders {{vault.name}} as a widget with the vault name", () => {
@@ -277,6 +291,139 @@ describe("templateLivePlugin — rendering", () => {
       expect(anchor).not.toBeNull();
       expect(anchor!.getAttribute("data-wiki-target")).toBe("first");
       expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    });
+  });
+
+  // #305 — evaluated output that IS a GFM table should render as a read-only
+  // styled <table>, not as a monospaced pipe-and-dash <span>.
+  describe("rendered GFM table (#305)", () => {
+    it("renders a table-shaped output as a <table> widget", () => {
+      const doc = 'x {{ "|A|B|\\n|-|-|\\n|1|2|" }} y';
+      const view = mount(doc, doc.length);
+
+      const table = view.dom.querySelector(
+        ".vc-template-rendered-table table",
+      );
+      expect(table).not.toBeNull();
+
+      const ths = table!.querySelectorAll("thead th");
+      expect(Array.from(ths).map((t) => t.textContent?.trim())).toEqual(["A", "B"]);
+
+      const tds = table!.querySelectorAll("tbody tr:first-child td");
+      expect(Array.from(tds).map((t) => t.textContent?.trim())).toEqual(["1", "2"]);
+    });
+
+    it("non-table output still renders as the plain <span> widget", () => {
+      const view = mount("x {{vault.name}} y", 0);
+      expect(view.dom.querySelector(".vc-template-rendered-table")).toBeNull();
+      expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
+    });
+
+    it("reflects delimiter-row alignment in cell text-align", () => {
+      const doc = 'x {{ "|L|C|R|\\n|:-|:-:|-:|\\n|a|b|c|" }} y';
+      const view = mount(doc, doc.length);
+
+      const headers = view.dom.querySelectorAll(
+        ".vc-template-rendered-table thead th",
+      );
+      expect((headers[0] as HTMLElement).style.textAlign).toBe("left");
+      expect((headers[1] as HTMLElement).style.textAlign).toBe("center");
+      expect((headers[2] as HTMLElement).style.textAlign).toBe("right");
+    });
+
+    it("renders [[target]] inside a cell as a clickable wiki-link span", () => {
+      setResolvedLinks(new Map([["first", "first.md"]]));
+      const doc = 'x {{ "|Note|X|\\n|-|-|\\n|[[first]]| |" }} y';
+      const view = mount(doc, doc.length);
+
+      const link = view.dom.querySelector(
+        ".vc-template-rendered-table tbody [data-wiki-target]",
+      );
+      expect(link).not.toBeNull();
+      expect(link!.getAttribute("data-wiki-target")).toBe("first");
+      expect(link!.getAttribute("data-wiki-resolved")).toBe("true");
+      expect(link!.classList.contains("cm-wikilink-resolved")).toBe(true);
+    });
+
+    it("is read-only: no contenteditable cells and no structural controls", () => {
+      const doc = 'x {{ "|A|B|\\n|-|-|\\n|1|2|" }} y';
+      const view = mount(doc, doc.length);
+
+      const table = view.dom.querySelector(".vc-template-rendered-table table");
+      expect(table).not.toBeNull();
+
+      expect(table!.querySelectorAll("[contenteditable='true']").length).toBe(0);
+      expect(table!.parentElement!.querySelectorAll(".cm-table-ctrl").length).toBe(0);
+    });
+
+    it("falls back to span when output has a table plus surrounding text", () => {
+      const doc = 'x {{ "prefix\\n|A|B|\\n|-|-|\\n|1|2|" }} y';
+      const view = mount(doc, doc.length);
+      expect(view.dom.querySelector(".vc-template-rendered-table")).toBeNull();
+      expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
+    });
+
+    it("renders a header-only table (no body rows)", () => {
+      const doc = 'x {{ "|A|B|\\n|-|-|" }} y';
+      const view = mount(doc, doc.length);
+
+      const table = view.dom.querySelector(
+        ".vc-template-rendered-table table",
+      );
+      expect(table).not.toBeNull();
+      expect(table!.querySelectorAll("tbody tr").length).toBe(0);
+      expect(table!.querySelectorAll("thead th").length).toBe(2);
+    });
+
+    it("renders multiple [[...]] inside a single cell", () => {
+      setResolvedLinks(new Map([["a", "a.md"], ["b", "b.md"]]));
+      const doc = 'x {{ "|Links|X|\\n|-|-|\\n|[[a]] [[b]]| |" }} y';
+      const view = mount(doc, doc.length);
+
+      const links = view.dom.querySelectorAll(
+        ".vc-template-rendered-table tbody [data-wiki-target]",
+      );
+      expect(links.length).toBe(2);
+      expect(links[0]!.getAttribute("data-wiki-target")).toBe("a");
+      expect(links[1]!.getAttribute("data-wiki-target")).toBe("b");
+    });
+
+    // Note: [[target|alias]] inside a cell can't round-trip through the
+    // current `splitRow` (the `|` splits the cell). GFM requires `\|` escape
+    // for pipes-in-cells; that's a broader table-plugin enhancement and out
+    // of scope here. The general aliased wiki-link rendering path is already
+    // covered by the non-table test at line ~176.
+
+    it("falls back to span when output contains two tables separated by a blank line", () => {
+      const doc =
+        'x {{ "|A|x|\\n|-|-|\\n|1|y|\\n\\n|B|z|\\n|-|-|\\n|2|w|" }} y';
+      const view = mount(doc, doc.length);
+      expect(view.dom.querySelector(".vc-template-rendered-table")).toBeNull();
+      expect(view.dom.querySelector(".vc-template-rendered")).not.toBeNull();
+    });
+
+    it("re-renders the table when the backing store changes", () => {
+      const doc =
+        'x {{ "|Note|X|\\n|-|-|\\n"; vault.notes.select(n => "|[[" + n.name + "]]| |").join("\\n") }} y';
+      const view = mount(doc, doc.length);
+
+      let rows = view.dom.querySelectorAll(
+        ".vc-template-rendered-table tbody tr",
+      );
+      expect(rows.length).toBe(2);
+
+      (vaultStore as unknown as { _set: (v: unknown) => void })._set({
+        currentPath: "/v/OtherVault",
+        status: "ready",
+        fileList: ["only.md"],
+        fileCount: 1,
+        errorMessage: null,
+        sidebarWidth: 240,
+        vaultReachable: true,
+      });
+
+      rows = view.dom.querySelectorAll(".vc-template-rendered-table tbody tr");
+      expect(rows.length).toBe(1);
     });
   });
 
