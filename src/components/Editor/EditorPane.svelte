@@ -36,6 +36,7 @@
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
   import { setResolvedAttachments } from "./embeds";
+  import { decideExternalModifyAction, sha256Hex } from "./externalChangeHandler";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -793,19 +794,35 @@
       const filename = path.split("/").pop() ?? path;
 
       try {
-        const result = await mergeExternalChange(path, editorContent, lastSavedContent);
+        const action = await decideExternalModifyAction(
+          { getFileHash, mergeExternalChange, sha256Hex },
+          { path, editorContent, lastSavedContent },
+        );
 
-        if (result.outcome === "clean") {
+        if (action.kind === "sync-hash") {
+          // Disk bytes match the editor — either our own write slipped past
+          // the WriteIgnoreList TTL or an external tool touched the file
+          // without changing content. Refresh the hash tracker so the next
+          // autosave doesn't re-detect a phantom mismatch.
+          tabStore.setLastSavedHash(tabWithPath.id, action.diskHash);
+          tabStore.setLastSavedContent(tabWithPath.id, editorContent);
+          tabStore.setDirty(tabWithPath.id, false);
+          editorStore.setLastSavedHash(action.diskHash);
+        } else if (action.kind === "clean-merge") {
           view.dispatch({
-            changes: { from: 0, to: view.state.doc.length, insert: result.merged_content },
+            changes: { from: 0, to: view.state.doc.length, insert: action.mergedContent },
           });
-          tabStore.setLastSavedContent(tabWithPath.id, result.merged_content);
+          tabStore.setLastSavedContent(tabWithPath.id, action.mergedContent);
+          tabStore.setLastSavedHash(tabWithPath.id, action.diskHash);
+          editorStore.setLastSavedHash(action.diskHash);
           toastStore.push({
             variant: "clean-merge",
             message: `Externe Änderungen wurden in ${filename} eingebunden.`,
           });
         } else {
           tabStore.setLastSavedContent(tabWithPath.id, editorContent);
+          tabStore.setLastSavedHash(tabWithPath.id, action.diskHash);
+          editorStore.setLastSavedHash(action.diskHash);
           toastStore.push({
             variant: "conflict",
             message: `Konflikt in ${filename} – lokale Version behalten.`,
