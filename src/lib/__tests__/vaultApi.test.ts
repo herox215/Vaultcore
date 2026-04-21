@@ -293,6 +293,22 @@ describe("createVaultRoot — n.content strips `{{ ... }}` regions (#325)", () =
     expect(hits).toEqual(["sub/b.md"]);
   });
 
+  it("strips adjacent expressions without leaving a fragment between them", () => {
+    // Guards the `g`-flag contract: consecutive `{{ a }}{{ b }}` match as
+    // two separate regions. A regex bug that folded them into one "greedy"
+    // match, or skipped the second, would leave stray text behind.
+    const bodies: Record<string, string> = {
+      "a.md": "start {{ a }}{{ b }} end\n",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const content = v.notes.first()!.content;
+    expect(content).toBe("start  end\n");
+  });
+
   it("frontmatter parsing is unaffected by the strip (uses raw content)", () => {
     // Frontmatter must see the verbatim file so YAML parses correctly even
     // when a `{{ ... }}` region lives in the body below it.

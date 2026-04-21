@@ -167,6 +167,11 @@ function makeNote(
   //     body literal like `.contains("todo")` inside its own expression does
   //     NOT make the host note match itself. Template bodies are code, not
   //     prose — they have no business showing up in content searches.
+  // Memo coupling: `strippedContentMemo` is derived from `rawContentMemo`.
+  // Neither is invalidated today (the note object is rebuilt on every vault
+  // tick), but if a future refactor adds hot-reload for `.content`, BOTH
+  // memos must be reset together — otherwise `.content` would return a
+  // stripped view of stale bytes while frontmatter sees fresh raw bytes.
   let rawContentMemo: string | null | undefined = undefined;
   const getRawContent = (): string => {
     if (rawContentMemo === undefined) {
