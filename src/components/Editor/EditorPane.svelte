@@ -289,6 +289,12 @@
       setResolvedLinks(new Map());
       setResolvedAttachments(new Map());
     }
+    // #309 — bump readyToken AFTER the map has been swapped in (success or
+    // soft-fail) so decoration layers that outlive EditorPane's refresh — CM6
+    // template live-preview, Reading Mode — can rebuild against the fresh
+    // map. Without this, their subscriptions would either never fire or fire
+    // on requestToken and rebuild against the still-stale map.
+    resolvedLinksStore.markReady();
   }
 
   /**
@@ -303,9 +309,19 @@
     u();
     if (!vault) return;
 
-    if (detail.resolved) {
+    // #309 — the decoration's `data-wiki-resolved` attribute reflects the
+    // resolved-links map at decoration-build time. When a file is created or
+    // moved between render and click (e.g. template re-renders on vaultStore
+    // tick before the async resolvedLinks refetch lands), the attribute can
+    // be stale-`false` while the live map now resolves the target. Re-check
+    // synchronously here so a stale decoration never routes into the
+    // create-at-root fallback.
+    const liveRelPath = resolveTarget(detail.target);
+    const effectivelyResolved = detail.resolved || liveRelPath !== null;
+
+    if (effectivelyResolved) {
       // LINK-03: synchronous lookup — zero IPC at click time
-      const relPath = resolveTarget(detail.target);
+      const relPath = liveRelPath ?? resolveTarget(detail.target);
       if (!relPath) {
         // Map out of sync (rare: file deleted between decoration and click)
         void reloadResolvedLinks();
@@ -361,10 +377,13 @@
   // rel_path until a manual reload. TreeNode fires `resolvedLinksStore.requestReload()`
   // after every rename/move so we refresh here and the click handler stops
   // routing [[new-name]] into the create-at-root fallback.
-  let prevResolvedLinksToken: string | null = null;
+  let prevResolvedLinksRequestToken: string | null = null;
   const unsubResolvedLinks = resolvedLinksStore.subscribe((state) => {
-    if (state.token && state.token !== prevResolvedLinksToken) {
-      prevResolvedLinksToken = state.token;
+    if (
+      state.requestToken &&
+      state.requestToken !== prevResolvedLinksRequestToken
+    ) {
+      prevResolvedLinksRequestToken = state.requestToken;
       void reloadResolvedLinks();
     }
   });

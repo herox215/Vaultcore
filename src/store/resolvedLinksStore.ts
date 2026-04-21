@@ -1,5 +1,5 @@
-// resolvedLinksStore — one-shot signal that the wiki-link resolution map in
-// `components/Editor/wikiLink.ts` is stale and must be re-fetched.
+// resolvedLinksStore — signals for the wiki-link resolution map in
+// `components/Editor/wikiLink.ts`.
 //
 // The module-level `resolvedLinks: Map<stem, relPath>` is populated once per
 // vault open via EditorPane and refreshed on click-to-create. It does NOT
@@ -10,24 +10,40 @@
 // so EditorPane re-runs `getResolvedLinks` + `getResolvedAttachments` and
 // nudges every mounted view to rebuild decorations (#277).
 //
-// Pattern mirrors treeRefreshStore / scrollStore: monotonic token signals a
-// new request; consumer (EditorPane) watches for changes and calls
-// reloadResolvedLinks().
+// Two tokens so producers and consumers see the right edge:
+//   - requestToken — bumped by `requestReload()`. Owned by EditorPane, which
+//     watches it and kicks off the async fetch.
+//   - readyToken   — bumped by `markReady()` after `setResolvedLinks()` has
+//     landed the new map. Watched by decoration layers (CM6 template plugin,
+//     Reading Mode) that must rebuild against the *fresh* map. Without this
+//     split, subscribers firing on `requestReload` would rebuild against the
+//     stale map and the decoration would stay unresolved until the next
+//     unrelated vault tick (#309).
 
 import { writable } from "svelte/store";
 
 interface ResolvedLinksReloadState {
-  /** Opaque token — changes on every request. */
-  token: string | null;
+  /** Bumped by `requestReload()` — map is stale, EditorPane should refetch. */
+  requestToken: string | null;
+  /** Bumped by `markReady()` after `setResolvedLinks()` lands — decoration layers should rebuild. */
+  readyToken: string | null;
 }
 
-const _store = writable<ResolvedLinksReloadState>({ token: null });
+const _store = writable<ResolvedLinksReloadState>({
+  requestToken: null,
+  readyToken: null,
+});
 
 export const resolvedLinksStore = {
   subscribe: _store.subscribe,
 
   /** Signal that the stem->relPath map is stale and should be re-fetched. */
   requestReload(): void {
-    _store.set({ token: crypto.randomUUID() });
+    _store.update((s) => ({ ...s, requestToken: crypto.randomUUID() }));
+  },
+
+  /** Signal that `setResolvedLinks()` has just landed a fresh map; decorations should rebuild. */
+  markReady(): void {
+    _store.update((s) => ({ ...s, readyToken: crypto.randomUUID() }));
   },
 };

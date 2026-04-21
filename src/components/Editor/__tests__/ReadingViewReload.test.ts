@@ -25,6 +25,7 @@ vi.mock("../../../ipc/commands", () => ({
 
 import ReadingView from "../ReadingView.svelte";
 import { vaultStore } from "../../../store/vaultStore";
+import { resolvedLinksStore } from "../../../store/resolvedLinksStore";
 import { __cacheForTests, invalidate as invalidateCache } from "../../../lib/noteContentCache";
 import type { Tab } from "../../../store/tabStore";
 
@@ -102,6 +103,24 @@ describe("ReadingView live-reload on vault-store ticks (#321)", () => {
     await waitForReadCount(1);
 
     bumpNoteContentCacheVersion();
+
+    await waitForReadCount(2);
+    expect(readFileMock.mock.calls).toHaveLength(2);
+  });
+
+  // #309 — Reading Mode renders wiki-links from template output with a
+  // snapshot of the resolved-links map at render time. After a new file
+  // lands, `resolvedLinksStore.markReady()` fires to signal the map is fresh
+  // and Reading Mode must re-read + re-render so `[[New Note]]` flips from
+  // unresolved to resolved without a manual tab reload.
+  it("re-reads the file when resolvedLinksStore.markReady() fires (#309)", async () => {
+    render(ReadingView, {
+      props: { tab: makeTab(), isActive: true },
+    });
+
+    await waitForReadCount(1);
+
+    resolvedLinksStore.markReady();
 
     await waitForReadCount(2);
     expect(readFileMock.mock.calls).toHaveLength(2);

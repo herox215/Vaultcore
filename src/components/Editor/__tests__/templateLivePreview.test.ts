@@ -60,6 +60,7 @@ vi.mock("../../../store/editorStore", () => {
 import { templateLivePlugin } from "../templateLivePreview";
 // Pull the store handles to flip their values between tests.
 import { vaultStore } from "../../../store/vaultStore";
+import { resolvedLinksStore } from "../../../store/resolvedLinksStore";
 import { setResolvedLinks } from "../wikiLink";
 
 function mount(doc: string, cursor = 0): EditorView {
@@ -442,5 +443,36 @@ describe("templateLivePlugin — rendering", () => {
     });
 
     expect(widgets(view)[0]!.text).toBe("OtherVault");
+  });
+
+  // #309 — regression: a file created between render and click left the
+  // rendered wiki-link span with `data-wiki-resolved="false"`, routing the
+  // click into the create-at-root fallback even after the resolved-links map
+  // had been refreshed. The fix rebuilds decorations on
+  // `resolvedLinksStore.markReady()` so the attribute flips live.
+  it("rebuilds decorations when resolvedLinksStore.markReady() fires after setResolvedLinks", () => {
+    // Start with an empty resolution map — `[[Untitled]]` is unresolved.
+    setResolvedLinks(new Map());
+    const doc = 'x {{"[[Untitled]]"}} y';
+    const view = mount(doc, 0);
+
+    const initialAnchor = view.dom.querySelector(
+      ".vc-template-rendered [data-wiki-target]",
+    );
+    expect(initialAnchor).not.toBeNull();
+    expect(initialAnchor!.getAttribute("data-wiki-resolved")).toBe("false");
+
+    // Simulate the flow after a sidebar "New note": EditorPane's async
+    // reloadResolvedLinks lands, setResolvedLinks is called, then markReady()
+    // bumps the readyToken. Template plugin must pick that up and rebuild.
+    setResolvedLinks(new Map([["untitled", "test/Untitled.md"]]));
+    resolvedLinksStore.markReady();
+
+    const refreshedAnchor = view.dom.querySelector(
+      ".vc-template-rendered [data-wiki-target]",
+    );
+    expect(refreshedAnchor).not.toBeNull();
+    expect(refreshedAnchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    expect(refreshedAnchor!.classList.contains("cm-wikilink-resolved")).toBe(true);
   });
 });
