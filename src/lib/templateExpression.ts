@@ -438,6 +438,19 @@ function evalMember(
   return readProperty(obj, key);
 }
 
+// Whitelisted string methods exposed to expressions. Each entry builds a
+// bound function over the receiver so `"abc".contains("b")` parses as a
+// normal member-call through `readProperty` + `evalCall`. Argument coercion
+// uses `String(...)` to mirror template-land's loose typing.
+const STRING_METHODS: Record<string, (s: string) => (...args: unknown[]) => unknown> = {
+  contains: (s) => (needle) => s.includes(String(needle)),
+  startsWith: (s) => (prefix) => s.startsWith(String(prefix)),
+  endsWith: (s) => (suffix) => s.endsWith(String(suffix)),
+  toLowerCase: (s) => () => s.toLowerCase(),
+  toUpperCase: (s) => () => s.toUpperCase(),
+  trim: (s) => () => s.trim(),
+};
+
 // Reads a property while preventing prototype-pollution / Object.prototype
 // method access. Own properties are always allowed. Prototype properties
 // are allowed only when the prototype belongs to one of our own classes
@@ -452,7 +465,12 @@ function readProperty(obj: unknown, key: string): unknown {
   if (BANNED_PROPS.has(key)) {
     throw new ExprError(`Access to '${key}' is not allowed`);
   }
-  if (typeof obj === "string" && key === "length") return obj.length;
+  if (typeof obj === "string") {
+    if (key === "length") return obj.length;
+    const m = STRING_METHODS[key];
+    if (m) return m(obj);
+    throw new ExprError(`Unknown member '${key}'`);
+  }
   if (typeof obj !== "object" || obj === null) {
     throw new ExprError(`Cannot read '${key}' on ${typeof obj}`);
   }

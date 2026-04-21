@@ -184,3 +184,65 @@ describe("renderValue — serialization", () => {
     expect(renderValue(["a", "b", "c"])).toBe("a, b, c");
   });
 });
+
+describe("evaluate — string methods (#317)", () => {
+  it("contains returns true when the substring is present", () => {
+    expect(evaluate("'Hallo Welt'.contains('Welt')", {})).toBe(true);
+    expect(evaluate("'Hallo Welt'.contains('Mond')", {})).toBe(false);
+  });
+
+  it("contains is case-sensitive", () => {
+    expect(evaluate("'Heute'.contains('heute')", {})).toBe(false);
+  });
+
+  it("contains composes with toLowerCase for case-insensitive search", () => {
+    expect(
+      evaluate("'Heute ist Montag'.toLowerCase().contains('heute')", {}),
+    ).toBe(true);
+  });
+
+  it("startsWith / endsWith match the boundary", () => {
+    expect(evaluate("'foo.md'.endsWith('.md')", {})).toBe(true);
+    expect(evaluate("'foo.md'.startsWith('foo')", {})).toBe(true);
+    expect(evaluate("'foo.md'.endsWith('.txt')", {})).toBe(false);
+  });
+
+  it("toLowerCase / toUpperCase / trim are exposed", () => {
+    expect(evaluate("'ABC'.toLowerCase()", {})).toBe("abc");
+    expect(evaluate("'abc'.toUpperCase()", {})).toBe("ABC");
+    expect(evaluate("'  x  '.trim()", {})).toBe("x");
+  });
+
+  it("string methods coerce their arguments to string", () => {
+    expect(evaluate("'abc123'.contains(123)", {})).toBe(true);
+  });
+
+  it("length still works alongside the methods", () => {
+    expect(evaluate("'abc'.length", {})).toBe(3);
+  });
+
+  it("unknown string members still throw", () => {
+    expect(() => evaluate("'abc'.nope", {})).toThrow(/Unknown member/);
+    expect(() => evaluate("'abc'.replaceAll('a','b')", {})).toThrow(
+      /Unknown member/,
+    );
+  });
+
+  it("does not expose dangerous String.prototype members", () => {
+    expect(() => evaluate("'abc'.constructor", {})).toThrow(/not allowed/);
+    expect(() => evaluate("'abc'.__proto__", {})).toThrow(/not allowed/);
+  });
+
+  it("filters a Collection by substring via contains", () => {
+    const coll = new Collection([
+      { title: "Heute ist Montag" },
+      { title: "Gestern war Sonntag" },
+      { title: "Heute lernen wir" },
+    ]);
+    const out = evaluate(
+      "c.where(n => n.title.contains('Heute')).select(n => n.title).toArray()",
+      { c: coll },
+    );
+    expect(out).toEqual(["Heute ist Montag", "Heute lernen wir"]);
+  });
+});
