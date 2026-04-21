@@ -1,0 +1,75 @@
+name: Minerva Review
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: minerva-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >
+      github.event.issue.pull_request != null &&
+      github.event.comment.author_association == 'OWNER' &&
+      contains(github.event.comment.body, '@minerva')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout PR merge ref
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+          fetch-depth: 0
+
+      - name: Install opencode
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr diff "${{ github.event.issue.number }}" > /tmp/pr.diff
+          SIZE=$(wc -c < /tmp/pr.diff)
+          echo "Diff size: ${SIZE} bytes"
+          if [ "$SIZE" -gt 200000 ]; then
+            echo "Diff exceeds 200KB budget — aborting to avoid runaway token spend." >&2
+            exit 1
+          fi
+          if [ "$SIZE" -eq 0 ]; then
+            echo "Empty diff — nothing to review." >&2
+            exit 1
+          fi
+
+      - name: Run opencode review
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          {
+            echo "You are a senior code reviewer. Review the PR diff below."
+            echo "Focus on: correctness bugs, security issues, race conditions, missing or weak tests, obvious regressions."
+            echo "Skip style nits and subjective preferences."
+            echo "Be terse and specific — cite file:line when flagging issues."
+            echo "If the diff looks clean, say so in one line."
+            echo "Output GitHub-flavored markdown. Start with a one-line verdict, then bullet findings."
+            echo
+            echo "=== PR DIFF ==="
+            cat /tmp/pr.diff
+          } > /tmp/prompt.txt
+          opencode run -m openrouter/z-ai/glm-5.1 "$(cat /tmp/prompt.txt)" > /tmp/review.md
+
+      - name: Post review comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### Minerva Review (GLM 5.1)"
+            echo
+            cat /tmp/review.md
+          } > /tmp/review-final.md
+          gh pr comment "${{ github.event.issue.number }}" --body-file /tmp/review-final.md
