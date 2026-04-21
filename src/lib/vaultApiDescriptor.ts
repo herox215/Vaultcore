@@ -92,6 +92,25 @@ const NOTE_PROPERTIES: TypeDescriptor = {
   dynamic: true,
 };
 
+const STRING: TypeDescriptor = {
+  name: "string",
+  members: [
+    { kind: "property", name: "length", returns: "number", doc: "Character count" },
+    { kind: "method", name: "contains", returns: "boolean",
+      doc: "True if the string contains the given substring" },
+    { kind: "method", name: "startsWith", returns: "boolean",
+      doc: "True if the string starts with the given prefix" },
+    { kind: "method", name: "endsWith", returns: "boolean",
+      doc: "True if the string ends with the given suffix" },
+    { kind: "method", name: "toLowerCase", returns: "string",
+      doc: "Lowercased copy of the string" },
+    { kind: "method", name: "toUpperCase", returns: "string",
+      doc: "Uppercased copy of the string" },
+    { kind: "method", name: "trim", returns: "string",
+      doc: "String with leading and trailing whitespace removed" },
+  ],
+};
+
 // Collection<T> — `T` is substituted by the completion engine.
 const COLLECTION: TypeDescriptor = {
   name: "Collection<T>",
@@ -133,6 +152,7 @@ export const TYPES: Record<string, TypeDescriptor> = {
   VaultStats: VAULT_STATS,
   NoteProperties: NOTE_PROPERTIES,
   "Collection<T>": COLLECTION,
+  string: STRING,
 };
 
 /** The set of identifiers visible at the root of a `{{ ... }}` expression. */
