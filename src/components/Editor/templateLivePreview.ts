@@ -87,6 +87,12 @@ function sameTable(a: ParsedTable, b: ParsedTable): boolean {
 // `data-wiki-resolved="false"` on a link the user now expects to resolve.
 // Snapshot the resolution state of every `[[target]]` in the rendered text
 // so eq() can detect "same text, different resolution" and force a rebuild.
+//
+// COUPLING: this function and `appendValueWithWikiLinks` MUST share the same
+// link-matching semantics (regex `WIKI_LINK_IN_RENDER_RE`). If snapshotting
+// missed a form that the DOM-builder emits, eq() could false-positive and
+// leave stale `data-wiki-resolved` on that specific form. Both sites already
+// use the same module-level regex — keep them in sync if you change one.
 function wikiLinkResolutionSnapshot(text: string): string {
   const parts: string[] = [];
   WIKI_LINK_IN_RENDER_RE.lastIndex = 0;

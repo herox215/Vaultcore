@@ -13,13 +13,15 @@
  * `createFile` is not called.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/svelte";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, cleanup } from "@testing-library/svelte";
 import { tick } from "svelte";
 
-const { readFile, createFile } = vi.hoisted(() => ({
+const { readFile, createFile, getResolvedLinks, getResolvedAttachments } = vi.hoisted(() => ({
   readFile: vi.fn().mockResolvedValue(""),
   createFile: vi.fn().mockResolvedValue(""),
+  getResolvedLinks: vi.fn().mockResolvedValue(new Map()),
+  getResolvedAttachments: vi.fn().mockResolvedValue(new Map()),
 }));
 
 vi.mock("../../../ipc/commands", () => ({
@@ -28,8 +30,8 @@ vi.mock("../../../ipc/commands", () => ({
   writeFile: vi.fn().mockResolvedValue("0".repeat(64)),
   getFileHash: vi.fn().mockResolvedValue("0".repeat(64)),
   mergeExternalChange: vi.fn().mockResolvedValue({ outcome: "clean", merged_content: "" }),
-  getResolvedLinks: vi.fn().mockResolvedValue(new Map()),
-  getResolvedAttachments: vi.fn().mockResolvedValue(new Map()),
+  getResolvedLinks,
+  getResolvedAttachments,
   getLinkGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
   getLocalGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
   getBacklinks: vi.fn().mockResolvedValue([]),
@@ -86,7 +88,19 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     tabStore._reset();
     vaultStore.reset();
     createFile.mockReset().mockResolvedValue("");
+    getResolvedLinks.mockReset().mockResolvedValue(new Map());
+    getResolvedAttachments.mockReset().mockResolvedValue(new Map());
     setResolvedLinks(new Map());
+  });
+
+  afterEach(() => {
+    // svelte-testing-library doesn't auto-unmount on the version pinned here,
+    // so subscriptions (vault / resolvedLinks / tabStore) from one test stay
+    // live during the next and can replay async callbacks in an unrelated
+    // test's timeline. `cleanup()` tears down every render() + spy set up by
+    // the test.
+    cleanup();
+    vi.restoreAllMocks();
   });
 
   /**
@@ -127,6 +141,41 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
 
     expect(createFile).not.toHaveBeenCalled();
     expect(openTabSpy).toHaveBeenCalledWith("/vault/test/Untitled.md");
+  });
+
+  it("triggers a reload without opening or creating when the live map lost the target (resolved=true, liveRelPath=null)", async () => {
+    vaultStore.setReady({
+      currentPath: "/vault",
+      fileList: ["host.md"],
+      fileCount: 1,
+    });
+    const cm = await mountMarkdownTabAndGetCm();
+
+    // Baseline: `getResolvedLinks` was called once at vault-open. Clear so we
+    // can isolate the reload the click handler triggers.
+    getResolvedLinks.mockClear();
+
+    // Stale decoration says resolved=true but the live map has no entry —
+    // matches the "file deleted between decoration and click" scenario.
+    setResolvedLinks(new Map());
+
+    const openTabSpy = vi.spyOn(tabStore, "openTab");
+    const openFileTabSpy = vi.spyOn(tabStore, "openFileTab");
+
+    cm.dispatchEvent(
+      new CustomEvent("wiki-link-click", {
+        bubbles: true,
+        detail: { target: "DeletedNote", resolved: true },
+      }),
+    );
+    await flushAsync();
+
+    // Neither open nor create: the click short-circuits into a reload so
+    // the next render's decoration reflects the true state.
+    expect(openTabSpy).not.toHaveBeenCalled();
+    expect(openFileTabSpy).not.toHaveBeenCalled();
+    expect(createFile).not.toHaveBeenCalled();
+    expect(getResolvedLinks).toHaveBeenCalled();
   });
 
   it("still falls back to create-at-root when the live map also lacks the target", async () => {
