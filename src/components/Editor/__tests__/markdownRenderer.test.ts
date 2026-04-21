@@ -140,4 +140,123 @@ describe("renderMarkdownToHtml (#63)", () => {
     expect(html).toContain('href="#hello"');
     expect(html).toContain('id="hello"');
   });
+
+  // ── Template expression expansion (#321) ───────────────────────────────
+  describe("template expression expansion (#321)", () => {
+    it("renders {{title}} using the basename passed in", () => {
+      const html = renderMarkdownToHtml("Hello {{title}}!", "MyNote");
+      expect(html).toContain("Hello MyNote!");
+      expect(html).not.toContain("{{title}}");
+    });
+
+    it("renders {{date}} as an ISO-style yyyy-mm-dd string", () => {
+      const html = renderMarkdownToHtml("Today: {{date}}", "n");
+      expect(html).toMatch(/Today: \d{4}-\d{2}-\d{2}/);
+    });
+
+    it("evaluates multi-segment programs separated by `;`", () => {
+      const html = renderMarkdownToHtml(
+        '{{ "prefix-"; title }}',
+        "MyNote",
+      );
+      expect(html).toContain("prefix-MyNote");
+    });
+
+    it("leaves the source visible on evaluation error", () => {
+      // `nonexistent.whatever` throws an unknown-identifier error; the
+      // renderer must keep the literal `{{ ... }}` text rather than
+      // collapsing to an empty string.
+      const html = renderMarkdownToHtml(
+        "Broken {{nonexistent.whatever}} here",
+        "n",
+      );
+      expect(html).toContain("{{nonexistent.whatever}}");
+    });
+
+    it("preserves wiki-links produced inside a template expression as anchors", () => {
+      // `"[[foo]]"` as a string literal → same `[[foo]]` text after
+      // evaluation → markdown-it's wiki-link rule then turns it into an
+      // anchor with data-wiki-target.
+      setResolvedLinks(new Map([["foo", "notes/foo.md"]]));
+      const html = renderMarkdownToHtml('{{ "[[foo]]" }}', "n");
+      expect(html).toMatch(/<a[^>]*data-wiki-target="foo"[^>]*>/);
+    });
+
+    it("does not disturb plain markdown when no `{{ ... }}` is present", () => {
+      const html = renderMarkdownToHtml("# Hello\n\nWorld", "n");
+      expect(html).toMatch(/<h1[^>]*>Hello<\/h1>/);
+      expect(html).toContain("<p>World</p>");
+    });
+
+    it("collapses deliberately-empty template output to nothing", () => {
+      // `""` evaluates successfully to the empty string. Reading Mode must
+      // emit empty rather than the literal source, so that a conditional
+      // like `{{ flag ? "x" : "" }}` can cleanly collapse — the reader
+      // should never see the raw template syntax for a successful eval.
+      const html = renderMarkdownToHtml('before{{ "" }}after', "n");
+      expect(html).toContain("beforeafter");
+      expect(html).not.toContain("{{");
+    });
+
+    it("keeps the source visible only when the evaluator throws", () => {
+      // Unknown identifier throws → source stays. Empty output from a
+      // successful eval collapses to empty. Asserting the two paths are
+      // treated differently pins the semantics in place so they can't
+      // drift back together in a future refactor.
+      const errHtml = renderMarkdownToHtml("{{missing.chain}}", "n");
+      expect(errHtml).toContain("{{missing.chain}}");
+
+      const okHtml = renderMarkdownToHtml('{{ "ok" }}', "n");
+      expect(okHtml).toContain("ok");
+      expect(okHtml).not.toContain("{{");
+    });
+
+    it("does not evaluate templates inside fenced code blocks", () => {
+      const md = "before\n\n```md\n{{date}}\n```\n\nafter";
+      const html = renderMarkdownToHtml(md, "n");
+      // The literal `{{date}}` must reach the rendered code block intact.
+      expect(html).toContain("{{date}}");
+      // Meanwhile plain text outside the fence is still a normal paragraph.
+      expect(html).toContain("<p>before</p>");
+    });
+
+    it("does not evaluate templates inside inline backtick spans", () => {
+      const html = renderMarkdownToHtml("inline: `{{date}}` done", "n");
+      // The inline code span should contain the verbatim template source,
+      // not today's date.
+      expect(html).toMatch(/<code>\{\{date\}\}<\/code>/);
+      expect(html).not.toMatch(/<code>\d{4}-\d{2}-\d{2}<\/code>/);
+    });
+
+    it("evaluates multi-line (cross-line) templates", () => {
+      // Cross-line parity with the CM6 viewport-sliced regex: `[^{}]` allows
+      // newlines, so a template that straddles multiple lines should still
+      // evaluate in Reading Mode.
+      const html = renderMarkdownToHtml(
+        '{{\n  "multi"\n  +\n  "line"\n}}',
+        "n",
+      );
+      expect(html).toContain("multiline");
+    });
+
+    it("does not silently rewrite evaluated text via markdown-it typographer", () => {
+      // `typographer: true` would convert `--`, `...`, and straight double
+      // quotes into em-dash, ellipsis, and curly quotes — different glyphs
+      // than the CM6 widget emits. This test pins the `typographer: false`
+      // setting by asserting the raw characters survive.
+      const html = renderMarkdownToHtml('{{ "a -- b ..." }}', "n");
+      expect(html).toContain("a -- b ...");
+      expect(html).not.toContain("–");
+      expect(html).not.toContain("…");
+    });
+
+    it("does not expand `{{ ... }}` outside a template body that contains braces", () => {
+      // Parity with CM6: the outer regex `[^{}]` rejects `{`/`}` inside the
+      // body, so a body containing a brace-in-string-literal does NOT match.
+      // The renderer must leave the source verbatim rather than corrupting
+      // it.
+      const html = renderMarkdownToHtml('{{ "a{b" }}', "n");
+      expect(html).toContain('{{ "a{b" }}');
+    });
+  });
 });

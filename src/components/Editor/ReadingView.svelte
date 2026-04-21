@@ -12,12 +12,17 @@
    * position independently.
    */
 
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import { readFile } from "../../ipc/commands";
   import { renderMarkdownToHtml } from "./reading/markdownRenderer";
   import { toastStore } from "../../store/toastStore";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
+  import { vaultStore } from "../../store/vaultStore";
+  import { tagsStore } from "../../store/tagsStore";
+  import { bookmarksStore } from "../../store/bookmarksStore";
+  import { noteContentCacheVersion } from "../../lib/noteContentCache";
+  import { titleFromPath } from "../../lib/templateScope";
 
   interface Props {
     tab: Tab;
@@ -34,15 +39,37 @@
   // pane re-loads even when the component is reused.
   let loadedForId: string | null = null;
 
+  // Generation token guards against stale-write races: every call to `load()`
+  // takes the current value of `gen`, and only writes `html` / `loadError` if
+  // its token is still current when the async `readFile` resolves. Without
+  // this, a slow read for tab A that's still in flight when the user switches
+  // to tab B can overwrite tab B's rendered HTML with tab A's content.
+  let gen = 0;
+  // Pending-reload latch: when multiple store subscriptions fire in the same
+  // frame (e.g. rename bumps vaultStore + noteContentCacheVersion + tagsStore
+  // at once), coalesce them into a single microtask-scheduled reload.
+  let reloadPending = false;
+
   async function load(): Promise<void> {
     if (!tab) return;
+    const token = ++gen;
+    const path = tab.filePath;
     try {
-      const content = await readFile(tab.filePath);
-      html = renderMarkdownToHtml(content);
+      const content = await readFile(path);
+      if (token !== gen) return;
+      html = renderMarkdownToHtml(content, titleFromPath(path));
       loadError = null;
     } catch (err) {
-      loadError = "Datei konnte nicht gelesen werden.";
-      toastStore.push({ variant: "error", message: loadError });
+      if (token !== gen) return;
+      const message = "Datei konnte nicht gelesen werden.";
+      // Suppress repeated toasts while the error condition persists — a
+      // bulk rename or mid-rename watcher burst emits many store ticks per
+      // frame, and raising a toast on every one of them floods the UI.
+      const shouldToast = loadError !== message;
+      loadError = message;
+      if (shouldToast) {
+        toastStore.push({ variant: "error", message: message });
+      }
     }
   }
 
@@ -55,6 +82,45 @@
       loadedForId = id;
       void load();
     }
+  });
+
+  // #321 — Reading Mode must re-render when the data a `{{ ... }}` template
+  // expression reads over changes on disk, otherwise a template like
+  // `{{vault.notes.where(n => n.content.contains("X"))}}` would stay frozen
+  // with whatever the vault looked like when the tab opened. Subscribe to the
+  // same stores the CM6 live-preview plugin watches (vaultStore / tagsStore /
+  // bookmarksStore / noteContentCacheVersion) and re-read the file on any
+  // tick. The svelte subscribe contract invokes the callback synchronously
+  // with the current value, so a `ready` latch suppresses the initial burst
+  // that would otherwise double-load on mount. `queueMicrotask` coalesces
+  // bursts that cross multiple stores (rename / delete / cache version bump
+  // commonly fire all four in the same frame) into one `readFile` + render
+  // cycle instead of four.
+  onMount(() => {
+    let ready = false;
+    const trigger = (): void => {
+      if (!ready) return;
+      if (loadedForId === null) return;
+      if (reloadPending) return;
+      reloadPending = true;
+      queueMicrotask(() => {
+        reloadPending = false;
+        void load();
+      });
+    };
+    const unsubs: Array<() => void> = [
+      vaultStore.subscribe(trigger),
+      tagsStore.subscribe(trigger),
+      bookmarksStore.subscribe(trigger),
+      noteContentCacheVersion.subscribe(trigger),
+    ];
+    ready = true;
+    // Teardown lives next to the subscriptions rather than in a separate
+    // `onDestroy` so a future reader sees the full lifecycle in one block.
+    // The scroll-persist cleanup below uses the same pattern.
+    return () => {
+      for (const u of unsubs) u();
+    };
   });
 
   // Save the current scroll position when this view deactivates (tab switch
@@ -77,12 +143,26 @@
     wasActive = nowActive;
   });
 
-  // Persist scroll on unmount too — covers closing the tab while in Reading
-  // Mode, which otherwise would drop the scroll position.
-  onDestroy(() => {
+  // Restore initial scroll after the first render when the tab opens directly
+  // in Reading Mode (isActive was already true when the component mounted, so
+  // the wasActive → active transition above wouldn't fire). Also persists
+  // scroll on unmount — covers closing the tab while in Reading Mode, which
+  // otherwise would drop the scroll position. Teardown is returned as the
+  // onMount cleanup to keep the whole lifecycle in one block instead of
+  // splitting between onMount + a separate onDestroy.
+  onMount(() => {
     if (isActive && containerEl) {
-      tabStore.updateReadingScrollPos(tab.id, containerEl.scrollTop);
+      const pos = tab.readingScrollPos ?? 0;
+      requestAnimationFrame(() => {
+        if (containerEl) containerEl.scrollTop = pos;
+      });
     }
+    wasActive = isActive;
+    return () => {
+      if (isActive && containerEl) {
+        tabStore.updateReadingScrollPos(tab.id, containerEl.scrollTop);
+      }
+    };
   });
 
   function handleClick(event: MouseEvent): void {
@@ -126,19 +206,6 @@
     const targetTop = targetEl.getBoundingClientRect().top;
     containerEl.scrollTop += targetTop - containerTop - 8;
   }
-
-  // Restore initial scroll after the first render when the tab opens directly
-  // in Reading Mode (isActive was already true when the component mounted, so
-  // the wasActive → active transition above wouldn't fire).
-  onMount(() => {
-    if (isActive && containerEl) {
-      const pos = tab.readingScrollPos ?? 0;
-      requestAnimationFrame(() => {
-        if (containerEl) containerEl.scrollTop = pos;
-      });
-    }
-    wasActive = isActive;
-  });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
