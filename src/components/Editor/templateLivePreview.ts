@@ -24,15 +24,13 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
-import { get } from "svelte/store";
 
 import { evaluateProgram } from "../../lib/templateProgram";
-import { currentVaultRoot } from "../../lib/vaultApiStoreBridge";
+import { buildTemplateScope, TEMPLATE_EXPR_RE } from "../../lib/templateScope";
 import { noteContentCacheVersion } from "../../lib/noteContentCache";
 import { vaultStore } from "../../store/vaultStore";
 import { tagsStore } from "../../store/tagsStore";
 import { bookmarksStore } from "../../store/bookmarksStore";
-import { editorStore } from "../../store/editorStore";
 import { resolveTarget, stripKnownExt } from "./wikiLink";
 import { parseTableText, renderStaticTableDom } from "./tablePlugin";
 import type { ParsedTable } from "./tablePlugin";
@@ -151,28 +149,6 @@ function appendValueWithWikiLinks(parent: HTMLElement, value: string): void {
   }
 }
 
-const EXPR_RE = /\{\{([^{}]+?)\}\}/g;
-
-function formatDate(now: Date): string {
-  const yyyy = String(now.getFullYear());
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatTime(now: Date): string {
-  const hh = String(now.getHours()).padStart(2, "0");
-  const mi = String(now.getMinutes()).padStart(2, "0");
-  return `${hh}:${mi}`;
-}
-
-function activeTitle(): string {
-  const ap = get(editorStore).activePath;
-  if (!ap) return "";
-  const name = ap.split("/").pop() ?? "";
-  return name.endsWith(".md") ? name.slice(0, -3) : name;
-}
-
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { from, to } = view.viewport;
@@ -180,12 +156,12 @@ function buildDecorations(view: EditorView): DecorationSet {
   const text = view.state.doc.sliceString(from, to);
 
   // Lazily built — avoids touching stores when no expressions are in view.
-  let vaultRoot: ReturnType<typeof currentVaultRoot> | null = null;
+  let scope: ReturnType<typeof buildTemplateScope> | null = null;
   const now = new Date();
 
-  EXPR_RE.lastIndex = 0;
+  TEMPLATE_EXPR_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = EXPR_RE.exec(text)) !== null) {
+  while ((m = TEMPLATE_EXPR_RE.exec(text)) !== null) {
     const absFrom = from + m.index;
     const absTo = absFrom + m[0].length;
 
@@ -199,13 +175,8 @@ function buildDecorations(view: EditorView): DecorationSet {
     const body = m[1]!;
     let rendered: string;
     try {
-      if (vaultRoot === null) vaultRoot = currentVaultRoot();
-      rendered = evaluateProgram(body, {
-        vault: vaultRoot,
-        date: formatDate(now),
-        time: formatTime(now),
-        title: activeTitle(),
-      });
+      if (scope === null) scope = buildTemplateScope({ now });
+      rendered = evaluateProgram(body, scope);
     } catch {
       continue;
     }
