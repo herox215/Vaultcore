@@ -202,3 +202,26 @@ describe("createVaultRoot — type tags for debug rendering", () => {
     expect(a.__id).toBe("a.md");
   });
 });
+
+// #319: Regression — the original bug was that `n.content.contains(...)` only
+// considered the active editor tab. A `readNoteContent` that returns content
+// for every note must let the filter match all of them.
+describe("createVaultRoot — content-based filtering across all notes (#319)", () => {
+  it("where(n => n.content.contains(...)) matches non-active notes", () => {
+    const bodies: Record<string, string> = {
+      "a.md": "nothing here",
+      "sub/b.md": "mentions Maestro somewhere",
+      "sub/c.md": "also Maestro in this one",
+    };
+    const v = createVaultRoot(
+      mkStores({
+        readNoteContent: (p) => bodies[p] ?? null,
+      }),
+    );
+    const hits = v.notes
+      .where((n) => n.content.includes("Maestro"))
+      .select((n) => n.path)
+      .toArray();
+    expect(hits).toEqual(["sub/b.md", "sub/c.md"]);
+  });
+});
