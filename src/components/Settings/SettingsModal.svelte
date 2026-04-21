@@ -588,12 +588,13 @@
         <h3 class="vc-settings-section-title">BUILD</h3>
         <div class="vc-settings-row">
           <label for="build-version">Version</label>
-          <code id="build-version" class="vc-build-version" data-testid="settings-build-version">{__VC_BUILD_VERSION__}</code>
+          <code
+            id="build-version"
+            class="vc-build-version"
+            data-testid="settings-build-version"
+            title="Format: <commits-auf-main>-g<short-sha> · <commit-datum>. Höhere Commit-Zahl = neuer."
+          >{__VC_BUILD_VERSION__}</code>
         </div>
-        <p class="vc-settings-hint">
-          Format: <code>&lt;commits-auf-main&gt;-g&lt;short-sha&gt; · &lt;commit-datum&gt;</code>.
-          Höhere Commit-Zahl = neuer.
-        </p>
       </section>
     </div>
   </div>
@@ -994,6 +995,7 @@
     border: 1px solid var(--color-border);
     border-radius: 4px;
     user-select: text;
+    cursor: help;
   }
 
   /* Conflict modal (#65) */
