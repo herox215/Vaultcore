@@ -12,18 +12,11 @@ import type { EvalScope } from "./templateExpression";
 import { currentVaultRoot } from "./vaultApiStoreBridge";
 import { editorStore } from "../store/editorStore";
 
-/**
- * Shared regex for the outer `{{ ... }}` boundary. Kept here rather than in
- * each caller so a future grammar change only touches one file. The class
- * `[^{}]` rejects `{` or `}` inside the body, which means expression-body
- * string literals containing a brace (e.g. `{{ "a{b" }}`) do not match.
- * That matches the CM6 live-preview plugin's behaviour — callers that need
- * tighter parity can still walk the body with `splitSegments` from
- * `templateProgram.ts`. `\r` and `\n` are allowed inside the body so
- * multi-line templates work in Reading Mode the same way they would work
- * across a CM6 viewport slice.
- */
-export const TEMPLATE_EXPR_RE = /\{\{([^{}]+?)\}\}/g;
+// Re-export the canonical template-body regex. The constant lives in its
+// own module (`./templateExprRegex`) so `vaultApi.ts` can strip expression
+// bodies from `.content` without creating a runtime cycle through this
+// file's `currentVaultRoot` import.
+export { TEMPLATE_EXPR_RE } from "./templateExprRegex";
 
 export function formatDate(now: Date): string {
   const yyyy = String(now.getFullYear());

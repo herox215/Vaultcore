@@ -17,6 +17,7 @@
 import { Collection } from "./queryCollection";
 import { parseFrontmatter } from "./frontmatterIO";
 import type { Property } from "./frontmatterIO";
+import { stripTemplateExpressions } from "./templateExprRegex";
 
 export interface VaultStoreSnapshot {
   name: string;
@@ -155,18 +156,36 @@ function makeNote(
   const title = stripMdExt(name);
   // Content and frontmatter are lazy-read: most expressions only touch
   // name/path and never need the content.
-  let contentMemo: string | null | undefined = undefined;
-  const getContent = (): string => {
-    if (contentMemo === undefined) {
-      contentMemo = stores.readNoteContent?.(relPath) ?? null;
+  //
+  // #325 — two memoized views on the raw text:
+  //   - `getRawContent()` is used by frontmatter parsing, which must see
+  //     the verbatim file (frontmatter keys could, in pathological cases,
+  //     span or neighbour a `{{ ... }}` region, and YAML parsing needs the
+  //     unmodified bytes).
+  //   - `getStrippedContent()` is what user predicates see via the `.content`
+  //     accessor below. It erases every `{{ ... }}` region so a template
+  //     body literal like `.contains("todo")` inside its own expression does
+  //     NOT make the host note match itself. Template bodies are code, not
+  //     prose — they have no business showing up in content searches.
+  let rawContentMemo: string | null | undefined = undefined;
+  const getRawContent = (): string => {
+    if (rawContentMemo === undefined) {
+      rawContentMemo = stores.readNoteContent?.(relPath) ?? null;
     }
-    return contentMemo ?? "";
+    return rawContentMemo ?? "";
+  };
+  let strippedContentMemo: string | undefined = undefined;
+  const getStrippedContent = (): string => {
+    if (strippedContentMemo === undefined) {
+      strippedContentMemo = stripTemplateExpressions(getRawContent());
+    }
+    return strippedContentMemo;
   };
 
   let propsMemo: Property[] | undefined = undefined;
   const getProps = (): Property[] => {
     if (propsMemo === undefined) {
-      const content = getContent();
+      const content = getRawContent();
       propsMemo = content ? parseFrontmatter(content).properties : [];
     }
     return propsMemo;
@@ -205,7 +224,7 @@ function makeNote(
     path: { value: relPath, enumerable: true },
     title: { value: title, enumerable: true },
     property: { value: propertyProxy, enumerable: true },
-    content: { enumerable: true, get: getContent },
+    content: { enumerable: true, get: getStrippedContent },
   });
 
   return note;
