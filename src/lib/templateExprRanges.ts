@@ -1,18 +1,22 @@
-// Shared helper for locating `{{ ... }}` template expression ranges in editor
-// text, plus an overlap check consulted by every inline decoration plugin
-// (wikiLink, embedPlugin, livePreview, inlineHtml).
+// Locator for `{{ ... }}` template expression ranges + an overlap check.
 //
-// Rule (#295): content inside a `{{ ... }}` range is template source code, not
-// Markdown — no inline renderer other than the template live-preview itself
-// and the autocomplete provider should decorate it.
+// Consumers:
+// - Inline CM6 decorations (wikiLink, embedPlugin, livePreview, inlineHtml)
+//   skip rendering anything that overlaps a template body (#295): content
+//   inside `{{ ... }}` is template source code, not Markdown.
+// - `lib/outgoingLinks.ts` uses the same guard so the right-sidebar
+//   Outgoing Links panel never surfaces `[[...]]` string fragments that
+//   live inside a template body (#330). Lives in `lib/` — not under the
+//   Editor — so non-UI callers can import it without reaching into
+//   component code.
 //
-// The regex mirrors the one used by `templateSubstitution.ts` and
-// `templateLivePreview.ts`: single-line OR multi-line bodies are fine so long
-// as they contain no `{` or `}` characters. If all three call-sites ever need
-// to diverge, promote the regex into a shared constant — until then, keeping
-// them textually identical is the simplest guarantee.
+// The regex comes from `templateExprRegex.ts` so all three consumers
+// (the range-based skip here, the strip-based `.content` accessor in
+// vaultApi, and the CM6 live-preview plugin) agree on what counts as a
+// template body. See that module for the `[^{}]` rationale (no nesting;
+// multi-line allowed).
 
-const EXPR_RE = /\{\{([^{}]+?)\}\}/g;
+import { TEMPLATE_EXPR_RE } from "./templateExprRegex";
 
 export type TemplateExprRange = readonly [number, number];
 
@@ -29,9 +33,9 @@ export function findTemplateExprRanges(
   baseOffset: number = 0,
 ): TemplateExprRange[] {
   const out: TemplateExprRange[] = [];
-  EXPR_RE.lastIndex = 0;
+  TEMPLATE_EXPR_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = EXPR_RE.exec(text)) !== null) {
+  while ((m = TEMPLATE_EXPR_RE.exec(text)) !== null) {
     out.push([baseOffset + m.index, baseOffset + m.index + m[0].length]);
   }
   return out;

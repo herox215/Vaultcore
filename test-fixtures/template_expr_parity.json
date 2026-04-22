@@ -1,0 +1,60 @@
+{
+  "_description": "Cross-language parity fixture for the {{ ... }} template-expression regex. Consumed by src/lib/__tests__/templateExprParity.test.ts (TEMPLATE_EXPR_RE in templateExprRegex.ts) AND by a #[test] in src-tauri/src/indexer/link_graph.rs (template_expr_regex). Both sides MUST produce the same ordered list of matched substrings for every case — divergence turns into a CI failure instead of a silent regex drift. Matches are compared as substrings (not offsets) because JS regex works in UTF-16 code units while Rust's regex crate works in bytes; the logical match set is what must stay in lockstep.",
+  "cases": [
+    {
+      "name": "no template",
+      "input": "just prose with { loose } braces",
+      "matches": []
+    },
+    {
+      "name": "simple single-line",
+      "input": "a {{x}} b",
+      "matches": ["{{x}}"]
+    },
+    {
+      "name": "multi-line body",
+      "input": "x\n{{vault.notes\n.count()}}\ny",
+      "matches": ["{{vault.notes\n.count()}}"]
+    },
+    {
+      "name": "adjacent expressions with separator",
+      "input": "{{a}} and {{b}}",
+      "matches": ["{{a}}", "{{b}}"]
+    },
+    {
+      "name": "adjacent expressions no separator",
+      "input": "{{a}}{{b}}",
+      "matches": ["{{a}}", "{{b}}"]
+    },
+    {
+      "name": "nested braces rejected — body contains `{`",
+      "input": "{{ { }}",
+      "matches": []
+    },
+    {
+      "name": "empty body rejected — `+?` requires ≥1 char",
+      "input": "{{}}",
+      "matches": []
+    },
+    {
+      "name": "utf8 multibyte inside body",
+      "input": "pre {{ \"hallöchen\" + f.name }} post",
+      "matches": ["{{ \"hallöchen\" + f.name }}"]
+    },
+    {
+      "name": "fake wiki-link fragment inside body (#330 repro)",
+      "input": "{{ \"[[\" + f.name + \"]]\" }}",
+      "matches": ["{{ \"[[\" + f.name + \"]]\" }}"]
+    },
+    {
+      "name": "expression at start",
+      "input": "{{x}} then prose",
+      "matches": ["{{x}}"]
+    },
+    {
+      "name": "expression at end no trailing newline",
+      "input": "prose then {{x}}",
+      "matches": ["{{x}}"]
+    }
+  ]
+}

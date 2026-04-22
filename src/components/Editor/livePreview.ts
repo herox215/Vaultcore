@@ -5,7 +5,7 @@ import { detectFrontmatterInDoc } from "./frontmatterPlugin";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
-} from "./templateExprRanges";
+} from "../../lib/templateExprRanges";
 
 const HIDE = Decoration.replace({});
 

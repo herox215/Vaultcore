@@ -18,7 +18,7 @@ import { syntaxTree } from "@codemirror/language";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
-} from "./templateExprRanges";
+} from "../../lib/templateExprRanges";
 
 const HIDE = Decoration.replace({});
 
