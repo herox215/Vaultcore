@@ -34,7 +34,7 @@ fn wiki_link_regex() -> &'static Regex {
 ///
 /// Mirrors `src/lib/templateExprRegex.ts` so the frontend and backend agree
 /// on what counts as a template body. `[^{}]` rejects nested braces and
-/// allows newlines so multi-line expressions are stripped as one unit.
+/// allows newlines so multi-line expressions match as one contiguous range.
 /// No backtracking risk — the class is negated, the body is bounded by
 /// the first `}}` after a `{{`, and Rust's regex crate is linear.
 fn template_expr_regex() -> &'static Regex {
@@ -50,7 +50,17 @@ fn template_expr_regex() -> &'static Regex {
 /// inside a template body (#330): content inside `{{ ... }}` is template
 /// source code, not Markdown, so fragments like `"[[" + f.name + "]]"`
 /// must not surface as outgoing links / backlinks / graph edges.
-fn template_expr_ranges(content: &str) -> Vec<(usize, usize)> {
+///
+/// Also consumed by `commands::links::update_links_after_rename` to guard
+/// the on-disk rewrite path against corrupting template source code when a
+/// renamed file's stem happens to appear inside a `{{ ... }}` body.
+///
+/// Fast path: files without any `{{` bigram skip the regex pass entirely
+/// (the common case — a vault with few templated notes pays no cost).
+pub(crate) fn template_expr_ranges(content: &str) -> Vec<(usize, usize)> {
+    if !content.contains("{{") {
+        return Vec::new();
+    }
     template_expr_regex()
         .find_iter(content)
         .map(|m| (m.start(), m.end()))
@@ -59,7 +69,7 @@ fn template_expr_ranges(content: &str) -> Vec<(usize, usize)> {
 
 /// Returns true iff the half-open interval `[from, to)` overlaps any of
 /// `ranges`. Linear scan — fine at the expression counts seen in practice.
-fn overlaps_any(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
+pub(crate) fn overlaps_any(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
     ranges.iter().any(|&(a, b)| to > a && from < b)
 }
 
@@ -749,6 +759,70 @@ mod tests {
         let md = r#"{{("|test|test|\n|-|-|\n"); vault.notes.where(n => n.content.contains("todo")).select(f => "|[[" + f.name + "]]|-|").join("\n")}}"#;
         let links = extract_links(md);
         assert!(links.is_empty(), "expected no links, got {:?}", links);
+    }
+
+    #[test]
+    fn extract_links_handles_crlf_line_endings() {
+        // Windows / cross-platform vaults: the `strip_suffix('\r')` +
+        // `raw_line.len() + 1` math must keep byte offsets correct against
+        // the full content (CR is a real byte) while handing the caller
+        // `lines()`-style `context` (no trailing CR).
+        //
+        // Multi-line template spans lines 1..=3, real link on line 4. The
+        // template overlap is computed in absolute byte offsets over
+        // content that contains CR bytes — if the loop's byte math drifts
+        // by even one, the fake link inside the template leaks through or
+        // the real link gets eaten.
+        let md = "line 0\r\n{{\r\n\"[[\" + x + \"]]\"\r\n}}\r\n[[Real]]\r\n";
+        let links = extract_links(md);
+        assert_eq!(links.len(), 1, "got {:?}", links);
+        assert_eq!(links[0].target_raw, "Real");
+        assert_eq!(links[0].line_number, 4);
+        // `context` is the visible line without CR, matching `lines()`.
+        assert_eq!(links[0].context, "[[Real]]");
+    }
+
+    // ── Cross-language regex parity (#331 review) ──────────────────────────
+    //
+    // Rust counterpart of `src/lib/__tests__/templateExprParity.test.ts`.
+    // Both tests read the same JSON fixture and assert the regex produces
+    // an identical ordered list of matched substrings. If either side's
+    // regex drifts (JS-only tweak, Rust-only tweak, or one gets moved to
+    // a new crate/module with a subtly different flavour), this test turns
+    // the divergence into a CI failure instead of a runtime surprise.
+
+    #[derive(serde::Deserialize)]
+    struct ParityCase {
+        name: String,
+        input: String,
+        matches: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParityFixture {
+        cases: Vec<ParityCase>,
+    }
+
+    #[test]
+    fn template_expr_regex_matches_shared_fixture() {
+        const FIXTURE: &str = include_str!(
+            "../../../test-fixtures/template_expr_parity.json"
+        );
+        let fixture: ParityFixture = serde_json::from_str(FIXTURE)
+            .expect("template_expr_parity.json is valid JSON");
+
+        let re = template_expr_regex();
+        for case in &fixture.cases {
+            let actual: Vec<String> = re
+                .find_iter(&case.input)
+                .map(|m| m.as_str().to_string())
+                .collect();
+            assert_eq!(
+                actual, case.matches,
+                "parity mismatch on case {:?}",
+                case.name,
+            );
+        }
     }
 
     // ── resolve_link ───────────────────────────────────────────────────────

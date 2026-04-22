@@ -137,5 +137,22 @@ describe("extractOutgoingLinks", () => {
       const res = extractOutgoingLinks(doc, () => null);
       expect(res).toEqual([]);
     });
+
+    it("ignores [[...]] even when the template would RENDER to a real link", () => {
+      // Semantic pin: #330 defines outgoing links LITERALLY. A `[[X]]` that
+      // only appears inside a template body is not an outgoing link, even
+      // when the evaluated template output would render a wikilink at runtime.
+      // The rationale: the outgoing-links list reflects what the author
+      // wrote in the source document — not what the template would produce
+      // on render, which can depend on vault state and change over time.
+      //
+      // Do not "fix" this as a false negative without revisiting the design
+      // decision. If the product ever decides to follow rendered output,
+      // that is a separate feature that plumbs template-evaluation results
+      // back into the outgoing-links resolver.
+      const doc = `{{ "[[RenderedTarget]]" }}`;
+      const res = extractOutgoingLinks(doc, () => null);
+      expect(res).toEqual([]);
+    });
   });
 });
