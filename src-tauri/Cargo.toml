@@ -74,3 +74,6 @@ embeddings = ["dep:ort", "dep:ort-sys", "dep:ndarray", "dep:tokenizers", "dep:hn
 
 [dev-dependencies]
 tempfile = "3"
+# Enable `tauri::test::mock_app()` so unit tests can feed a dummy AppHandle
+# into functions that emit vault:// events (e.g. IndexCoordinator::index_vault).
+tauri = { version = "2", features = ["test"] }
