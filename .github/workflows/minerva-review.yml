@@ -54,22 +54,75 @@ jobs:
             echo "You are a senior code reviewer. Review the PR diff below."
             echo "Focus on: correctness bugs, security issues, race conditions, missing or weak tests, obvious regressions."
             echo "Skip style nits and subjective preferences."
-            echo "Be terse and specific — cite file:line when flagging issues."
-            echo "If the diff looks clean, say so in one line."
-            echo "Output GitHub-flavored markdown. Start with a one-line verdict, then bullet findings."
+            echo
+            echo "Output STRICT JSON only — no prose, no markdown fences. Shape:"
+            echo '{'
+            echo '  "verdict": "one-line summary",'
+            echo '  "findings": ['
+            echo '    {"path": "relative/file/path", "line": 42, "side": "RIGHT", "severity": "bug|security|risk|nit", "body": "short explanation"}'
+            echo '  ]'
+            echo '}'
+            echo
+            echo "Rules:"
+            echo "- path must match a file in the diff exactly (no a/ or b/ prefix)."
+            echo "- line must be a line number that appears in the diff hunks (added or context line on the RIGHT side, i.e. the post-change file)."
+            echo "- Use side=RIGHT for added/modified lines; use side=LEFT only when flagging a removed line."
+            echo "- Keep body terse (1-3 sentences), cite concrete reasoning."
+            echo "- If the diff looks clean, return empty findings with a positive verdict."
+            echo "- Do NOT wrap output in code fences."
             echo
             echo "=== PR DIFF ==="
             cat /tmp/pr.diff
           } > /tmp/prompt.txt
-          opencode run -m openrouter/z-ai/glm-5.1 "$(cat /tmp/prompt.txt)" > /tmp/review.md
+          opencode run -m openrouter/z-ai/glm-5.1 "$(cat /tmp/prompt.txt)" > /tmp/review.raw
+          # Strip optional code fences just in case.
+          sed -e 's/^```json//' -e 's/^```//' -e '/^```$/d' /tmp/review.raw > /tmp/review.json
+          if ! jq -e . /tmp/review.json >/dev/null 2>&1; then
+            echo "Model output was not valid JSON — will fall back to plain comment."
+            echo "INVALID_JSON=1" >> "$GITHUB_ENV"
+          fi
 
-      - name: Post review comment
+      - name: Post review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
-          {
-            echo "### Minerva Review (GLM 5.1)"
-            echo
-            cat /tmp/review.md
-          } > /tmp/review-final.md
-          gh pr comment "${{ github.event.issue.number }}" --body-file /tmp/review-final.md
+          set -euo pipefail
+
+          # Fallback: invalid JSON → post raw output as a normal PR comment.
+          if [ "${INVALID_JSON:-0}" = "1" ]; then
+            {
+              echo "### Minerva Review (GLM 5.1)"
+              echo
+              echo "_Model did not return valid JSON — posting raw output._"
+              echo
+              cat /tmp/review.raw
+            } > /tmp/review-final.md
+            gh pr comment "$PR_NUMBER" --body-file /tmp/review-final.md
+            exit 0
+          fi
+
+          COMMIT_ID=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)
+          export COMMIT_ID
+
+          python3 .github/scripts/minerva_build_review.py \
+            /tmp/pr.diff /tmp/review.json /tmp/review-payload.json
+
+          # Post the review (single API call, inline comments attached).
+          # If the API rejects it (e.g. a line slips past our validator) fall
+          # back to a plain PR comment so the review is not lost.
+          if ! gh api \
+                --method POST \
+                -H "Accept: application/vnd.github+json" \
+                "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+                --input /tmp/review-payload.json; then
+            echo "Review API call failed — falling back to plain PR comment." >&2
+            {
+              jq -r '.body' /tmp/review-payload.json
+              echo
+              echo "#### Findings"
+              jq -r '.comments[] | "- `\(.path):\(.line)` — \(.body)"' /tmp/review-payload.json
+            } > /tmp/review-fallback.md
+            gh pr comment "$PR_NUMBER" --body-file /tmp/review-fallback.md
+          fi
