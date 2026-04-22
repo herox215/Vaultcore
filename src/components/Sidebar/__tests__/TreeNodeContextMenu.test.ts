@@ -1,3 +1,5 @@
+// #47 right-click context menu — updated for #253. TreeRow is the flat-row
+// component that replaced TreeNode; the context-menu behaviour is identical.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
@@ -12,41 +14,47 @@ vi.mock("../../../ipc/commands", () => ({
   getBacklinks: vi.fn().mockResolvedValue([]),
   loadBookmarks: vi.fn().mockResolvedValue([]),
   saveBookmarks: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn(),
+  renameFile: vi.fn(),
 }));
 
 import { vaultStore } from "../../../store/vaultStore";
 import { bookmarksStore } from "../../../store/bookmarksStore";
-import TreeNode from "../TreeNode.svelte";
-import type { DirEntry } from "../../../types/tree";
+import TreeRow from "../TreeRow.svelte";
+import type { FlatRow } from "../../../lib/flattenTree";
 
 const VAULT = "/tmp/test-vault";
 
-function fileEntry(overrides: Partial<DirEntry> = {}): DirEntry {
+function fileRow(overrides: Partial<FlatRow> = {}): FlatRow {
   return {
-    name: "note.md",
     path: `${VAULT}/note.md`,
-    is_dir: false,
-    is_symlink: false,
-    is_md: true,
-    modified: null,
-    created: null,
+    relPath: "note.md",
+    name: "note.md",
+    depth: 0,
+    isDir: false,
+    isMd: true,
+    isSymlink: false,
+    expanded: false,
+    loading: false,
+    hasRenderedChildren: false,
+    childrenLoaded: false,
     ...overrides,
   };
 }
 
-function makeProps(entry: DirEntry) {
+function makeProps(row: FlatRow) {
   return {
-    entry,
-    depth: 0,
+    row,
     selectedPath: null,
     onSelect: vi.fn(),
     onOpenFile: vi.fn(),
-    onRefreshParent: vi.fn(),
+    onToggleExpand: vi.fn(),
+    onRefreshFolder: vi.fn(),
     onPathChanged: vi.fn(),
   };
 }
 
-describe("TreeNode right-click context menu (#47)", () => {
+describe("TreeRow right-click context menu (#47, updated for #253)", () => {
   beforeEach(() => {
     vaultStore.reset();
     bookmarksStore.reset();
@@ -54,12 +62,11 @@ describe("TreeNode right-click context menu (#47)", () => {
   });
 
   it("opens our custom menu on contextmenu and calls preventDefault()", async () => {
-    const { container } = render(TreeNode, { props: makeProps(fileEntry()) });
+    const { container } = render(TreeRow, { props: makeProps(fileRow()) });
     await tick();
     const row = container.querySelector(".vc-tree-row") as HTMLElement;
     expect(row).toBeTruthy();
 
-    // Menu is not in the DOM before right-click.
     expect(container.querySelector(".vc-context-menu")).toBeNull();
 
     const evt = new MouseEvent("contextmenu", {
@@ -69,21 +76,18 @@ describe("TreeNode right-click context menu (#47)", () => {
       clientY: 80,
     });
     const dispatched = row.dispatchEvent(evt);
-    // dispatchEvent returns false when preventDefault() was called on a
-    // cancelable event — which is the assertion we actually care about.
     expect(dispatched).toBe(false);
     expect(evt.defaultPrevented).toBe(true);
 
     await tick();
     const menu = container.querySelector(".vc-context-menu") as HTMLElement;
     expect(menu).toBeTruthy();
-    // Menu is positioned at the mouse coords via inline style.
     expect(menu.style.top).toBe("80px");
     expect(menu.style.left).toBe("120px");
   });
 
   it("contains Rename / Bookmark / Move to Trash entries for a file", async () => {
-    const { container, getByText } = render(TreeNode, { props: makeProps(fileEntry()) });
+    const { container, getByText } = render(TreeRow, { props: makeProps(fileRow()) });
     await tick();
     const row = container.querySelector(".vc-tree-row") as HTMLElement;
     await fireEvent.contextMenu(row, { clientX: 10, clientY: 20 });
@@ -95,8 +99,14 @@ describe("TreeNode right-click context menu (#47)", () => {
   });
 
   it("contains New file / New folder entries for a directory", async () => {
-    const dir = fileEntry({ name: "folder", path: `${VAULT}/folder`, is_dir: true, is_md: false });
-    const { container, getByText } = render(TreeNode, { props: makeProps(dir) });
+    const dir = fileRow({
+      name: "folder",
+      path: `${VAULT}/folder`,
+      relPath: "folder",
+      isDir: true,
+      isMd: false,
+    });
+    const { container, getByText } = render(TreeRow, { props: makeProps(dir) });
     await tick();
     const row = container.querySelector(".vc-tree-row") as HTMLElement;
     await fireEvent.contextMenu(row, { clientX: 10, clientY: 20 });

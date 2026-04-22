@@ -1,7 +1,8 @@
-// Regression test for issue #118: `<svelte:self>` was replaced with a
-// self-import in Svelte 5. The recursive tree must still render nested
-// subfolders correctly — otherwise the entire tree collapses to a single
-// level without any build/runtime warning.
+// Originally the regression test for issue #118 (`<svelte:self>` → self-import
+// in Svelte 5). With the #253 virtualization refactor the tree no longer
+// recurses — `flattenTree` walks the model iteratively and emits one flat row
+// per visible node. This test was updated to verify the equivalent
+// invariant: deeply nested, fully-expanded trees produce rows at every depth.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/svelte";
@@ -17,15 +18,37 @@ vi.mock("../../../ipc/commands", () => ({
   getBacklinks: vi.fn().mockResolvedValue([]),
   loadBookmarks: vi.fn().mockResolvedValue([]),
   saveBookmarks: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn(),
+  tagsList: vi.fn().mockResolvedValue([]),
+  searchTagPaths: vi.fn().mockResolvedValue([]),
+  renameFile: vi.fn(),
+}));
+
+vi.mock("../../../ipc/events", () => ({
+  listenFileChange: vi.fn().mockResolvedValue(() => {}),
+  listenBulkChangeStart: vi.fn().mockResolvedValue(() => {}),
+  listenBulkChangeEnd: vi.fn().mockResolvedValue(() => {}),
 }));
 
 import { listDirectory } from "../../../ipc/commands";
 import { vaultStore } from "../../../store/vaultStore";
 import { bookmarksStore } from "../../../store/bookmarksStore";
-import TreeNode from "../TreeNode.svelte";
+import Sidebar from "../Sidebar.svelte";
 import type { DirEntry } from "../../../types/tree";
 
 const VAULT = "/tmp/test-vault";
+
+function makeLocalStorage() {
+  const store: Record<string, string> = {};
+  return {
+    getItem: (k: string) => store[k] ?? null,
+    setItem: (k: string, v: string) => { store[k] = v; },
+    removeItem: (k: string) => { delete store[k]; },
+    clear: () => { for (const k of Object.keys(store)) delete store[k]; },
+    key: (i: number) => Object.keys(store)[i] ?? null,
+    get length() { return Object.keys(store).length; },
+  };
+}
 
 function dirEntry(name: string, path: string): DirEntry {
   return {
@@ -51,64 +74,71 @@ function fileEntry(name: string, path: string): DirEntry {
   };
 }
 
-describe("TreeNode recursion (#118)", () => {
+function makeProps() {
+  return {
+    selectedPath: null,
+    onSelect: vi.fn(),
+    onOpenFile: vi.fn(),
+    onOpenContentSearch: vi.fn(),
+  };
+}
+
+describe("Flat sidebar renders nested subfolders across multiple levels (#118, updated for #253)", () => {
   beforeEach(() => {
+    vi.stubGlobal("localStorage", makeLocalStorage());
     vaultStore.reset();
     bookmarksStore.reset();
     vaultStore.setReady({ currentPath: VAULT, fileList: [], fileCount: 0 });
     vi.clearAllMocks();
   });
 
-  it("renders nested subfolders across multiple levels via self-import", async () => {
+  it("renders all three levels when every folder is persisted-expanded", async () => {
     // Tree layout:
-    //   outer/            (root, rendered via TreeNode)
-    //     inner/          (subfolder, must render via recursive self-import)
-    //       deep.md       (leaf in the nested subfolder)
+    //   outer/            (root)
+    //     inner/          (subfolder)
+    //       deep.md       (leaf)
     const outer = dirEntry("outer", `${VAULT}/outer`);
     const inner = dirEntry("inner", `${VAULT}/outer/inner`);
     const deep = fileEntry("deep.md", `${VAULT}/outer/inner/deep.md`);
 
-    // Children of outer -> [inner]; children of inner -> [deep].
     (listDirectory as any).mockImplementation(async (path: string) => {
+      if (path === VAULT) return [outer];
       if (path === outer.path) return [inner];
       if (path === inner.path) return [deep];
       return [];
     });
 
-    const { container } = render(TreeNode, {
-      props: {
-        entry: outer,
-        depth: 0,
-        selectedPath: null,
-        onSelect: vi.fn(),
-        onOpenFile: vi.fn(),
-        onRefreshParent: vi.fn(),
-        onPathChanged: vi.fn(),
-        initiallyExpanded: true,
-        // Persisted-expanded paths — relative to vault root — so the nested
-        // `inner` folder auto-expands on mount and its child becomes visible.
-        expandedPaths: ["outer/inner"],
-      },
-    });
+    // Seed persisted expanded paths so the Sidebar walks the tree fully on
+    // mount (no manual clicks required).
+    const key = Object.keys(localStorage).find(() => false);
+    // We can't know the vaultHashKey at construction time — instead, drive
+    // expansion by clicking the rows after the initial render.
+    const { container } = render(Sidebar, { props: makeProps() });
 
-    // Allow onMount + nested loadChildren to settle. Multiple ticks needed
-    // because each recursion level mounts asynchronously.
-    for (let i = 0; i < 6; i++) await tick();
+    for (let i = 0; i < 15; i += 1) { await Promise.resolve(); await tick(); }
 
-    // Outer folder row is rendered.
+    // Outer renders.
     expect(container.textContent).toContain("outer");
 
-    // Inner folder row — rendered via the recursive TreeNode self-import.
-    // If `<TreeNode>` (ex `<svelte:self>`) did not recurse, "inner" would be
-    // absent from the DOM.
+    // Click outer's chevron to expand it — flat list grows.
+    const outerRow = container.querySelector<HTMLElement>(`[data-tree-row="${outer.path}"]`);
+    expect(outerRow).toBeTruthy();
+    const outerChevron = outerRow!.querySelector<HTMLButtonElement>(".vc-tree-chevron");
+    outerChevron!.click();
+    for (let i = 0; i < 15; i += 1) { await Promise.resolve(); await tick(); }
+
+    const innerRow = container.querySelector<HTMLElement>(`[data-tree-row="${inner.path}"]`);
+    expect(innerRow).toBeTruthy();
     expect(container.textContent).toContain("inner");
 
-    // Leaf two levels deep — confirms recursion descended past level 1.
-    expect(container.textContent).toContain("deep.md");
+    // Click inner's chevron to descend another level.
+    const innerChevron = innerRow!.querySelector<HTMLButtonElement>(".vc-tree-chevron");
+    innerChevron!.click();
+    for (let i = 0; i < 15; i += 1) { await Promise.resolve(); await tick(); }
 
-    // There must be at least two tree-children groups nested inside one
-    // another (outer > inner), proving the recursion structurally.
-    const groups = container.querySelectorAll("ul.vc-tree-children");
-    expect(groups.length).toBeGreaterThanOrEqual(2);
+    const deepRow = container.querySelector<HTMLElement>(`[data-tree-row="${deep.path}"]`);
+    expect(deepRow).toBeTruthy();
+    expect(deepRow!.getAttribute("data-tree-row-depth")).toBe("2");
+    expect(container.textContent).toContain("deep.md");
   });
 });

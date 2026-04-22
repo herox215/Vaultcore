@@ -76,7 +76,7 @@ const MODAL_PAIRS: Array<{
     surface: ".vc-url-modal",
   },
   {
-    file: "src/components/Sidebar/TreeNode.svelte",
+    file: "src/components/Sidebar/TreeRow.svelte",
     scrim: ".vc-confirm-overlay",
     surface: ".vc-confirm-dialog",
   },
