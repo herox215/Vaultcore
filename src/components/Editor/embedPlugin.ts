@@ -527,11 +527,32 @@ export function parseSizePx(raw: string | undefined): number | null {
 
 // ── Build decorations ──────────────────────────────────────────────────────────
 
+/**
+ * Bytes to extend on each side of `view.viewport` so wiki-embeds and
+ * markdown images that straddle the viewport boundary are still detected by
+ * the scan (#247). Same rationale as wikiLink.ts — templates may be
+ * multi-line; 512 covers realistic expression bodies with margin.
+ */
+const VIEWPORT_WIDEN_BYTES = 512;
+
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const text = view.state.doc.toString();
-  const head = view.state.selection.main.head;
-  const exprRanges = findTemplateExprRanges(text);
+  const state = view.state;
+  const docLength = state.doc.length;
+
+  // #247 — viewport-bounded scan. See wikiLink.ts for the same change; this
+  // file ran TWO full-doc regex passes (WIKI_EMBED_RE + MD_IMAGE_RE) on top
+  // of the full-doc allocation on every update. Slice the visible region
+  // ± VIEWPORT_WIDEN_BYTES and offset absolute positions by windowFrom.
+  // Lezer `syntaxTree` lookups stay at absolute coordinates.
+  const windowFrom = Math.max(0, view.viewport.from - VIEWPORT_WIDEN_BYTES);
+  const windowTo = Math.min(docLength, view.viewport.to + VIEWPORT_WIDEN_BYTES);
+  const text = state.sliceDoc(windowFrom, windowTo);
+  const head = state.selection.main.head;
+  // Template ranges MUST be offset by windowFrom so `isInsideTemplateExpr`
+  // checks against absolute document coordinates (same guarantee as in
+  // wikiLink.ts, livePreview.ts).
+  const exprRanges = findTemplateExprRanges(text, windowFrom);
 
   const matches: EmbedMatch[] = [];
 
@@ -541,11 +562,11 @@ function buildDecorations(view: EditorView): DecorationSet {
   while ((m = WIKI_EMBED_RE.exec(text)) !== null) {
     const rawTarget = m[1];
     if (rawTarget === undefined) continue;
-    const from = m.index;
+    const from = windowFrom + m.index;
     const to = from + m[0].length;
 
     // Skip code blocks / inline code.
-    if (isInsideCodeBlock(view.state, from)) continue;
+    if (isInsideCodeBlock(state, from)) continue;
     if (isInsideTemplateExpr(exprRanges, from, to)) continue;
 
     // Cursor inside → show raw syntax, do not replace.
@@ -604,10 +625,10 @@ function buildDecorations(view: EditorView): DecorationSet {
   while ((m = MD_IMAGE_RE.exec(text)) !== null) {
     const rawPath = m[1];
     if (rawPath === undefined) continue;
-    const from = m.index;
+    const from = windowFrom + m.index;
     const to = from + m[0].length;
 
-    if (isInsideCodeBlock(view.state, from)) continue;
+    if (isInsideCodeBlock(state, from)) continue;
     if (isInsideTemplateExpr(exprRanges, from, to)) continue;
     if (head >= from && head <= to) continue;
 

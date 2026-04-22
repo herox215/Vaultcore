@@ -110,11 +110,34 @@ interface DecoratedRange {
   decoration: Decoration;
 }
 
+/**
+ * Bytes to extend on each side of `view.viewport` so wiki-links and
+ * `{{ ... }}` template bodies that straddle the viewport boundary are still
+ * detected by the scan (#247). Wiki-links are tiny; templates can be
+ * multi-line but rarely exceed a few hundred bytes in practice. 512 is
+ * comfortably above both.
+ */
+const VIEWPORT_WIDEN_BYTES = 512;
+
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const text = view.state.doc.toString();
-  const head = view.state.selection.main.head;
-  const exprRanges = findTemplateExprRanges(text);
+  const state = view.state;
+  const docLength = state.doc.length;
+
+  // #247 — viewport-bounded scan. The old full-doc serialisation allocated
+  // O(doc length) per keystroke and burned the 16ms budget on medium+ notes.
+  // Slice only the visible region (± VIEWPORT_WIDEN_BYTES so straddling
+  // wiki-links and template bodies still match) and offset absolute positions
+  // by `windowFrom`. Code-block detection keeps using `syntaxTree(state)` with
+  // absolute coordinates — the slice is a scanning input, not an index space.
+  const windowFrom = Math.max(0, view.viewport.from - VIEWPORT_WIDEN_BYTES);
+  const windowTo = Math.min(docLength, view.viewport.to + VIEWPORT_WIDEN_BYTES);
+  const text = state.sliceDoc(windowFrom, windowTo);
+  const head = state.selection.main.head;
+  // Template ranges MUST be offset by windowFrom — otherwise every
+  // `{{ ... }}` exclusion breaks and literal `[[...]]` inside an expression
+  // gets decorated.
+  const exprRanges = findTemplateExprRanges(text, windowFrom);
 
   const matches: WikiMatch[] = [];
 
@@ -124,10 +147,10 @@ function buildDecorations(view: EditorView): DecorationSet {
     const rawTarget: string | undefined = m[1];
     if (rawTarget === undefined) continue;
 
-    const from = m.index;
+    const from = windowFrom + m.index;
     const to = from + m[0].length;
 
-    if (isInsideCodeBlock(view.state, from)) continue;
+    if (isInsideCodeBlock(state, from)) continue;
     if (isInsideTemplateExpr(exprRanges, from, to)) continue;
 
     const stem: string = stripKnownExt(rawTarget);
@@ -137,9 +160,11 @@ function buildDecorations(view: EditorView): DecorationSet {
     let aliasStart: number | null = null;
     let aliasEnd: number | null = null;
     if (aliasText !== undefined) {
-      const pipePos = text.indexOf("|", from + 2);
-      if (pipePos !== -1) {
-        aliasStart = pipePos;
+      // `text` is the widened-window slice; searching for `|` in it and
+      // translating back via windowFrom keeps absolute coordinates correct.
+      const pipePosInSlice = text.indexOf("|", m.index + 2);
+      if (pipePosInSlice !== -1) {
+        aliasStart = windowFrom + pipePosInSlice;
         aliasEnd = to - 2;
       }
     }
