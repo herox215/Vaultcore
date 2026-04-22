@@ -49,6 +49,47 @@ pub struct RenameResult {
     pub updated_paths: Vec<String>,
 }
 
+// ── rewrite_wiki_links_respecting_templates ────────────────────────────────────
+
+/// Rewrite `[[old_stem]]` / `[[old_stem|alias]]` occurrences in `content` to
+/// use `new_stem`, EXCEPT those that fall inside a `{{ ... }}` template body.
+///
+/// Returns `(rewritten_content, rewrite_count)`. A count of 0 means the file
+/// touched no rewritable links — either there were none, or every occurrence
+/// lived inside a template body and was preserved verbatim.
+///
+/// Template-body preservation is the #330 follow-up (#331 review): a user
+/// renaming `foo` → `bar` must not corrupt a template reading
+/// `vault.notes.where(n => n.name == "foo")`, which would silently start
+/// saying "bar" on the next render. `extract_links` (the read path) already
+/// skips template bodies; this keeps the disk-writing rename path aligned
+/// with the graph it feeds so the two halves of the rename flow stay
+/// internally consistent.
+///
+/// `re` MUST be the pre-compiled rename regex
+/// (`\[\[<old_stem>(\|[^\]]*)?(\]\])`).  Compilation is hoisted to the
+/// caller so the `rayon` parallel loop reuses a single instance.
+fn rewrite_wiki_links_respecting_templates(
+    content: &str,
+    re: &Regex,
+    new_stem: &str,
+) -> (String, usize) {
+    let template_ranges = link_graph::template_expr_ranges(content);
+    let mut link_count = 0usize;
+    let new_content = re
+        .replace_all(content, |caps: &regex::Captures| {
+            let whole = caps.get(0).expect("capture 0 always present");
+            if link_graph::overlaps_any(&template_ranges, whole.start(), whole.end()) {
+                return whole.as_str().to_string();
+            }
+            link_count += 1;
+            let alias_part = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            format!("[[{}{}]]", new_stem, alias_part)
+        })
+        .into_owned();
+    (new_content, link_count)
+}
+
 // ── get_backlinks ──────────────────────────────────────────────────────────────
 
 /// Return all backlinks for a vault-relative target path.
@@ -352,12 +393,8 @@ pub async fn update_links_after_rename(
                 return (source_rel.clone(), ScanOutcome::Skip);
             }
 
-            let mut link_count = 0usize;
-            let new_content = re.replace_all(&content, |caps: &regex::Captures| {
-                link_count += 1;
-                let alias_part = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                format!("[[{}{}]]", new_stem, alias_part)
-            }).into_owned();
+            let (new_content, link_count) =
+                rewrite_wiki_links_respecting_templates(&content, &re, new_stem);
 
             if link_count == 0 {
                 return (source_rel.clone(), ScanOutcome::Skip);
@@ -1030,5 +1067,73 @@ mod tests {
         assert_eq!(out.len(), 1);
         let incoming = lg.incoming_for("Target.md").unwrap();
         assert_eq!(incoming.len(), 1);
+    }
+
+    // ── rewrite_wiki_links_respecting_templates ────────────────────────────
+    //
+    // #330 follow-up (#331 review): the disk-writing half of the rename flow
+    // must refuse to rewrite `[[old_stem]]` occurrences that live inside a
+    // `{{ ... }}` template body, because those are source code, not real
+    // wiki-links. Without this guard, renaming `foo` → `bar` would silently
+    // mutate every template that reads `n.name == "foo"` into `n.name == "bar"`,
+    // which is data corruption — the template output changes on the next
+    // render and the user may not notice until much later.
+
+    fn build_rename_regex(old_stem: &str) -> regex::Regex {
+        let pattern = format!(r"\[\[{}(\|[^\]]*)?(\]\])", regex::escape(old_stem));
+        regex::Regex::new(&pattern).expect("test regex must compile")
+    }
+
+    #[test]
+    fn rewrite_leaves_wiki_links_inside_template_bodies_untouched() {
+        let re = build_rename_regex("foo");
+        // `[[foo]]` appears only inside a template body — rename must be a no-op.
+        let content = r#"see {{ vault.notes.where(n => n.name == "[[foo]]") }} end"#;
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 0);
+        assert_eq!(out, content, "template body must not be modified");
+    }
+
+    #[test]
+    fn rewrite_updates_real_links_and_preserves_template_links() {
+        let re = build_rename_regex("foo");
+        // Real `[[foo]]` on one line, fake one inside a template on the next.
+        // Only the real one must be rewritten; the template stays byte-identical.
+        let content = "real [[foo]]\nfake {{ \"[[foo]]\" }}";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 1);
+        assert_eq!(out, "real [[bar]]\nfake {{ \"[[foo]]\" }}");
+    }
+
+    #[test]
+    fn rewrite_preserves_alias_on_real_link() {
+        let re = build_rename_regex("foo");
+        let content = "[[foo|display text]]";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 1);
+        assert_eq!(out, "[[bar|display text]]");
+    }
+
+    #[test]
+    fn rewrite_noop_when_stem_not_present() {
+        let re = build_rename_regex("foo");
+        let content = "nothing to see here [[other]]";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 0);
+        assert_eq!(out, content);
+    }
+
+    #[test]
+    fn rewrite_handles_multiline_template_containing_old_stem() {
+        let re = build_rename_regex("foo");
+        // Multi-line template body containing `[[foo]]`; real `[[foo]]`
+        // afterwards must still be rewritten.
+        let content = "{{\nvault.notes.where(n =>\n  n.name == \"[[foo]]\")\n}}\nreal: [[foo]]";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 1);
+        assert_eq!(
+            out,
+            "{{\nvault.notes.where(n =>\n  n.name == \"[[foo]]\")\n}}\nreal: [[bar]]"
+        );
     }
 }

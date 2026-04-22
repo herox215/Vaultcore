@@ -30,6 +30,49 @@ fn wiki_link_regex() -> &'static Regex {
     })
 }
 
+/// Regex for the outer `{{ ... }}` boundary of template expressions.
+///
+/// Mirrors `src/lib/templateExprRegex.ts` so the frontend and backend agree
+/// on what counts as a template body. `[^{}]` rejects nested braces and
+/// allows newlines so multi-line expressions match as one contiguous range.
+/// No backtracking risk — the class is negated, the body is bounded by
+/// the first `}}` after a `{{`, and Rust's regex crate is linear.
+fn template_expr_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\{\{[^{}]+?\}\}").expect("invalid template-expr regex")
+    })
+}
+
+/// Absolute-byte `{{ ... }}` spans in `content`.
+///
+/// Used by `extract_links` to skip any wiki-link whose match range falls
+/// inside a template body (#330): content inside `{{ ... }}` is template
+/// source code, not Markdown, so fragments like `"[[" + f.name + "]]"`
+/// must not surface as outgoing links / backlinks / graph edges.
+///
+/// Also consumed by `commands::links::update_links_after_rename` to guard
+/// the on-disk rewrite path against corrupting template source code when a
+/// renamed file's stem happens to appear inside a `{{ ... }}` body.
+///
+/// Fast path: files without any `{{` bigram skip the regex pass entirely
+/// (the common case — a vault with few templated notes pays no cost).
+pub(crate) fn template_expr_ranges(content: &str) -> Vec<(usize, usize)> {
+    if !content.contains("{{") {
+        return Vec::new();
+    }
+    template_expr_regex()
+        .find_iter(content)
+        .map(|m| (m.start(), m.end()))
+        .collect()
+}
+
+/// Returns true iff the half-open interval `[from, to)` overlaps any of
+/// `ranges`. Linear scan — fine at the expression counts seen in practice.
+pub(crate) fn overlaps_any(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
+    ranges.iter().any(|&(a, b)| to > a && from < b)
+}
+
 // ── Public structs ─────────────────────────────────────────────────────────────
 
 /// A single wiki-link found in a Markdown document.
@@ -79,12 +122,34 @@ pub struct UnresolvedLink {
 /// Code-block exclusion is intentionally NOT done here — Rust indexes ALL links
 /// for graph completeness.  The CM6 layer handles visual suppression in code
 /// fences.
+///
+/// Template-body exclusion (#330): wiki-link fragments inside `{{ ... }}`
+/// template source (e.g. `"[[" + f.name + "]]"`) are NOT real links and must
+/// not flow into backlinks, graph nodes, or the post-rename link graph.
+/// Template ranges are computed once per call over the full content (so
+/// multi-line expressions are covered) and every line-level match is checked
+/// for overlap before being accepted. Mirrors the frontend guard in
+/// `src/lib/outgoingLinks.ts`.
 pub fn extract_links(content: &str) -> Vec<ParsedLink> {
     let re = wiki_link_regex();
+    let template_ranges = template_expr_ranges(content);
     let mut result = Vec::new();
 
-    for (line_number, line) in content.lines().enumerate() {
+    // `split('\n')` gives us byte-offset bookkeeping that `lines()` does not,
+    // so each regex match can be converted to an absolute offset for the
+    // template-range overlap check. Trailing `\r` on CRLF lines is stripped
+    // from the matched slice so `context` stays identical to the `lines()`
+    // output this function used to produce.
+    let mut line_start: usize = 0;
+    for (line_number, raw_line) in content.split('\n').enumerate() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
         for cap in re.captures_iter(line) {
+            let whole = cap.get(0).expect("capture 0 always present");
+            let abs_from = line_start + whole.start();
+            let abs_to = line_start + whole.end();
+            if overlaps_any(&template_ranges, abs_from, abs_to) {
+                continue;
+            }
             let target_raw = cap[1].to_string();
             let alias = cap.get(2).map(|m| m.as_str().to_string());
             result.push(ParsedLink {
@@ -94,6 +159,9 @@ pub fn extract_links(content: &str) -> Vec<ParsedLink> {
                 context: line.to_string(),
             });
         }
+        // `raw_line.len()` intentionally keeps any trailing `\r` in the offset
+        // math so `line_start` tracks real byte positions in `content`.
+        line_start += raw_line.len() + 1;
     }
 
     result
@@ -650,6 +718,111 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].line_number, 1);
         assert_eq!(links[1].line_number, 3);
+    }
+
+    // ── #330: template-body exclusion ──────────────────────────────────────
+
+    #[test]
+    fn extract_links_skips_wikilinks_inside_single_line_template() {
+        // `{{ "[[" + f.name + "]]" }}` must not yield any link — the
+        // `[[...]]` is a string literal in the expression body, not a
+        // Markdown wiki-link.
+        let md = r#"{{ "[[" + f.name + "]]" }}"#;
+        let links = extract_links(md);
+        assert!(links.is_empty(), "expected no links, got {:?}", links);
+    }
+
+    #[test]
+    fn extract_links_keeps_real_link_alongside_template_fake() {
+        let md = r#"See [[Alpha]] then {{ "[[" + f.name + "]]" }}"#;
+        let links = extract_links(md);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_raw, "Alpha");
+        assert_eq!(links[0].line_number, 0);
+    }
+
+    #[test]
+    fn extract_links_skips_multiline_template_body_and_preserves_line_numbers() {
+        // Template spans lines 1..=3, real link on line 4. The skip-by-range
+        // path preserves line numbers because we don't mutate the text.
+        let md = "line 0\n{{\nvault.notes.select(f => \"[[\" + f.name + \"]]\")\n}}\nsee [[Real]]";
+        let links = extract_links(md);
+        assert_eq!(links.len(), 1, "got {:?}", links);
+        assert_eq!(links[0].target_raw, "Real");
+        assert_eq!(links[0].line_number, 4);
+    }
+
+    #[test]
+    fn extract_links_issue_330_repro() {
+        // Exact shape from issue #330 — the table-generating template whose
+        // body happens to contain `"[[" + f.name + "]]"` as source code.
+        let md = r#"{{("|test|test|\n|-|-|\n"); vault.notes.where(n => n.content.contains("todo")).select(f => "|[[" + f.name + "]]|-|").join("\n")}}"#;
+        let links = extract_links(md);
+        assert!(links.is_empty(), "expected no links, got {:?}", links);
+    }
+
+    #[test]
+    fn extract_links_handles_crlf_line_endings() {
+        // Windows / cross-platform vaults: the `strip_suffix('\r')` +
+        // `raw_line.len() + 1` math must keep byte offsets correct against
+        // the full content (CR is a real byte) while handing the caller
+        // `lines()`-style `context` (no trailing CR).
+        //
+        // Multi-line template spans lines 1..=3, real link on line 4. The
+        // template overlap is computed in absolute byte offsets over
+        // content that contains CR bytes — if the loop's byte math drifts
+        // by even one, the fake link inside the template leaks through or
+        // the real link gets eaten.
+        let md = "line 0\r\n{{\r\n\"[[\" + x + \"]]\"\r\n}}\r\n[[Real]]\r\n";
+        let links = extract_links(md);
+        assert_eq!(links.len(), 1, "got {:?}", links);
+        assert_eq!(links[0].target_raw, "Real");
+        assert_eq!(links[0].line_number, 4);
+        // `context` is the visible line without CR, matching `lines()`.
+        assert_eq!(links[0].context, "[[Real]]");
+    }
+
+    // ── Cross-language regex parity (#331 review) ──────────────────────────
+    //
+    // Rust counterpart of `src/lib/__tests__/templateExprParity.test.ts`.
+    // Both tests read the same JSON fixture and assert the regex produces
+    // an identical ordered list of matched substrings. If either side's
+    // regex drifts (JS-only tweak, Rust-only tweak, or one gets moved to
+    // a new crate/module with a subtly different flavour), this test turns
+    // the divergence into a CI failure instead of a runtime surprise.
+
+    #[derive(serde::Deserialize)]
+    struct ParityCase {
+        name: String,
+        input: String,
+        matches: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParityFixture {
+        cases: Vec<ParityCase>,
+    }
+
+    #[test]
+    fn template_expr_regex_matches_shared_fixture() {
+        const FIXTURE: &str = include_str!(
+            "../../../test-fixtures/template_expr_parity.json"
+        );
+        let fixture: ParityFixture = serde_json::from_str(FIXTURE)
+            .expect("template_expr_parity.json is valid JSON");
+
+        let re = template_expr_regex();
+        for case in &fixture.cases {
+            let actual: Vec<String> = re
+                .find_iter(&case.input)
+                .map(|m| m.as_str().to_string())
+                .collect();
+            assert_eq!(
+                actual, case.matches,
+                "parity mismatch on case {:?}",
+                case.name,
+            );
+        }
     }
 
     // ── resolve_link ───────────────────────────────────────────────────────

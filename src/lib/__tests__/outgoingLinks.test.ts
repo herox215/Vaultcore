@@ -95,6 +95,64 @@ describe("extractOutgoingLinks", () => {
     // CM6 wikiLink plugin which also matches the inner `[[...]]`. If this
     // ever changes we'd revise both parsers together.
     const res = extractOutgoingLinks("![[embed.png]]", () => null);
-    expect(res.length).toBeLessThanOrEqual(1);
+    expect(res).toHaveLength(1);
+  });
+
+  // Issue #330: content inside `{{ ... }}` is template source, not markdown.
+  // String fragments like `"[[" + name + "]]"` must not surface as links.
+  describe("template expression bodies (#330)", () => {
+    it("ignores [[...]] fragments inside a single-line template", () => {
+      const doc = `{{ "[[" + f.name + "]]" }}`;
+      const res = extractOutgoingLinks(doc, () => null);
+      expect(res).toEqual([]);
+    });
+
+    it("keeps real links outside templates while ignoring fake ones inside", () => {
+      const doc = `See [[Alpha]] then {{ "[[" + f.name + "]]" }}`;
+      const res = extractOutgoingLinks(doc, () => null);
+      expect(res).toHaveLength(1);
+      expect(res[0]?.target).toBe("Alpha");
+    });
+
+    it("preserves line numbers of real links after a multi-line template", () => {
+      // Template spans lines 1-3, real link on line 4. The CM6 plugin skips
+      // overlapping matches without mutating the text, so the line number
+      // of the real link must stay correct.
+      const doc = [
+        "line 0",
+        "{{",
+        "vault.notes.select(f => \"[[\" + f.name + \"]]\")",
+        "}}",
+        "see [[Real]]",
+      ].join("\n");
+      const res = extractOutgoingLinks(doc, () => null);
+      expect(res).toHaveLength(1);
+      expect(res[0]?.target).toBe("Real");
+      expect(res[0]?.lineNumber).toBe(4);
+    });
+
+    it("repro from issue #330 — table-generating template", () => {
+      const doc =
+        '{{("|test|test|\\n|-|-|\\n"); vault.notes.where(n => n.content.contains("todo")).select(f => "|[[" + f.name + "]]|-|").join("\\n")}}';
+      const res = extractOutgoingLinks(doc, () => null);
+      expect(res).toEqual([]);
+    });
+
+    it("ignores [[...]] even when the template would RENDER to a real link", () => {
+      // Semantic pin: #330 defines outgoing links LITERALLY. A `[[X]]` that
+      // only appears inside a template body is not an outgoing link, even
+      // when the evaluated template output would render a wikilink at runtime.
+      // The rationale: the outgoing-links list reflects what the author
+      // wrote in the source document — not what the template would produce
+      // on render, which can depend on vault state and change over time.
+      //
+      // Do not "fix" this as a false negative without revisiting the design
+      // decision. If the product ever decides to follow rendered output,
+      // that is a separate feature that plumbs template-evaluation results
+      // back into the outgoing-links resolver.
+      const doc = `{{ "[[RenderedTarget]]" }}`;
+      const res = extractOutgoingLinks(doc, () => null);
+      expect(res).toEqual([]);
+    });
   });
 });
