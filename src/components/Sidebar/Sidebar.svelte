@@ -207,34 +207,64 @@
   // ─── Toggle expand / persist ───────────────────────────────────────────────
   async function onToggleExpand(row: FlatRow) {
     if (!row.isDir) return;
-    const expanded = new Set(treeState.expanded);
-    const willExpand = !expanded.has(row.relPath);
-    if (willExpand) expanded.add(row.relPath);
-    else expanded.delete(row.relPath);
-    treeState = { ...treeState, expanded: Array.from(expanded) };
-    void saveTreeState($vaultStore.currentPath ?? "", treeState);
+    const willExpand = !treeState.expanded.includes(row.relPath);
     if (willExpand) {
+      // Optimistically show the folder as expanded (with spinner) while the
+      // load is in flight. Persist only once listDirectory resolves — matches
+      // #336 B3 so a failure doesn't stick in `expanded` across sessions.
+      const expanded = new Set(treeState.expanded);
+      expanded.add(row.relPath);
+      treeState = { ...treeState, expanded: Array.from(expanded) };
       const existing = folders.get(row.path);
       if (!existing || !existing.childrenLoaded) {
-        await loadFolder(row.path);
+        const result = await loadFolder(row.path);
+        if (result === null) {
+          // Roll back the optimistic expand so the folder collapses and the
+          // next session doesn't show an empty, un-retryable expanded node.
+          const rolled = new Set(treeState.expanded);
+          rolled.delete(row.relPath);
+          treeState = { ...treeState, expanded: Array.from(rolled) };
+          void saveTreeState($vaultStore.currentPath ?? "", treeState);
+          return;
+        }
       }
+      void saveTreeState($vaultStore.currentPath ?? "", treeState);
+    } else {
+      const expanded = new Set(treeState.expanded);
+      expanded.delete(row.relPath);
+      treeState = { ...treeState, expanded: Array.from(expanded) };
+      void saveTreeState($vaultStore.currentPath ?? "", treeState);
     }
   }
 
   async function setExpanded(relPath: string, absPath: string, on: boolean) {
-    const expanded = new Set(treeState.expanded);
-    if (on) expanded.add(relPath);
-    else expanded.delete(relPath);
-    treeState = { ...treeState, expanded: Array.from(expanded) };
-    // Fire-and-forget the persistence — it uses crypto.subtle.digest which
-    // can hang several ticks; we don't want that delaying the user-visible
-    // listDirectory that populates the expanded folder.
-    void saveTreeState($vaultStore.currentPath ?? "", treeState);
     if (on) {
+      // #336 B3 — do NOT persist `expanded` until listDirectory resolves
+      // successfully. If it fails, the folder stays collapsed so the next
+      // session doesn't show an empty, un-retryable expanded folder.
       const existing = folders.get(absPath);
-      if (!existing || !existing.childrenLoaded) {
-        await loadFolder(absPath);
+      const needsLoad = !existing || !existing.childrenLoaded;
+      if (needsLoad) {
+        const result = await loadFolder(absPath);
+        if (result === null) {
+          // Load failed — leave treeState.expanded untouched.
+          return;
+        }
       }
+      if (treeState.expanded.includes(relPath)) return;
+      const expanded = new Set(treeState.expanded);
+      expanded.add(relPath);
+      treeState = { ...treeState, expanded: Array.from(expanded) };
+      // Fire-and-forget the persistence — it uses crypto.subtle.digest which
+      // can hang several ticks; we don't want that delaying the user-visible
+      // listDirectory that populates the expanded folder.
+      void saveTreeState($vaultStore.currentPath ?? "", treeState);
+    } else {
+      if (!treeState.expanded.includes(relPath)) return;
+      const expanded = new Set(treeState.expanded);
+      expanded.delete(relPath);
+      treeState = { ...treeState, expanded: Array.from(expanded) };
+      void saveTreeState($vaultStore.currentPath ?? "", treeState);
     }
   }
 
@@ -358,9 +388,21 @@
     tagsStore.reset();
   });
 
+  // #336 B2 — if a reveal fires while the scroller has 0 height (collapsed
+  // sidebar, pre-layout mount), stash it and drain once the scroller has a
+  // real clientHeight.
+  let pendingRevealPath: string | null = null;
+
   function measureViewport() {
     if (scrollerEl) {
-      viewportHeight = scrollerEl.clientHeight || viewportHeight;
+      const newHeight = scrollerEl.clientHeight || viewportHeight;
+      viewportHeight = newHeight;
+      // Drain the stashed reveal once the layout is actually present.
+      if (pendingRevealPath !== null && scrollerEl.clientHeight > 0) {
+        const pending = pendingRevealPath;
+        pendingRevealPath = null;
+        void performReveal(pending);
+      }
     }
   }
 
@@ -392,42 +434,69 @@
     // Recompute the flat list after the DOM has caught up with the new state.
     await tick();
 
-    // Find the target row and scroll it into view. If the target is outside
-    // the current window, bring it in first so the virtualized renderer
-    // mounts its row element before we call scrollIntoView.
+    // #336 B1 — do NOT read the `flatRows` $derived here. Svelte 5 batches
+    // reactive updates; a $derived value read from inside a store-subscription
+    // callback (even across an `await tick()`) can return its previous value
+    // when the triggering $state was mutated in an async continuation. Recompute
+    // from `treeModel`'s backing fields directly to get a guaranteed-fresh slice.
+    const fresh = flattenTree({
+      vaultPath,
+      rootEntries,
+      folders,
+      expanded: new Set(treeState.expanded),
+      sortBy: treeState.sortBy,
+    });
+
     const targetAbs = relPath.length > 0 ? vaultPath + "/" + relPath : vaultPath;
-    const idx = flatRows.findIndex((r) => r.path === targetAbs);
+    const idx = fresh.findIndex((r) => r.path === targetAbs);
     if (idx === -1) {
       // Target path isn't in the flat list (maybe points at a .md file under
       // an ancestor whose listDirectory hasn't landed yet). Best-effort: no
       // scroll — the caller can re-dispatch after the user's next keystroke.
       return;
     }
-    if (scrollerEl) {
-      // Place the target ~1/3 down the viewport so it's visibly centered.
-      const targetTop = idx * ROW_HEIGHT;
-      const vh = scrollerEl.clientHeight || viewportHeight;
-      const desiredTop = Math.max(0, targetTop - vh / 3);
-      if (targetTop < scrollerEl.scrollTop || targetTop > scrollerEl.scrollTop + vh - ROW_HEIGHT) {
-        scrollerEl.scrollTop = desiredTop;
-        scrollTop = desiredTop;
-        await tick();
-      }
+
+    // #336 B2 — if the scroller has no layout yet, stash the request and
+    // let `measureViewport` drain it once it gets a real clientHeight.
+    if (!scrollerEl || scrollerEl.clientHeight === 0) {
+      pendingRevealPath = relPath;
+      return;
     }
-    // Find the row element (it now must exist in the DOM window) and
-    // scroll-into-view — matches the old TreeNode behaviour. Try now, and
-    // again on the next frame in case the flat renderer hasn't mounted the
-    // row yet (the window-slice update is reactive but pixel-level scroll
-    // happens after the next paint).
-    const scrollTarget = () => {
+
+    // Place the target ~1/3 down the viewport so it's visibly centered.
+    const targetTop = idx * ROW_HEIGHT;
+    const vh = scrollerEl.clientHeight || viewportHeight;
+    const desiredTop = Math.max(0, targetTop - vh / 3);
+    if (targetTop < scrollerEl.scrollTop || targetTop > scrollerEl.scrollTop + vh - ROW_HEIGHT) {
+      scrollerEl.scrollTop = desiredTop;
+      scrollTop = desiredTop;
+      await tick();
+    }
+
+    // Find the row element (it now should exist in the DOM window) and
+    // scroll-into-view. The window-slice update is reactive but pixel-level
+    // scroll happens after the next paint, so poll a few rAF frames before
+    // falling back to best-effort index scroll.
+    const scrollTarget = (): boolean => {
       const el = scrollerEl?.querySelector<HTMLElement>(
         `[data-tree-row="${cssEscape(targetAbs)}"]`,
       );
-      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      if (el) {
+        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return true;
+      }
+      return false;
     };
-    scrollTarget();
+    if (scrollTarget()) return;
     if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(scrollTarget);
+      let attempts = 0;
+      const tryRaf = () => {
+        if (scrollTarget()) return;
+        attempts += 1;
+        if (attempts < 3) requestAnimationFrame(tryRaf);
+        // else: accept best-effort — scrollTop is already at desiredTop.
+      };
+      requestAnimationFrame(tryRaf);
     }
   }
 

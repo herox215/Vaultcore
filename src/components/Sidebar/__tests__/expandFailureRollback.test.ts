@@ -1,11 +1,14 @@
-// TDD for #253: revealing a path inside a collapsed ancestor chain must
-//   1. Call listDirectory for each ancestor in order (top → down)
-//   2. Re-flatten once the results land
-//   3. Scroll the target row into view (scrollIntoView invoked)
+// Regression for PR #336 blocker B3 — when `loadFolder` (listDirectory)
+// rejects, the folder's relPath must NOT remain in the persisted
+// `treeState.expanded` list. Otherwise the next launch shows the folder
+// stuck expanded+empty, no spinner — the user has to collapse and re-expand
+// to retry.
 //
-// The old TreeNode architecture drove expansion implicitly via the
-// persisted expanded-paths prop; with the flat architecture the Sidebar is
-// the sole owner of this sequencing.
+// We drive the reveal path (which funnels through `setExpanded`) because
+// it's the easiest way to reach the expansion pipeline without poking
+// internals. A deeper targeted test (direct setExpanded invocation) would
+// require exposing it — here we rely on the observable side effect:
+// persisted tree state.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/svelte";
@@ -37,6 +40,7 @@ import { listDirectory } from "../../../ipc/commands";
 import { vaultStore } from "../../../store/vaultStore";
 import { bookmarksStore } from "../../../store/bookmarksStore";
 import { treeRevealStore } from "../../../store/treeRevealStore";
+import { loadTreeState } from "../../../lib/treeState";
 import Sidebar from "../Sidebar.svelte";
 import type { DirEntry } from "../../../types/tree";
 
@@ -57,9 +61,6 @@ const VAULT = "/tmp/test-vault";
 function dir(name: string, path: string): DirEntry {
   return { name, path, is_dir: true, is_symlink: false, is_md: false, modified: null, created: null };
 }
-function md(name: string, path: string): DirEntry {
-  return { name, path, is_dir: false, is_symlink: false, is_md: true, modified: null, created: null };
-}
 
 function makeProps() {
   return {
@@ -70,7 +71,7 @@ function makeProps() {
   };
 }
 
-describe("Sidebar reveal sequencing (#253)", () => {
+describe("Sidebar expand failure rollback (#336 B3)", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", makeLocalStorage());
     vaultStore.reset();
@@ -79,52 +80,31 @@ describe("Sidebar reveal sequencing (#253)", () => {
     vi.clearAllMocks();
   });
 
-  it("expands ancestors, calls listDirectory in order, then scrolls the target into view", async () => {
-    const notes = dir("notes", `${VAULT}/notes`);
-    const daily = dir("daily", `${VAULT}/notes/daily`);
-    const today = md("today.md", `${VAULT}/notes/daily/today.md`);
+  it("does not persist `expanded` for a folder whose listDirectory rejected", async () => {
+    const foo = dir("foo", `${VAULT}/foo`);
 
     (listDirectory as any).mockImplementation(async (path: string) => {
-      if (path === VAULT) return [notes];
-      if (path === notes.path) return [daily];
-      if (path === daily.path) return [today];
+      if (path === VAULT) return [foo];
+      if (path === foo.path) throw new Error("EACCES: simulated permissions failure");
       return [];
-    });
-
-    // Stub scrollIntoView globally — jsdom doesn't implement it.
-    const scrollSpy = vi.fn();
-    (window as any).HTMLElement.prototype.scrollIntoView = scrollSpy;
-
-    // Prime clientHeight so the virtualized window has a real viewport
-    // (#336 B2: reveal bails early on 0-height scrollers).
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-      configurable: true,
-      get() { return 600; },
     });
 
     render(Sidebar, { props: makeProps() });
 
-    // Flush the initial vault-subscribe + root listDirectory.
+    // Drain the initial root load.
     for (let i = 0; i < 15; i += 1) { await Promise.resolve(); await tick(); }
 
-    // Reveal a path inside a collapsed ancestor chain. The target itself is
-    // a file two folders deep — Sidebar must expand notes → daily in order,
-    // wait for each listDirectory, then scroll.
-    treeRevealStore.requestReveal("notes/daily/today.md");
+    // Trigger the expansion pipeline via a reveal of a descendant. The
+    // reveal pipeline calls setExpanded("foo", absFoo, true) — which will
+    // invoke loadFolder(absFoo) → rejects. Under B3's contract, "foo" must
+    // NOT survive in treeState.expanded.
+    treeRevealStore.requestReveal("foo/any-descendant.md");
 
-    // Flush the reveal pipeline; each ancestor adds an async listDirectory.
+    // Flush everything.
     for (let i = 0; i < 60; i += 1) { await Promise.resolve(); await tick(); }
 
-    const calls = (listDirectory as any).mock.calls.map((c: any[]) => c[0] as string);
-
-    // Root list is always called first (on vault open). Then the reveal
-    // sequence must include notes then daily, in that order.
-    const notesIdx = calls.indexOf(notes.path);
-    const dailyIdx = calls.indexOf(daily.path);
-    expect(notesIdx).toBeGreaterThanOrEqual(0);
-    expect(dailyIdx).toBeGreaterThan(notesIdx);
-
-    // Target row scrolled into view.
-    expect(scrollSpy).toHaveBeenCalled();
+    // Read back the persisted tree state — this is what survives a reload.
+    const persisted = await loadTreeState(VAULT);
+    expect(persisted.expanded).not.toContain("foo");
   });
 });
