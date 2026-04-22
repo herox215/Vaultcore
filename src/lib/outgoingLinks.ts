@@ -10,6 +10,26 @@
 // This mirrors the parse regex in `components/Editor/wikiLink.ts` so the
 // sidebar stays in sync with CM6 decorations on each keystroke — the two
 // parsers MUST agree on what counts as a wiki-link.
+//
+// Template-body skip (#330): wiki-link text inside `{{ ... }}` is template
+// source code, not Markdown, so it must NOT surface as an outgoing link
+// (e.g. `{{ "[[" + f.name + "]]" }}` would otherwise emit a bogus entry
+// named `" + f.name + "`). We compute template ranges once per call and
+// skip any match whose span overlaps one — mirroring the guard used by
+// the CM6 wikiLink plugin at `components/Editor/wikiLink.ts`.
+//
+// We do NOT pre-strip `{{ ... }}` bodies from the text, even though the
+// `stripTemplateExpressions` helper exists: (1) a multi-line template
+// contains newlines, so stripping would shift `lineNumber` for any real
+// link that follows it; (2) stripping could concatenate text across a
+// removed span and synthesise a new spurious `[[...]]` match that
+// straddles the seam (e.g. `[[A{{x}}B]]` → `[[AB]]`). Skip-by-range
+// dodges both hazards.
+
+import {
+  findTemplateExprRanges,
+  isInsideTemplateExpr,
+} from "./templateExprRanges";
 
 /** Matches [[target]] and [[target|alias]]. Global flag — reset lastIndex before use. */
 const WIKI_LINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]*))?\]\]/g;
@@ -47,6 +67,11 @@ export function extractOutgoingLinks(
 ): OutgoingLink[] {
   const seen = new Map<string, OutgoingLink>();
 
+  // Template ranges computed once — every match is checked against them so
+  // `[[...]]` fragments inside `{{ ... }}` template source don't leak into
+  // the sidebar (#330).
+  const templateRanges = findTemplateExprRanges(text);
+
   // Reset lastIndex — the regex is global and shared across calls.
   WIKI_LINK_RE.lastIndex = 0;
 
@@ -59,6 +84,11 @@ export function extractOutgoingLinks(
   while ((match = WIKI_LINK_RE.exec(text)) !== null) {
     const rawTarget = match[1];
     if (rawTarget === undefined) continue;
+
+    // Skip matches whose span overlaps a template expression body.
+    if (isInsideTemplateExpr(templateRanges, match.index, WIKI_LINK_RE.lastIndex)) {
+      continue;
+    }
 
     // Advance line counter to this match's position.
     while (true) {

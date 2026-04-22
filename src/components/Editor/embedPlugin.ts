@@ -31,7 +31,7 @@ import { resolveTarget } from "./wikiLink";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
-} from "./templateExprRanges";
+} from "../../lib/templateExprRanges";
 import { vaultStore } from "../../store/vaultStore";
 import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";

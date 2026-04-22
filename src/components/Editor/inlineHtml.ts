@@ -42,7 +42,7 @@ import type { Extension } from "@codemirror/state";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
-} from "./templateExprRanges";
+} from "../../lib/templateExprRanges";
 
 // ── Sanitizer config ─────────────────────────────────────────────────────────
 
