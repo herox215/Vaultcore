@@ -20,12 +20,16 @@ pub mod link_graph;
 pub mod tag_index;
 pub mod frontmatter;
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use link_graph::{LinkGraph, StemIndex, extract_links};
-use tag_index::TagIndex;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use link_graph::{LinkGraph, ParsedLink, StemIndex, extract_links};
+use tag_index::{TagIndex, extract_inline_tag_occurrences};
 use frontmatter::parse_frontmatter;
 
 use tantivy::directory::error::LockError;
@@ -46,7 +50,41 @@ pub struct IndexProgressPayload {
     pub current_file: String,
 }
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
+
+// ── Read instrumentation (test-only, #179) ───────────────────────────────────
+//
+// Cold-start regression guard: `index_vault` must read every `.md` file AT
+// MOST ONCE per invocation. Before ticket #179 the indexer did a second
+// filesystem pass just to feed `LinkGraph::update_file` + `TagIndex::update_file`.
+// The counter is incremented inside `read_md_file`, the single helper every
+// `std::fs::read_to_string` call in `index_vault` goes through. Production
+// builds compile the helper down to a plain `read_to_string` call — the
+// counter and its helpers are strictly `#[cfg(test)]`.
+
+#[cfg(test)]
+pub(crate) static READ_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_read_count() {
+    READ_COUNT.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn read_count() -> usize {
+    READ_COUNT.load(Ordering::SeqCst)
+}
+
+/// Read a Markdown file's contents. Thin wrapper over `std::fs::read_to_string`
+/// so the test-only read counter (#179) can observe every call without a
+/// global `Fs` trait refactor. On failure the caller handles it the same way
+/// it would handle a raw `read_to_string` error — non-UTF-8 files still
+/// return `Err` here (UTF-8 validation happens inside `read_to_string`).
+fn read_md_file(path: &Path) -> io::Result<String> {
+    #[cfg(test)]
+    READ_COUNT.fetch_add(1, Ordering::SeqCst);
+    std::fs::read_to_string(path)
+}
 
 const PROGRESS_THROTTLE: Duration = Duration::from_millis(50);
 const PROGRESS_EVENT: &str = "vault://index_progress";
@@ -287,10 +325,10 @@ impl IndexCoordinator {
     /// Skips files whose SHA-256 hash has not changed (IDX-03).
     /// Non-UTF-8 files are silently skipped (IDX-08).
     /// Emits `vault://index_progress` events throttled at 50 ms.
-    pub async fn index_vault(
+    pub async fn index_vault<R: Runtime>(
         &self,
         vault_path: &Path,
-        app: &AppHandle,
+        app: &AppHandle<R>,
     ) -> Result<VaultInfo, VaultError> {
         let vaultcore_dir = vault_path.join(".vaultcore");
 
@@ -313,9 +351,24 @@ impl IndexCoordinator {
         let mut last_emit = Instant::now() - PROGRESS_THROTTLE;
         let mut file_list: Vec<String> = Vec::with_capacity(total);
 
+        // Single-read buffers (#179). Pre-fix, a second pass re-read every
+        // `.md` file just to feed the link graph + tag index — doubling cold-
+        // start disk I/O on a 100k-note vault. We now extract links + tags
+        // from the same `String` we already read for hashing/body/title, push
+        // them into these buffers, and flush after the loop (once `file_list`
+        // — the `all_paths` slice both indexes consume — is complete).
+        //
+        // Order-insensitive flush: `LinkGraph::update_file_with_index` and
+        // `TagIndex::update_file_with_tags` each call `remove_file(rel)` as
+        // their first step, so any iteration order yields the same end state.
+        let mut link_buffer: Vec<(String, Vec<ParsedLink>)> = Vec::with_capacity(total);
+        let mut tag_buffer: Vec<(String, Vec<String>)> = Vec::with_capacity(total);
+
         for (i, abs_path) in md_paths.iter().enumerate() {
-            // Read file — skip non-UTF-8 silently (IDX-08).
-            let content = match std::fs::read_to_string(abs_path) {
+            // Read file — skip non-UTF-8 silently (IDX-08). THE ONLY read of
+            // `abs_path` inside `index_vault`; everything else reuses this
+            // `String`.
+            let content = match read_md_file(abs_path) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -341,6 +394,19 @@ impl IndexCoordinator {
                 .unwrap_or_default();
 
             file_list.push(relative_path.clone());
+
+            // Buffer link + tag data from this single in-memory read. Both
+            // branches of `already_current` must buffer — otherwise a vault
+            // where every file is hash-unchanged would lose link/tag state
+            // after a coordinator restart (the `file_index` cache survives
+            // across `index_vault` runs via `new_with_file_index`, but
+            // `LinkGraph` / `TagIndex` are freshly constructed in
+            // `IndexCoordinator::new_with_file_index` and need repopulating
+            // every cold start).
+            let links = extract_links(&content);
+            link_buffer.push((relative_path.clone(), links));
+            let tags = extract_inline_tag_occurrences(&content);
+            tag_buffer.push((relative_path.clone(), tags));
 
             if !already_current {
                 let body = parser::strip_markdown(&content);
@@ -394,31 +460,27 @@ impl IndexCoordinator {
         let _ = self.tx.send(IndexCmd::Commit).await;
         tantivy_index::write_version(&vaultcore_dir)?;
 
-        // Populate the link graph from all indexed files.
-        // Two-pass: file_list already contains all relative paths; now
-        // re-read each file and update the graph.  We hold the link_graph
-        // lock only briefly per file.
+        // Flush the link + tag buffers. `file_list` is fully populated now,
+        // so the StemIndex the link-graph consumes matches the legacy pass-2
+        // input byte-for-byte. Each `update_file_with_index` / `update_file_with_tags`
+        // internally calls `remove_file` first, making the flush idempotent
+        // and order-insensitive.
         //
-        // Perf (#250): build the vault-wide StemIndex once so each
-        // `update_file_with_index` call is O(k) in the stem bucket instead of
-        // O(N) × 2 full passes with per-path `to_lowercase` allocations.
+        // Perf (#250 preserved): build the vault-wide `StemIndex` once so the
+        // per-file `update_file_with_index` call is O(k) in the stem bucket
+        // instead of O(N) with per-path `to_lowercase` allocations.
         {
             let all_paths: Vec<String> = file_list.clone();
             let stem_index = StemIndex::build(&all_paths);
-            for abs_path in md_paths.iter() {
-                let rel = abs_path
-                    .strip_prefix(vault_path)
-                    .ok()
-                    .map(|p| p.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                if let Ok(content) = std::fs::read_to_string(abs_path) {
-                    let links = extract_links(&content);
-                    if let Ok(mut lg) = self.link_graph.lock() {
-                        lg.update_file_with_index(&rel, links, &stem_index);
-                    }
-                    if let Ok(mut ti) = self.tag_index.lock() {
-                        ti.update_file(&rel, &content);
-                    }
+
+            if let Ok(mut lg) = self.link_graph.lock() {
+                for (rel, links) in link_buffer {
+                    lg.update_file_with_index(&rel, links, &stem_index);
+                }
+            }
+            if let Ok(mut ti) = self.tag_index.lock() {
+                for (rel, tags) in tag_buffer {
+                    ti.update_file_with_tags(&rel, tags);
                 }
             }
         }

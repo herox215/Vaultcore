@@ -6,6 +6,7 @@ mod tree;
 mod watcher;
 mod merge;
 mod indexer;
+mod indexer_single_read;
 mod link_graph;
 mod local_graph;
 mod global_graph;
