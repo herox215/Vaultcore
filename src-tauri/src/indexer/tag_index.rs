@@ -126,13 +126,35 @@ impl TagIndex {
     /// - Counts are now total-occurrence (not per-file unique). Writing `#test` three
     ///   times in one file yields `test (3)` in the tag panel — matches user expectation.
     pub fn update_file(&mut self, rel_path: &str, content: &str) {
+        // Re-extraction helper preserved for single-file incremental callers
+        // (watcher `UpdateTags`, tests, etc.) that only have content in hand.
+        // Bulk callers that already extracted tags once should prefer
+        // `update_file_with_tags` to avoid re-scanning the content string —
+        // see `IndexCoordinator::index_vault` (#179) where the cold-start
+        // loop extracts every file's tags exactly once.
+        let tags = extract_inline_tag_occurrences(content);
+        self.update_file_with_tags(rel_path, tags);
+    }
+
+    /// Idempotent tag replacement that accepts a pre-extracted occurrence
+    /// list instead of re-scanning `content`.
+    ///
+    /// Contract: `tags` is the EXACT `Vec<String>` `extract_inline_tag_occurrences`
+    /// would produce for the same content — tags in first-appearance order
+    /// with duplicates preserved so the occurrence count in `list_tags`
+    /// matches the legacy behaviour. Callers that have no pre-extracted list
+    /// should use `update_file`, which delegates here after extracting once.
+    ///
+    /// Added for ticket #179: `index_vault` extracts links + tags from a
+    /// single in-memory `String` and flushes both indexes without re-reading
+    /// the file. Keeping the signature `(rel_path, Vec<String>)` lets the
+    /// buffer entry stay flat.
+    pub fn update_file_with_tags(&mut self, rel_path: &str, tags: Vec<String>) {
         // Clear previous state for this file so updates are idempotent.
         self.remove_file(rel_path);
 
-        let all_tags: Vec<String> = extract_inline_tag_occurrences(content);
-
         // Record one occurrence per tag match (duplicates preserved for count).
-        for t in &all_tags {
+        for t in &tags {
             self.occurrences
                 .entry(t.clone())
                 .or_default()
@@ -142,7 +164,7 @@ impl TagIndex {
                 });
         }
 
-        self.by_file.insert(rel_path.to_string(), all_tags);
+        self.by_file.insert(rel_path.to_string(), tags);
     }
 
     /// Remove all tag information for `rel_path`.
