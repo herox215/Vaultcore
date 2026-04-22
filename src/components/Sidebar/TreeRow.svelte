@@ -1,87 +1,84 @@
 <script lang="ts">
-  import { ChevronRight, Folder, FolderOpen, FileText, File, MoreHorizontal, Star } from "lucide-svelte";
-  import { listDirectory, createFile, createFolder, deleteFile, moveFile, updateLinksAfterRename, getBacklinks, writeFile } from "../../ipc/commands";
+  // Flat row for the virtualized file tree (#253).
+  //
+  // Renders a single row from the flattened tree model. Unlike the former
+  // recursive <TreeNode>, this component:
+  //   - does NOT subscribe to treeRevealStore (Sidebar owns the sole subscription)
+  //   - does NOT own an `expanded` or `children` state (Sidebar's tree model does)
+  //   - does NOT recurse (the flat renderer places child rows as siblings)
+  //
+  // Drag-drop, inline rename, context-menu, and delete-confirmation logic were
+  // lifted from TreeNode with minimal behavioural changes so the existing WDIO
+  // specs (inline-rename, tree-context-menu, drag-drop) still pass.
+  import {
+    ChevronRight,
+    Folder,
+    FolderOpen,
+    FileText,
+    File,
+    MoreHorizontal,
+    Star,
+  } from "lucide-svelte";
+  import {
+    createFile,
+    createFolder,
+    deleteFile,
+    moveFile,
+    updateLinksAfterRename,
+    getBacklinks,
+    writeFile,
+  } from "../../ipc/commands";
   import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
   import { toastStore } from "../../store/toastStore";
-  import type { RenameResult } from "../../types/links";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
-  import type { DirEntry } from "../../types/tree";
   import InlineRename from "./InlineRename.svelte";
   import ContextMenu from "../common/ContextMenu.svelte";
-  import TreeNode from "./TreeNode.svelte";
   import { vaultStore } from "../../store/vaultStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
   import { tabStore } from "../../store/tabStore";
-  import { treeRevealStore } from "../../store/treeRevealStore";
   import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
-  import { sortEntries, type SortBy } from "../../lib/treeState";
-  import { onMount, onDestroy, untrack } from "svelte";
+  import type { FlatRow } from "../../lib/flattenTree";
 
   interface Props {
-    entry: DirEntry;
-    depth: number;
+    row: FlatRow;
     selectedPath: string | null;
     onSelect: (path: string) => void;
     onOpenFile: (path: string) => void;
-    onRefreshParent: () => void;
+    onToggleExpand: (row: FlatRow) => void | Promise<void>;
+    /** Tell the Sidebar the child list for this folder needs re-fetching. */
+    onRefreshFolder: (folderPath: string) => void | Promise<void>;
     onPathChanged: (oldPath: string, newPath: string) => void;
-    onExpandToggle?: ((relPath: string, isExpanded: boolean) => void) | undefined;
-    initiallyExpanded?: boolean;
-    /** Vault-relative folder paths persisted as expanded — propagated through
-     *  the recursive tree so deeply nested descendants can restore their
-     *  open/closed state on mount instead of always starting collapsed. */
-    expandedPaths?: readonly string[];
-    sortBy?: SortBy;
+    /** Called when the user opens/closes inline rename on this row. */
+    onRenameStateChange?: (path: string, renaming: boolean) => void;
   }
 
   let {
-    entry,
-    depth,
+    row,
     selectedPath,
     onSelect,
     onOpenFile,
-    onRefreshParent,
+    onToggleExpand,
+    onRefreshFolder,
     onPathChanged,
-    onExpandToggle,
-    initiallyExpanded = false,
-    expandedPaths = [],
-    sortBy = "name",
+    onRenameStateChange,
   }: Props = $props();
 
-  // `initiallyExpanded` is a one-shot seed: the prop reflects the persisted
-  // tree state at mount time, but local expand/collapse is driven by the
-  // user (see `toggleExpand`) and must not be overwritten when the prop
-  // changes. `untrack` makes that intent explicit and silences Svelte 5's
-  // `state_referenced_locally` warning.
-  let expanded = $state(untrack(() => initiallyExpanded));
-  let children = $state<DirEntry[]>([]);
-  let childrenLoaded = $state(false);
-  let loading = $state(false);
+  // Reactive — the Sidebar recomputes row objects on every flatten, so Svelte
+  // already rerenders on change. No local mirror required.
+  const isActive = $derived(selectedPath === row.path);
+  const isBookmarked = $derived(
+    !row.isDir && row.relPath !== "" && $bookmarksStore.paths.includes(row.relPath),
+  );
 
-  // Rename/inline edit state
+  // Rename state — kept local because it's ephemeral per-row UI.
   let renaming = $state(false);
   let isNewFile = $state(false);
 
-  // Context menu state. Anchored at the cursor point when opened via
-  // right-click, and at the three-dots button's bounding rect when opened
-  // via click. Shared ContextMenu handles overflow-flip + ESC.
+  // Context-menu + dialog state.
   let showContextMenu = $state(false);
   let menuPos = $state<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  // Delete confirmation state
   let showDeleteConfirm = $state(false);
-
-  // Drag-drop state
-  let isDragSource = $state(false);
-  let isDragTarget = $state(false);
-
-  // Wiki-link rename confirmation
-  // newPath: absolute path after rename (InlineRename already executed renameFile)
-  // oldRelPath: vault-relative old path (for updateLinksAfterRename)
-  // newRelPath: vault-relative new path (for updateLinksAfterRename)
-  // linkCount: total number of wiki-links pointing to the file
-  // fileCount: number of unique source files with links
   let pendingRename = $state<{
     newPath: string;
     oldRelPath: string;
@@ -89,8 +86,6 @@
     linkCount: number;
     fileCount: number;
   } | null>(null);
-
-  // Move confirmation state (drag-drop, D-11)
   let pendingMove = $state<{
     sourcePath: string;
     targetDirPath: string;
@@ -100,114 +95,30 @@
     fileCount: number;
   } | null>(null);
 
-  const isActive = $derived(selectedPath === entry.path);
+  let isDragSource = $state(false);
+  let isDragTarget = $state(false);
 
-  // Bookmark state for this entry (#12). Files only — folders aren't
-  // bookmarkable in the MVP.
-  const entryRelPath = $derived(relPathOf(entry.path));
-  const isBookmarked = $derived(
-    !entry.is_dir && entryRelPath !== null && $bookmarksStore.paths.includes(entryRelPath)
-  );
-
-  function relPathOf(absPath: string): string | null {
-    const vault = getVaultRoot();
-    if (!vault) return null;
-    return toRelPath(absPath, vault);
+  function getVaultRoot(): string | null {
+    let v: string | null = null;
+    const u = vaultStore.subscribe((s) => {
+      v = s.currentPath;
+    });
+    u();
+    return v;
   }
 
-  async function toggleBookmark() {
-    closeContextMenu();
-    const vault = getVaultRoot();
-    if (!vault || entry.is_dir) return;
-    const rel = toRelPath(entry.path, vault);
-    await bookmarksStore.toggle(rel, vault);
-  }
-
-  // DOM ref for scroll-into-view on reveal requests.
-  let rowEl = $state<HTMLDivElement | undefined>();
-
-  // Auto-load children if this node starts expanded (restored from persisted state, FILE-07)
-  onMount(() => {
-    if (initiallyExpanded && entry.is_dir && !childrenLoaded) {
-      void loadChildren();
-    }
-  });
-
-  // ─── Reveal-in-tree support ────────────────────────────────────────────────
-  // Subscribe to treeRevealStore. When a request lands we either:
-  //   - scroll our row into view (our rel path matches exactly), or
-  //   - auto-expand + load children (our rel path is an ancestor of the target),
-  // so the descendant row becomes visible in the DOM before it too scrolls into view.
-  let prevRevealToken: string | null = null;
-  const unsubTreeReveal = treeRevealStore.subscribe((state) => {
-    if (!state.pending) return;
-    if (state.pending.token === prevRevealToken) return;
-    prevRevealToken = state.pending.token;
-
-    const vault = getVaultRoot();
-    if (!vault) return;
-    const myRel = toRelPath(entry.path, vault);
-    const target = state.pending.relPath;
-    if (!myRel || !target) return;
-
-    if (myRel === target) {
-      // Exact match — scroll our row into view (AC-03). Defer so any
-      // ancestor-triggered expansion has landed in the DOM first.
-      requestAnimationFrame(() => {
-        rowEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      });
-      return;
-    }
-
-    // Ancestor match — expand ourselves so the descendant becomes renderable.
-    if (entry.is_dir && (target === myRel + "/" || target.startsWith(myRel + "/"))) {
-      if (!expanded) {
-        expanded = true;
-        if (!childrenLoaded) void loadChildren();
-      }
-    }
-  });
-
-  onDestroy(() => {
-    unsubTreeReveal();
-  });
-
-  async function loadChildren() {
-    if (loading) return;
-    loading = true;
-    try {
-      const raw = await listDirectory(entry.path);
-      children = sortEntries(raw, sortBy);
-      childrenLoaded = true;
-    } catch (e) {
-      const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
-      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function toggleExpand() {
-    if (!entry.is_dir) return;
-    expanded = !expanded;
-    if (expanded && !childrenLoaded) {
-      await loadChildren();
-    }
-    // Notify Sidebar to persist expand state (FILE-07)
-    const vault = getVaultRoot();
-    const relPath = vault ? toRelPath(entry.path, vault) : entry.path;
-    onExpandToggle?.(relPath, expanded);
+  function toRelPath(absPath: string, vaultRoot: string): string {
+    return absPath.startsWith(vaultRoot + "/")
+      ? absPath.slice(vaultRoot.length + 1)
+      : absPath;
   }
 
   function handleClick() {
-    onSelect(entry.path);
-    if (entry.is_dir) {
-      void toggleExpand();
+    onSelect(row.path);
+    if (row.isDir) {
+      void onToggleExpand(row);
     } else {
-      // #49: open any non-folder entry. The tab classifier inside EditorPane
-      // / onOpenFile decides whether to render it as markdown, image,
-      // read-only text, or an unsupported-file placeholder.
-      onOpenFile(entry.path);
+      onOpenFile(row.path);
     }
   }
 
@@ -218,7 +129,6 @@
     }
   }
 
-  // Context menu
   function openContextMenu(e: MouseEvent) {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLElement;
@@ -227,8 +137,6 @@
     showContextMenu = true;
   }
 
-  // Issue #47: right-click handler on the row. Suppresses the webview default
-  // menu and anchors our menu at the cursor position.
   function handleRowContextMenu(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -242,71 +150,64 @@
 
   function startRename() {
     closeContextMenu();
-    renaming = true;
+    setRenaming(true);
     isNewFile = false;
+  }
+
+  function setRenaming(next: boolean) {
+    renaming = next;
+    onRenameStateChange?.(row.path, next);
   }
 
   function handleOpenInSplit() {
     closeContextMenu();
-    tabStore.openTab(entry.path);
+    tabStore.openTab(row.path);
     tabStore.moveToPane("right");
   }
 
-  function getVaultRoot(): string | null {
-    let v: string | null = null;
-    const u = vaultStore.subscribe((s) => { v = s.currentPath; });
-    u();
-    return v;
-  }
-
-  function toRelPath(absPath: string, vaultRoot: string): string {
-    return absPath.startsWith(vaultRoot + "/")
-      ? absPath.slice(vaultRoot.length + 1)
-      : absPath;
+  async function toggleBookmark() {
+    closeContextMenu();
+    const vault = getVaultRoot();
+    if (!vault || row.isDir) return;
+    const rel = toRelPath(row.path, vault);
+    await bookmarksStore.toggle(rel, vault);
   }
 
   async function handleRenameConfirm(newPath: string, linkCount: number) {
-    renaming = false;
+    setRenaming(false);
     const vault = getVaultRoot();
-    const oldRelPath = vault ? toRelPath(entry.path, vault) : entry.path;
+    const oldRelPath = vault ? toRelPath(row.path, vault) : row.path;
     const newRelPath = vault ? toRelPath(newPath, vault) : newPath;
-    // Rename tracking for bookmarks (#12): update any matching bookmark entry.
     if (vault) {
       void bookmarksStore.renamePath(oldRelPath, newRelPath, vault);
     }
     if (linkCount > 0) {
-      // Get unique source file count for the dialog copy
       let fileCount = 1;
       try {
         const backlinks = await getBacklinks(oldRelPath);
         fileCount = new Set(backlinks.map((b) => b.sourcePath)).size || 1;
-      } catch { /* fallback to 1 */ }
+      } catch {
+        /* fallback to 1 */
+      }
       pendingRename = { newPath, oldRelPath, newRelPath, linkCount, fileCount };
     } else {
-      onPathChanged(entry.path, newPath);
-      onRefreshParent();
-      // #277: tell EditorPane to re-fetch the stem->relPath map so clicks on
-      // [[new-name]] resolve to the renamed file instead of creating at root.
+      onPathChanged(row.path, newPath);
       resolvedLinksStore.requestReload();
     }
   }
 
   function handleRenameCancel() {
-    renaming = false;
+    setRenaming(false);
   }
 
   async function confirmRenameWithLinks() {
     if (!pendingRename) return;
     const { newPath, oldRelPath, newRelPath } = pendingRename;
     pendingRename = null;
-    onPathChanged(entry.path, newPath);
-    onRefreshParent();
-    // #277: same rationale as handleRenameConfirm's no-link branch.
+    onPathChanged(row.path, newPath);
     resolvedLinksStore.requestReload();
     try {
       const result = await updateLinksAfterRename(oldRelPath, newRelPath);
-      // Reload any open tabs whose content was rewritten — the cascade writes
-      // through write_ignore so the watcher/editor never learns about them.
       if (result.updatedPaths.length > 0) {
         tabReloadStore.request(result.updatedPaths);
       }
@@ -337,8 +238,13 @@
   async function confirmDelete() {
     showDeleteConfirm = false;
     try {
-      await deleteFile(entry.path);
-      onRefreshParent();
+      await deleteFile(row.path);
+      // Refresh the containing folder so the flat list updates.
+      const vault = getVaultRoot();
+      const parentDir = vault && row.path.startsWith(vault + "/")
+        ? parentOf(row.path)
+        : parentOf(row.path);
+      await onRefreshFolder(parentDir ?? vault ?? "");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -349,32 +255,18 @@
     showDeleteConfirm = false;
   }
 
-  /**
-   * Persist this folder as expanded in the Sidebar's TreeState so later
-   * re-mounts (e.g. triggered by a tree refresh) start expanded too.
-   */
-  function persistExpanded() {
-    if (!entry.is_dir) return;
-    const vault = getVaultRoot();
-    const rel = vault ? toRelPath(entry.path, vault) : entry.path;
-    onExpandToggle?.(rel, true);
+  function parentOf(absPath: string): string | null {
+    const i = absPath.lastIndexOf("/");
+    if (i <= 0) return null;
+    return absPath.slice(0, i);
   }
 
   async function handleNewFileHere() {
     closeContextMenu();
     try {
-      const newPath = await createFile(entry.path, "");
-      // Issue #50: keep the containing folder expanded after a create.
-      // The assignments are intentional even when `expanded` was already
-      // true — a simultaneous watcher-driven tree refresh can otherwise
-      // race with the local state flip. Persist the expanded flag so a
-      // full re-mount of this subtree restores it.
-      expanded = true;
-      persistExpanded();
-      await loadChildren();
-      expanded = true;
-      // Open the new note so the active-tab reveal hook (VaultLayout)
-      // selects it in the tree automatically.
+      const newPath = await createFile(row.path, "");
+      await onToggleExpand({ ...row, expanded: false });
+      await onRefreshFolder(row.path);
       tabStore.openTab(newPath);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -385,15 +277,10 @@
   async function handleNewCanvasHere() {
     closeContextMenu();
     try {
-      const newPath = await createFile(entry.path, "Untitled.canvas");
-      // Seed the file with an empty canvas doc so Obsidian recognizes the
-      // format immediately — an empty string would otherwise parse to a
-      // blank doc but fail Obsidian's schema validation on first open.
+      const newPath = await createFile(row.path, "Untitled.canvas");
       await writeFile(newPath, serializeCanvas(emptyCanvas()));
-      expanded = true;
-      persistExpanded();
-      await loadChildren();
-      expanded = true;
+      await onToggleExpand({ ...row, expanded: false });
+      await onRefreshFolder(row.path);
       tabStore.openFileTab(newPath, "canvas");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -404,25 +291,20 @@
   async function handleNewFolderHere() {
     closeContextMenu();
     try {
-      await createFolder(entry.path, "");
-      // Issue #50: same expanded-state protection as handleNewFileHere.
-      expanded = true;
-      persistExpanded();
-      await loadChildren();
-      expanded = true;
+      await createFolder(row.path, "");
+      await onToggleExpand({ ...row, expanded: false });
+      await onRefreshFolder(row.path);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
   }
 
-  // Drag-and-drop (FILE-05 / D-17)
-  // #146: files use `text/vaultcore-file`, directories use `text/vaultcore-folder`
-  // so the editor pane can accept file drops for split-view while rejecting folders.
+  // --- Drag-and-drop (keeps HTML5 semantics from TreeNode) -------------------
   function handleDragStart(e: DragEvent) {
     if (!e.dataTransfer) return;
-    const mime = entry.is_dir ? "text/vaultcore-folder" : "text/vaultcore-file";
-    e.dataTransfer.setData(mime, entry.path);
+    const mime = row.isDir ? "text/vaultcore-folder" : "text/vaultcore-file";
+    e.dataTransfer.setData(mime, row.path);
     e.dataTransfer.effectAllowed = "move";
     isDragSource = true;
   }
@@ -436,7 +318,7 @@
   }
 
   function handleDragOver(e: DragEvent) {
-    if (!entry.is_dir) return;
+    if (!row.isDir) return;
     if (!e.dataTransfer || !isSidebarDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     isDragTarget = true;
@@ -448,19 +330,18 @@
 
   async function handleDrop(e: DragEvent) {
     isDragTarget = false;
-    if (!entry.is_dir) return;
+    if (!row.isDir) return;
     if (!e.dataTransfer || !isSidebarDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     const sourcePath =
       e.dataTransfer.getData("text/vaultcore-file") ||
       e.dataTransfer.getData("text/vaultcore-folder");
-    if (!sourcePath || sourcePath === entry.path) return;
+    if (!sourcePath || sourcePath === row.path) return;
 
-    // D-11: check backlinks before move and prompt cascade confirmation
     const vault = getVaultRoot();
     const sourceRelPath = vault ? toRelPath(sourcePath, vault) : sourcePath;
     const sourceFilename = sourcePath.split("/").pop() ?? sourcePath;
-    const newAbsPath = entry.path + "/" + sourceFilename;
+    const newAbsPath = row.path + "/" + sourceFilename;
     const newRelPath = vault ? toRelPath(newAbsPath, vault) : newAbsPath;
 
     let linkCount = 0;
@@ -469,25 +350,30 @@
       const backlinks = await getBacklinks(sourceRelPath);
       linkCount = backlinks.length;
       fileCount = new Set(backlinks.map((b) => b.sourcePath)).size;
-    } catch { /* proceed without cascade */ }
+    } catch {
+      /* proceed without cascade */
+    }
 
     if (linkCount > 0) {
-      // Show confirmation dialog for move cascade
-      pendingMove = { sourcePath, targetDirPath: entry.path, sourceRelPath, newRelPath, linkCount, fileCount };
+      pendingMove = {
+        sourcePath,
+        targetDirPath: row.path,
+        sourceRelPath,
+        newRelPath,
+        linkCount,
+        fileCount,
+      };
       return;
     }
 
-    // No backlinks — proceed directly
     try {
-      await moveFile(sourcePath, entry.path);
-      // Update bookmark in-place if the moved file was bookmarked (#12).
+      await moveFile(sourcePath, row.path);
       if (vault) {
         void bookmarksStore.renamePath(sourceRelPath, newRelPath, vault);
       }
-      await loadChildren();
-      onRefreshParent();
-      // #277: refresh the wiki-link resolution map so clicks on links to the
-      // moved file open the new location instead of creating at root.
+      await onRefreshFolder(row.path);
+      const parent = parentOf(sourcePath);
+      if (parent) await onRefreshFolder(parent);
       resolvedLinksStore.requestReload();
     } catch (err) {
       const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
@@ -501,17 +387,15 @@
     pendingMove = null;
     try {
       await moveFile(sourcePath, targetDirPath);
-      // Update bookmark in-place if the moved file was bookmarked (#12).
       const vaultForBookmarks = getVaultRoot();
       if (vaultForBookmarks) {
         void bookmarksStore.renamePath(sourceRelPath, newRelPath, vaultForBookmarks);
       }
-      await loadChildren();
-      onRefreshParent();
-      // #277: same rationale as the no-backlink branch above.
+      await onRefreshFolder(targetDirPath);
+      const parent = parentOf(sourcePath);
+      if (parent) await onRefreshFolder(parent);
       resolvedLinksStore.requestReload();
       const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
-      // Reload open tabs for rewritten source files (see confirmRenameWithLinks).
       if (result.updatedPaths.length > 0) {
         tabReloadStore.request(result.updatedPaths);
       }
@@ -531,18 +415,12 @@
   function cancelMoveWithLinks() {
     pendingMove = null;
   }
-
-  async function refreshChildren() {
-    if (childrenLoaded) {
-      await loadChildren();
-    }
-  }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <li
   role="treeitem"
-  aria-expanded={entry.is_dir ? expanded : undefined}
+  aria-expanded={row.isDir ? row.expanded : undefined}
   aria-selected={isActive}
   tabindex="0"
   class="vc-tree-node"
@@ -550,6 +428,8 @@
   class:vc-tree-node--drag-source={isDragSource}
   class:vc-tree-node--drag-target={isDragTarget}
   draggable={!renaming}
+  data-tree-row={row.path}
+  data-tree-row-depth={row.depth}
   ondragstart={handleDragStart}
   ondragend={handleDragEnd}
   ondragover={handleDragOver}
@@ -557,25 +437,22 @@
   ondrop={handleDrop}
   onkeydown={handleKeydown}
 >
-  <!-- Row -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="vc-tree-row"
-    style="padding-left: calc({depth} * 16px + 8px)"
-    bind:this={rowEl}
+    style="padding-left: calc({row.depth} * 16px + 8px)"
     onclick={handleClick}
     oncontextmenu={handleRowContextMenu}
     role="button"
     tabindex="-1"
-    title={entry.path}
+    title={row.path}
   >
-    <!-- Chevron / spacer -->
-    {#if entry.is_dir}
+    {#if row.isDir}
       <button
         class="vc-tree-chevron"
-        class:vc-tree-chevron--expanded={expanded}
-        onclick={(e) => { e.stopPropagation(); void toggleExpand(); }}
-        aria-label={expanded ? "Collapse" : "Expand"}
+        class:vc-tree-chevron--expanded={row.expanded}
+        onclick={(e) => { e.stopPropagation(); void onToggleExpand(row); }}
+        aria-label={row.expanded ? "Collapse" : "Expand"}
         tabindex="-1"
       >
         <ChevronRight size={16} strokeWidth={1.5} />
@@ -584,34 +461,32 @@
       <span class="vc-tree-spacer" aria-hidden="true"></span>
     {/if}
 
-    <!-- File/Folder icon -->
     <span class="vc-tree-icon" class:vc-tree-icon--active={isActive} aria-hidden="true">
-      {#if entry.is_dir}
-        {#if expanded}
+      {#if row.isDir}
+        {#if row.expanded}
           <FolderOpen size={16} strokeWidth={1.5} />
         {:else}
           <Folder size={16} strokeWidth={1.5} />
         {/if}
-      {:else if entry.is_md}
+      {:else if row.isMd}
         <FileText size={16} strokeWidth={1.5} />
       {:else}
         <File size={16} strokeWidth={1.5} />
       {/if}
     </span>
 
-    <!-- Filename / inline rename -->
     {#if renaming}
       <InlineRename
-        currentName={entry.name}
-        oldPath={entry.path}
+        currentName={row.name}
+        oldPath={row.path}
         {isNewFile}
         onConfirm={handleRenameConfirm}
         onCancel={handleRenameCancel}
       />
     {:else}
       <span class="vc-tree-name">
-        {entry.name}
-        {#if entry.is_symlink}
+        {row.name}
+        {#if row.isSymlink}
           <em class="vc-tree-symlink">(link)</em>
         {/if}
       </span>
@@ -622,12 +497,11 @@
       {/if}
     {/if}
 
-    <!-- More options button (hover-visible) -->
     {#if !renaming}
       <button
         class="vc-tree-more"
         onclick={openContextMenu}
-        aria-label="More options for {entry.name}"
+        aria-label="More options for {row.name}"
         tabindex="-1"
       >
         <MoreHorizontal size={16} strokeWidth={1.5} />
@@ -635,26 +509,24 @@
     {/if}
   </div>
 
-  <!-- Context menu -->
   <ContextMenu open={showContextMenu} x={menuPos.x} y={menuPos.y} onClose={closeContextMenu}>
-    {#if !entry.is_dir}
+    {#if !row.isDir}
       <button class="vc-context-item" onclick={handleOpenInSplit}>Open in split</button>
     {/if}
     <button class="vc-context-item" onclick={startRename}>Rename</button>
-    {#if !entry.is_dir}
+    {#if !row.isDir}
       <button class="vc-context-item" onclick={() => void toggleBookmark()}>
         {isBookmarked ? "Remove bookmark" : "Bookmark"}
       </button>
     {/if}
     <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
-    {#if entry.is_dir}
+    {#if row.isDir}
       <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
       <button class="vc-context-item" onclick={handleNewCanvasHere}>New canvas here</button>
       <button class="vc-context-item" onclick={handleNewFolderHere}>New folder here</button>
     {/if}
   </ContextMenu>
 
-  <!-- Delete confirmation dialog -->
   {#if showDeleteConfirm}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -662,10 +534,10 @@
       onclick={cancelDelete}
       role="presentation"
     ></div>
-    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="delete-heading">
-      <h2 id="delete-heading" class="vc-confirm-heading">Move to Trash?</h2>
+    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="delete-heading-{row.path}">
+      <h2 id="delete-heading-{row.path}" class="vc-confirm-heading">Move to Trash?</h2>
       <p class="vc-confirm-body">
-        "{entry.name}" will be moved to .trash/ and can be recovered from there.
+        "{row.name}" will be moved to .trash/ and can be recovered from there.
       </p>
       <div class="vc-confirm-actions">
         <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelDelete}>Keep File</button>
@@ -674,7 +546,6 @@
     </div>
   {/if}
 
-  <!-- Rename with wiki-links confirmation (German copy per D-09) -->
   {#if pendingRename}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -682,8 +553,8 @@
       onclick={cancelRenameWithLinks}
       role="presentation"
     ></div>
-    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="rename-heading">
-      <h2 id="rename-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
+    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="rename-heading-{row.path}">
+      <h2 id="rename-heading-{row.path}" class="vc-confirm-heading">Links aktualisieren?</h2>
       <p class="vc-confirm-body">
         {pendingRename.linkCount} Links in {pendingRename.fileCount} Dateien werden aktualisiert. Fortfahren?
       </p>
@@ -694,7 +565,6 @@
     </div>
   {/if}
 
-  <!-- Move with wiki-links confirmation (D-11) -->
   {#if pendingMove}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -702,8 +572,8 @@
       onclick={cancelMoveWithLinks}
       role="presentation"
     ></div>
-    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="move-heading">
-      <h2 id="move-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
+    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="move-heading-{row.path}">
+      <h2 id="move-heading-{row.path}" class="vc-confirm-heading">Links aktualisieren?</h2>
       <p class="vc-confirm-body">
         {pendingMove.linkCount} Links in {pendingMove.fileCount} Dateien werden aktualisiert. Fortfahren?
       </p>
@@ -712,35 +582,6 @@
         <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmMoveWithLinks()}>Aktualisieren</button>
       </div>
     </div>
-  {/if}
-
-  <!-- Children (expanded subtree) -->
-  {#if entry.is_dir && expanded && childrenLoaded}
-    <ul class="vc-tree-children" role="group">
-      {#each children as child (child.path)}
-        <TreeNode
-          entry={child}
-          depth={depth + 1}
-          {selectedPath}
-          {onSelect}
-          {onOpenFile}
-          onRefreshParent={refreshChildren}
-          {onPathChanged}
-          {onExpandToggle}
-          initiallyExpanded={(() => {
-            const vault = getVaultRoot();
-            if (!vault) return false;
-            const rel = toRelPath(child.path, vault);
-            return child.is_dir && rel !== null && expandedPaths.includes(rel);
-          })()}
-          {expandedPaths}
-          {sortBy}
-        />
-      {/each}
-      {#if children.length === 0}
-        <li class="vc-tree-empty" role="none">Empty folder</li>
-      {/if}
-    </ul>
   {/if}
 </li>
 
@@ -877,20 +718,6 @@
     color: var(--color-accent);
   }
 
-  .vc-tree-children {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .vc-tree-empty {
-    font-size: 12px;
-    color: var(--color-text-muted);
-    padding: 4px 8px 4px 32px;
-    font-style: italic;
-  }
-
-  /* Confirmation dialog */
   .vc-confirm-overlay {
     z-index: 199;
   }

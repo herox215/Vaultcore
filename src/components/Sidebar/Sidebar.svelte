@@ -1,12 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { FilePlus, FolderPlus, Network, ChevronDown, FileText, LayoutDashboard, BookOpen } from "lucide-svelte";
   import { listDirectory, createFile, createFolder, writeFile } from "../../ipc/commands";
   import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
   import { commandRegistry } from "../../lib/commands/registry";
   import { CMD_IDS } from "../../lib/commands/defaultCommands";
-  // BUG-05.1: SortMenu was descoped per UAT — keep treeState for FILE-07
-  // (expand persistence) but default sortBy stays "name" without a UI toggle.
   import {
     loadTreeState,
     saveTreeState,
@@ -35,32 +33,44 @@
   import { treeRevealStore } from "../../store/treeRevealStore";
   import { tagsStore } from "../../store/tagsStore";
   import { Hash } from "lucide-svelte";
-  import TreeNode from "./TreeNode.svelte";
+  import TreeRow from "./TreeRow.svelte";
   import ProgressBar from "../Progress/ProgressBar.svelte";
   import TagsPanel from "../Tags/TagsPanel.svelte";
   import BookmarksPanel from "../Bookmarks/BookmarksPanel.svelte";
   import { bookmarksStore } from "../../store/bookmarksStore";
+  import {
+    flattenTree,
+    ancestorRelPaths,
+    toRelPath as flatToRelPath,
+    type FlatRow,
+    type FolderState,
+    type TreeModel,
+  } from "../../lib/flattenTree";
+
+  // #253 — the sidebar is now the single owner of:
+  //   - the tree model (per-folder FolderState + persisted `expanded`)
+  //   - the `treeRevealStore` subscription (rows do NOT subscribe individually)
+  //   - the flattened row list + virtualized renderer
 
   interface Props {
     selectedPath: string | null;
     onSelect: (path: string) => void;
     onOpenFile: (path: string) => void;
-    /** Tag-click → open the omni-search modal in content mode, pre-filled. */
     onOpenContentSearch: (query: string) => void;
   }
 
   let { selectedPath, onSelect, onOpenFile, onOpenContentSearch }: Props = $props();
 
+  // ─── Tree model ────────────────────────────────────────────────────────────
   let rootEntries = $state<DirEntry[]>([]);
+  let folders = $state<Map<string, FolderState>>(new Map());
   let loadError = $state<string | null>(null);
   let loading = $state(false);
   let bulkActive = $state(false);
   let bulkCount = $state(0);
   let treeState = $state<TreeState>({ ...DEFAULT_TREE_STATE });
 
-  // #145 — header "+ New ▾" split/dropdown open state. Primary click of the
-  // button creates a note; clicking the chevron opens this menu so canvas
-  // creation is visible without right-clicking a folder first.
+  // ─── Header split/dropdown state ───────────────────────────────────────────
   let newMenuOpen = $state(false);
   const newNoteHotkey = $derived(commandRegistry.getEffectiveHotkey(CMD_IDS.NEW_NOTE));
   const newCanvasHotkey = $derived(commandRegistry.getEffectiveHotkey(CMD_IDS.NEW_CANVAS));
@@ -74,32 +84,64 @@
     return isMac ? `${meta}${shift}${key}` : `${meta}${shift}${key}`;
   }
 
-  // Watcher unlisten handles — cleaned up on destroy
-  let unlistenFileChange: UnlistenFn | null = null;
-  let unlistenBulkStart: UnlistenFn | null = null;
-  let unlistenBulkEnd: UnlistenFn | null = null;
+  // ─── Flat-list derivation ──────────────────────────────────────────────────
+  const treeModel = $derived<TreeModel>({
+    vaultPath: $vaultStore.currentPath ?? "",
+    rootEntries,
+    folders,
+    expanded: new Set(treeState.expanded),
+    sortBy: treeState.sortBy,
+  });
 
-  const vaultName = $derived(
-    $vaultStore.currentPath
-      ? $vaultStore.currentPath.split("/").pop() ?? $vaultStore.currentPath
-      : "No vault"
-  );
+  const flatRows = $derived(flattenTree(treeModel));
 
-  /** Compute vault-relative path from an absolute path. */
-  function vaultRel(absPath: string): string {
-    const vaultPath = $vaultStore.currentPath ?? "";
-    if (absPath.startsWith(vaultPath + "/")) {
-      return absPath.slice(vaultPath.length + 1).replace(/\\/g, "/");
+  // ─── Virtualization state ──────────────────────────────────────────────────
+  const ROW_HEIGHT = 28; // px — keep in sync with the CSS var below
+  const OVERSCAN = 10;   // rows above + below the viewport
+
+  let scrollerEl = $state<HTMLDivElement | null>(null);
+  let viewportHeight = $state(600);
+  let scrollTop = $state(0);
+
+  // The row currently inline-renaming. We always keep it inside the window so
+  // the InlineRename input never recycles out.
+  let renamingPath = $state<string | null>(null);
+
+  const startIdx = $derived.by(() => {
+    const first = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
+    return Math.max(0, first);
+  });
+  const endIdx = $derived.by(() => {
+    const visibleRows = Math.ceil(viewportHeight / ROW_HEIGHT);
+    const last = Math.floor(scrollTop / ROW_HEIGHT) + visibleRows + OVERSCAN;
+    return Math.min(flatRows.length, last);
+  });
+
+  /** Rows we render in the DOM — window slice plus the rename-target pin. */
+  const windowRows = $derived.by<Array<{ row: FlatRow; index: number }>>(() => {
+    const slice: Array<{ row: FlatRow; index: number }> = [];
+    for (let i = startIdx; i < endIdx; i += 1) {
+      slice.push({ row: flatRows[i]!, index: i });
     }
-    return absPath.replace(/\\/g, "/");
-  }
+    // Pin the renaming row if it's outside the window — never destroy the
+    // input while the user is typing.
+    if (renamingPath) {
+      const already = slice.some((s) => s.row.path === renamingPath);
+      if (!already) {
+        const ri = flatRows.findIndex((r) => r.path === renamingPath);
+        if (ri !== -1) slice.push({ row: flatRows[ri]!, index: ri });
+      }
+    }
+    return slice;
+  });
 
+  const topSpacer = $derived(startIdx * ROW_HEIGHT);
+  const bottomSpacer = $derived(Math.max(0, (flatRows.length - endIdx) * ROW_HEIGHT));
+
+  // ─── IPC loaders ───────────────────────────────────────────────────────────
   async function loadRoot() {
     const vaultPath = $vaultStore.currentPath;
     if (!vaultPath) return;
-    // Only show loading spinner on initial load — refreshes silently update
-    // rootEntries to avoid destroying TreeNode components and losing their
-    // local expanded state.
     const isInitialLoad = rootEntries.length === 0;
     if (isInitialLoad) loading = true;
     loadError = null;
@@ -115,90 +157,146 @@
     }
   }
 
-  // ─── Watcher event handlers ────────────────────────────────────────────────
+  async function loadFolder(folderAbsPath: string): Promise<DirEntry[] | null> {
+    const existing = folders.get(folderAbsPath);
+    if (existing?.loading) return existing.children ? [...existing.children] : null;
+    setFolderState(folderAbsPath, {
+      children: existing?.children,
+      childrenLoaded: existing?.childrenLoaded ?? false,
+      loading: true,
+    });
+    try {
+      const raw = await listDirectory(folderAbsPath);
+      setFolderState(folderAbsPath, {
+        children: raw,
+        childrenLoaded: true,
+        loading: false,
+      });
+      return raw;
+    } catch (e) {
+      setFolderState(folderAbsPath, {
+        children: existing?.children,
+        childrenLoaded: existing?.childrenLoaded ?? false,
+        loading: false,
+      });
+      const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+      return null;
+    }
+  }
 
-  function handleFileChange(payload: FileChangePayload) {
-    const { path, kind, new_path } = payload;
+  function setFolderState(path: string, next: FolderState) {
+    // Assign a fresh Map so Svelte's reactivity picks up the change — Svelte 5
+    // doesn't deeply track Map mutations.
+    const m = new Map(folders);
+    m.set(path, next);
+    folders = m;
+  }
 
-    if (kind === "create") {
-      // Invalidate tree: re-fetch root to show the new file
-      void loadRoot();
-    } else if (kind === "modify") {
-      // No tree structure change needed for content modifications.
-      // If the file is open in a tab, EditorPane handles merge (Plan 05).
-      // No action needed here.
-    } else if (kind === "delete") {
-      // Invalidate tree: re-fetch root to remove the deleted entry
-      void loadRoot();
-      // Close the tab if this file is open
-      tabStore.closeByPath(path);
-    } else if (kind === "rename") {
-      // Invalidate tree for both old and new parent directories
-      void loadRoot();
-      // Update tab path if file is open in a tab
-      if (new_path) {
-        tabStore.updateFilePath(path, new_path);
+  /** Re-fetch a folder whose children may have changed on disk. */
+  async function refreshFolder(folderAbsPath: string) {
+    const vaultPath = $vaultStore.currentPath;
+    if (!vaultPath) return;
+    if (folderAbsPath === vaultPath || folderAbsPath === "") {
+      await loadRoot();
+      return;
+    }
+    await loadFolder(folderAbsPath);
+  }
+
+  // ─── Toggle expand / persist ───────────────────────────────────────────────
+  async function onToggleExpand(row: FlatRow) {
+    if (!row.isDir) return;
+    const expanded = new Set(treeState.expanded);
+    const willExpand = !expanded.has(row.relPath);
+    if (willExpand) expanded.add(row.relPath);
+    else expanded.delete(row.relPath);
+    treeState = { ...treeState, expanded: Array.from(expanded) };
+    void saveTreeState($vaultStore.currentPath ?? "", treeState);
+    if (willExpand) {
+      const existing = folders.get(row.path);
+      if (!existing || !existing.childrenLoaded) {
+        await loadFolder(row.path);
       }
     }
   }
 
+  async function setExpanded(relPath: string, absPath: string, on: boolean) {
+    const expanded = new Set(treeState.expanded);
+    if (on) expanded.add(relPath);
+    else expanded.delete(relPath);
+    treeState = { ...treeState, expanded: Array.from(expanded) };
+    // Fire-and-forget the persistence — it uses crypto.subtle.digest which
+    // can hang several ticks; we don't want that delaying the user-visible
+    // listDirectory that populates the expanded folder.
+    void saveTreeState($vaultStore.currentPath ?? "", treeState);
+    if (on) {
+      const existing = folders.get(absPath);
+      if (!existing || !existing.childrenLoaded) {
+        await loadFolder(absPath);
+      }
+    }
+  }
+
+  // ─── Watcher handlers ──────────────────────────────────────────────────────
+  let unlistenFileChange: UnlistenFn | null = null;
+  let unlistenBulkStart: UnlistenFn | null = null;
+  let unlistenBulkEnd: UnlistenFn | null = null;
+
+  function handleFileChange(payload: FileChangePayload) {
+    const { path, kind, new_path } = payload;
+    if (kind === "create" || kind === "delete" || kind === "rename") {
+      // Invalidate the entire tree cache — safest for arbitrary watcher events.
+      invalidateAllFolders();
+      void loadRoot();
+      if (kind === "delete") tabStore.closeByPath(path);
+      if (kind === "rename" && new_path) tabStore.updateFilePath(path, new_path);
+    }
+  }
+
+  function invalidateAllFolders() {
+    // Keep `expanded` state intact (persisted), but drop cached child lists so
+    // folders re-fetch next time they're expanded / walked.
+    folders = new Map();
+  }
+
   function handleBulkStart(payload: BulkChangePayload) {
-    // Show bulk-change progress UI in sidebar header area (D-13)
     bulkActive = true;
     bulkCount = payload.estimated_count;
     progressStore.start(payload.estimated_count);
   }
 
   function handleBulkEnd() {
-    // Hide bulk progress UI and refresh the full tree
     bulkActive = false;
     bulkCount = 0;
     progressStore.finish();
+    invalidateAllFolders();
     void loadRoot();
   }
 
-  // ─── Mount / Destroy ────────────────────────────────────────────────────────
-
+  // ─── Mount / destroy ───────────────────────────────────────────────────────
   let prevRefreshToken: string | null = null;
   let unsubTreeRefresh: (() => void) | null = null;
   let prevRevealToken: string | null = null;
   let unsubTreeReveal: (() => void) | null = null;
 
-  /**
-   * Collect every ancestor folder rel path of the target. For
-   * "notes/daily/today.md" this returns ["notes", "notes/daily"]. The target
-   * itself is not included (only its enclosing folders need to be expanded).
-   */
-  function ancestorFolderPaths(relPath: string): string[] {
-    const parts = relPath.split("/").filter((p) => p.length > 0);
-    if (parts.length <= 1) return [];
-    const out: string[] = [];
-    for (let i = 1; i < parts.length; i += 1) {
-      out.push(parts.slice(0, i).join("/"));
-    }
-    return out;
-  }
-
-  async function onExpandToggle(relPath: string, isExpanded: boolean) {
-    const expanded = new Set(treeState.expanded);
-    if (isExpanded) expanded.add(relPath);
-    else expanded.delete(relPath);
-    treeState = { ...treeState, expanded: Array.from(expanded) };
-    await saveTreeState($vaultStore.currentPath ?? "", treeState);
-  }
-
-  // BUG-05.1 (#11): on cold start, vault auto-load is async in App.svelte.
-  // Sidebar might mount before $vaultStore.currentPath is populated — the
-  // onMount loadTreeState() call would run with a null path and skip,
-  // leaving treeState at DEFAULT (empty expanded). Fix by subscribing to
-  // vaultStore and re-loading treeState whenever currentPath transitions
-  // from null/old to a new value. Mirrors EditorPane's reloadResolvedLinks pattern.
   let prevVaultPathSeen: string | null = null;
-  const unsubVaultPathSidebar = vaultStore.subscribe(async (state) => {
+  let unsubVaultPathSidebar: (() => void) | null = null;
+
+  function handleVaultStateChange(state: { currentPath: string | null }) {
     if (state.currentPath !== prevVaultPathSeen) {
       prevVaultPathSeen = state.currentPath;
       if (state.currentPath) {
-        treeState = await loadTreeState(state.currentPath);
+        invalidateAllFolders();
+        const cp = state.currentPath;
+        void (async () => {
+          try {
+            const ts = await loadTreeState(cp);
+            treeState = { ...ts };
+          } catch {
+            /* keep defaults */
+          }
+        })();
         void loadRoot();
         void tagsStore.reload();
         void bookmarksStore.load(state.currentPath);
@@ -206,55 +304,48 @@
         bookmarksStore.reset();
       }
     }
-  });
+  }
 
   onMount(async () => {
-    // Subscribe to watcher events (SYNC-01, SYNC-05)
+    // #253 — vault subscription must live inside onMount so that async
+    // treeState assignments flow through Svelte 5's reactive graph (a
+    // top-level-script subscription fires during component construction,
+    // before the reactive root is fully wired, and mutations from its
+    // async continuation never reach the `$derived` graph).
+    unsubVaultPathSidebar = vaultStore.subscribe(handleVaultStateChange);
+
     unlistenFileChange = await listenFileChange(handleFileChange);
     unlistenBulkStart = await listenBulkChangeStart(handleBulkStart);
     unlistenBulkEnd = await listenBulkChangeEnd(handleBulkEnd);
 
-    // Subscribe to tree-refresh signal — callers that create files through
-    // backend paths (which bypass the watcher via write-ignore) use this
-    // to force a sidebar reload. See EditorPane click-to-create.
-    // Also reload tags on the same signal (watcher dispatches UpdateTags
-    // on the same event batch that triggers tree refresh).
     unsubTreeRefresh = treeRefreshStore.subscribe((state) => {
       if (state.token && state.token !== prevRefreshToken) {
         prevRefreshToken = state.token;
+        invalidateAllFolders();
         void loadRoot();
         if ($vaultStore.currentPath) void tagsStore.reload();
       }
     });
 
-    // Reveal requests — issued by the breadcrumb bar. Flip to the files
-    // tab and ensure every ancestor folder is in the persisted expanded
-    // list so freshly rendered TreeNodes mount expanded. TreeNode owns
-    // the scroll-into-view + per-instance expansion via its own
-    // treeRevealStore subscription.
-    unsubTreeReveal = treeRevealStore.subscribe(async (state) => {
+    // #253 — single reveal-store subscription. Handles: expand ancestors →
+    // wait for listDirectory → re-flatten → scroll target into view.
+    unsubTreeReveal = treeRevealStore.subscribe((state) => {
       if (!state.pending) return;
       if (state.pending.token === prevRevealToken) return;
       prevRevealToken = state.pending.token;
-
-      searchStore.setActiveTab("files");
-
-      const ancestors = ancestorFolderPaths(state.pending.relPath);
-      if (ancestors.length === 0) return;
-      const expanded = new Set(treeState.expanded);
-      let changed = false;
-      for (const p of ancestors) {
-        if (!expanded.has(p)) {
-          expanded.add(p);
-          changed = true;
-        }
-      }
-      if (changed) {
-        treeState = { ...treeState, expanded: Array.from(expanded) };
-        await saveTreeState($vaultStore.currentPath ?? "", treeState);
-      }
+      void performReveal(state.pending.relPath);
     });
+
+    // Measure viewport height once mounted.
+    measureViewport();
+    if (typeof ResizeObserver !== "undefined" && scrollerEl) {
+      const ro = new ResizeObserver(measureViewport);
+      ro.observe(scrollerEl);
+      onDestroyCallbacks.push(() => ro.disconnect());
+    }
   });
+
+  const onDestroyCallbacks: Array<() => void> = [];
 
   onDestroy(() => {
     unlistenFileChange?.();
@@ -263,9 +354,109 @@
     unsubTreeRefresh?.();
     unsubTreeReveal?.();
     unsubVaultPathSidebar?.();
+    onDestroyCallbacks.forEach((fn) => fn());
     tagsStore.reset();
   });
 
+  function measureViewport() {
+    if (scrollerEl) {
+      viewportHeight = scrollerEl.clientHeight || viewportHeight;
+    }
+  }
+
+  function onScroll(e: Event) {
+    const el = e.currentTarget as HTMLDivElement;
+    scrollTop = el.scrollTop;
+  }
+
+  // ─── Reveal pipeline ───────────────────────────────────────────────────────
+  /**
+   * Expand every ancestor folder of `relPath`, await each listDirectory, then
+   * scroll the target row into view. Sequenced so the flat list has grown to
+   * include the target before we try to scroll to it.
+   */
+  async function performReveal(relPath: string) {
+    searchStore.setActiveTab("files");
+
+    const vaultPath = $vaultStore.currentPath ?? "";
+    if (!vaultPath) return;
+
+    const ancestors = ancestorRelPaths(relPath);
+    // Walk ancestors top-down so each subsequent listDirectory has its parent
+    // already resolved.
+    for (const ancestorRel of ancestors) {
+      const ancestorAbs = vaultPath + "/" + ancestorRel;
+      await setExpanded(ancestorRel, ancestorAbs, true);
+    }
+
+    // Recompute the flat list after the DOM has caught up with the new state.
+    await tick();
+
+    // Find the target row and scroll it into view. If the target is outside
+    // the current window, bring it in first so the virtualized renderer
+    // mounts its row element before we call scrollIntoView.
+    const targetAbs = relPath.length > 0 ? vaultPath + "/" + relPath : vaultPath;
+    const idx = flatRows.findIndex((r) => r.path === targetAbs);
+    if (idx === -1) {
+      // Target path isn't in the flat list (maybe points at a .md file under
+      // an ancestor whose listDirectory hasn't landed yet). Best-effort: no
+      // scroll — the caller can re-dispatch after the user's next keystroke.
+      return;
+    }
+    if (scrollerEl) {
+      // Place the target ~1/3 down the viewport so it's visibly centered.
+      const targetTop = idx * ROW_HEIGHT;
+      const vh = scrollerEl.clientHeight || viewportHeight;
+      const desiredTop = Math.max(0, targetTop - vh / 3);
+      if (targetTop < scrollerEl.scrollTop || targetTop > scrollerEl.scrollTop + vh - ROW_HEIGHT) {
+        scrollerEl.scrollTop = desiredTop;
+        scrollTop = desiredTop;
+        await tick();
+      }
+    }
+    // Find the row element (it now must exist in the DOM window) and
+    // scroll-into-view — matches the old TreeNode behaviour. Try now, and
+    // again on the next frame in case the flat renderer hasn't mounted the
+    // row yet (the window-slice update is reactive but pixel-level scroll
+    // happens after the next paint).
+    const scrollTarget = () => {
+      const el = scrollerEl?.querySelector<HTMLElement>(
+        `[data-tree-row="${cssEscape(targetAbs)}"]`,
+      );
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+    scrollTarget();
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(scrollTarget);
+    }
+  }
+
+  function cssEscape(value: string): string {
+    // Lightweight CSS escape — we only need to guard quotes/backslashes/newlines.
+    // (CSS.escape is not reliably available in the Tauri webview.)
+    return value.replace(/["\\\n\r]/g, (c) => "\\" + c);
+  }
+
+  // ─── Row callbacks ─────────────────────────────────────────────────────────
+  function onRenameStateChange(path: string, renaming: boolean) {
+    renamingPath = renaming ? path : renamingPath === path ? null : renamingPath;
+  }
+
+  function handlePathChanged(oldPath: string, newPath: string) {
+    tabStore.updateFilePath(oldPath, newPath);
+    // Invalidate the containing folder — a rename may have reordered entries.
+    const parent = parentOf(oldPath);
+    if (parent) void refreshFolder(parent);
+    else void loadRoot();
+  }
+
+  function parentOf(absPath: string): string | null {
+    const i = absPath.lastIndexOf("/");
+    if (i <= 0) return null;
+    return absPath.slice(0, i);
+  }
+
+  // ─── Header actions ────────────────────────────────────────────────────────
   async function handleNewFile() {
     newMenuOpen = false;
     const vaultPath = $vaultStore.currentPath;
@@ -273,17 +464,14 @@
     const targetFolder = getSelectedFolder() ?? vaultPath;
     try {
       await createFile(targetFolder, "");
-      await loadRoot();
+      if (targetFolder === vaultPath) await loadRoot();
+      else await refreshFolder(targetFolder);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
   }
 
-  // #145 — header-level canvas creation. Targets the selected folder so
-  // dropdown + context-menu behavior stay symmetric. Seeds the file with an
-  // empty canvas doc (matches TreeNode.handleNewCanvasHere) so Obsidian
-  // accepts it on first open.
   async function handleNewCanvas() {
     newMenuOpen = false;
     const vaultPath = $vaultStore.currentPath;
@@ -292,7 +480,8 @@
     try {
       const newPath = await createFile(targetFolder, "Untitled.canvas");
       await writeFile(newPath, serializeCanvas(emptyCanvas()));
-      await loadRoot();
+      if (targetFolder === vaultPath) await loadRoot();
+      else await refreshFolder(targetFolder);
       tabStore.openFileTab(newPath, "canvas");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -306,7 +495,8 @@
     const targetFolder = getSelectedFolder() ?? vaultPath;
     try {
       await createFolder(targetFolder, "");
-      await loadRoot();
+      if (targetFolder === vaultPath) await loadRoot();
+      else await refreshFolder(targetFolder);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -315,21 +505,19 @@
 
   function getSelectedFolder(): string | null {
     if (!selectedPath) return null;
-    // Check if selectedPath is a directory in root entries
     const entry = rootEntries.find((e) => e.path === selectedPath);
     if (entry?.is_dir) return selectedPath;
     return null;
   }
 
-  function handlePathChanged(oldPath: string, newPath: string) {
-    tabStore.updateFilePath(oldPath, newPath);
-    void loadRoot();
-  }
+  const vaultName = $derived(
+    $vaultStore.currentPath
+      ? $vaultStore.currentPath.split("/").pop() ?? $vaultStore.currentPath
+      : "No vault",
+  );
 </script>
 
 <aside class="vc-sidebar" data-testid="sidebar">
-  <!-- Tab bar — Dateien / Tags. The "Suche" tab was removed in #174; the
-       omni-search modal replaces the sidebar search panel. -->
   <div class="vc-sidebar-tabs" role="tablist">
     <button
       class="vc-sidebar-tab"
@@ -351,16 +539,12 @@
   </div>
 
   {#if $searchStore.activeTab === 'tags'}
-    <!-- Tags panel tab panel -->
     <div class="vc-sidebar-tabpanel" role="tabpanel">
       <TagsPanel {onOpenContentSearch} />
     </div>
   {:else}
-  <!-- Files tab panel — Header strip and tree -->
-  <!-- Header strip — replaced by bulk progress bar when bulk changes arrive -->
   <header class="vc-sidebar-header">
     {#if bulkActive}
-      <!-- Bulk-change progress UI (D-13): replaces normal header during burst -->
       <div class="vc-sidebar-bulk-progress">
         <span class="vc-sidebar-bulk-label">Scanning changes...</span>
         <span class="vc-sidebar-bulk-count">{bulkCount.toLocaleString()} files</span>
@@ -376,9 +560,6 @@
         {vaultName}
       </button>
       <div class="vc-sidebar-actions" style="position: relative;">
-        <!-- #145: split/dropdown "+ New ▾". Primary click = new note (parity
-             with the previous lone FilePlus button); chevron toggles a menu
-             that exposes canvas creation as a first-class action. -->
         <div class="vc-new-split" data-testid="sidebar-new-split">
           <button
             class="vc-sidebar-action-btn vc-new-split-primary"
@@ -464,32 +645,38 @@
     {/if}
   </header>
 
-  <!-- Bookmarks panel (#12) — collapsible, sits above the tree -->
   <BookmarksPanel />
 
-  <!-- Tree area -->
-  <div class="vc-sidebar-tree" role="tree" aria-label="Vault file tree">
+  <!-- Tree area (virtualized) -->
+  <div
+    class="vc-sidebar-tree"
+    role="tree"
+    aria-label="Vault file tree"
+    bind:this={scrollerEl}
+    onscroll={onScroll}
+  >
     {#if loading}
       <p class="vc-sidebar-status">Loading...</p>
     {:else if loadError}
       <p class="vc-sidebar-status vc-sidebar-status--error">{loadError}</p>
-    {:else if rootEntries.length === 0}
+    {:else if flatRows.length === 0}
       <p class="vc-sidebar-status">No files in vault.</p>
     {:else}
-      <ul class="vc-tree-root" role="group">
-        {#each rootEntries as entry (entry.path)}
-          <TreeNode
-            {entry}
-            depth={0}
+      <ul
+        class="vc-tree-root"
+        role="group"
+        style="padding-top: {topSpacer}px; padding-bottom: {bottomSpacer}px;"
+      >
+        {#each windowRows as { row, index } (row.path)}
+          <TreeRow
+            {row}
             {selectedPath}
             {onSelect}
             {onOpenFile}
-            onRefreshParent={loadRoot}
+            onToggleExpand={(r) => onToggleExpand(r)}
+            onRefreshFolder={refreshFolder}
             onPathChanged={handlePathChanged}
-            {onExpandToggle}
-            initiallyExpanded={treeState.expanded.includes(vaultRel(entry.path))}
-            expandedPaths={treeState.expanded}
-            sortBy={treeState.sortBy}
+            {onRenameStateChange}
           />
         {/each}
       </ul>
@@ -573,9 +760,6 @@
     color: var(--color-accent);
   }
 
-  /* #145 — split/dropdown "+ New ▾". The two buttons share a hover state so
-     users read the group as one control; the chevron is narrower to signal
-     it's a secondary target. */
   .vc-new-split {
     display: inline-flex;
     align-items: stretch;
@@ -648,7 +832,6 @@
     font-family: var(--font-mono, ui-monospace, monospace);
   }
 
-  /* Bulk-change progress strip — replaces vault name + action buttons */
   .vc-sidebar-bulk-progress {
     display: flex;
     align-items: center;
@@ -683,6 +866,7 @@
     list-style: none;
     margin: 0;
     padding: 4px 0;
+    --vc-tree-row-height: 28px;
   }
 
   .vc-sidebar-status {
