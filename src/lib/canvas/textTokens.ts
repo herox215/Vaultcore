@@ -10,11 +10,22 @@
 //   - `![[image.ext]]` (known image extension) → image segment
 //   - Any other `![[target]]` (note/canvas embed) falls back to a link
 //     segment — full note/canvas embeds are deferred (#162 out-of-scope)
+//
+// Template-body skip (#332): wiki-link text inside `{{ ... }}` is template
+// source code, not Markdown, so it must NOT surface as a clickable link
+// in canvas cards. We compute template ranges once per call and skip any
+// match whose span overlaps one — mirroring the guard used in
+// `lib/outgoingLinks.ts`.
 
 export type CanvasTextSegment =
   | { kind: "text"; text: string }
   | { kind: "link"; target: string; display: string }
   | { kind: "image"; target: string };
+
+import {
+  findTemplateExprRanges,
+  isInsideTemplateExpr,
+} from "../templateExprRanges";
 
 const WIKI_RE = /(!?)\[\[([^\]|]+?)(?:\|([^\]]*))?\]\]/g;
 
@@ -38,11 +49,20 @@ function hasImageExt(target: string): boolean {
 export function tokenizeCanvasText(text: string): CanvasTextSegment[] {
   if (text.length === 0) return [];
 
+  const templateRanges = findTemplateExprRanges(text);
+
   const out: CanvasTextSegment[] = [];
   WIKI_RE.lastIndex = 0;
   let idx = 0;
   let m: RegExpExecArray | null;
   while ((m = WIKI_RE.exec(text)) !== null) {
+    // Skip matches whose span overlaps a template expression body (#332).
+    // idx stays behind so the skipped [[...]] is swept into the next
+    // plain-text segment (or the tail slice after the loop).
+    if (isInsideTemplateExpr(templateRanges, m.index, m.index + m[0].length)) {
+      continue;
+    }
+
     if (m.index > idx) {
       out.push({ kind: "text", text: text.slice(idx, m.index) });
     }

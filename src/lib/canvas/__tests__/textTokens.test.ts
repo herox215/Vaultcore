@@ -83,4 +83,72 @@ describe("tokenizeCanvasText", () => {
       { kind: "link", target: "b", display: "b" },
     ]);
   });
+
+  it("treats [[...]] inside {{ ... }} as plain text (#332)", () => {
+    expect(tokenizeCanvasText("{{ [[Target]] }}")).toEqual([
+      { kind: "text", text: "{{ [[Target]] }}" },
+    ]);
+  });
+
+  it("treats complex template [[...]] as plain text", () => {
+    expect(tokenizeCanvasText('{{ "[[" + f.name + "]]" }}')).toEqual([
+      { kind: "text", text: '{{ "[[" + f.name + "]]" }}' },
+    ]);
+  });
+
+  it("treats ![[image.png]] inside {{ ... }} as plain text", () => {
+    expect(tokenizeCanvasText("{{ ![[photo.png]] }}")).toEqual([
+      { kind: "text", text: "{{ ![[photo.png]] }}" },
+    ]);
+  });
+
+  it("skips links inside templates but keeps real links outside", () => {
+    expect(tokenizeCanvasText("[[A]] before {{ [[B]] }} then [[C|cee]]")).toEqual([
+      { kind: "link", target: "A", display: "A" },
+      { kind: "text", text: " before {{ [[B]] }} then " },
+      { kind: "link", target: "C", display: "cee" },
+    ]);
+  });
+
+  it("treats [[...]] inside template as plain text when adjacent to a real link", () => {
+    expect(tokenizeCanvasText("[[A]]{{ [[B]] }}")).toEqual([
+      { kind: "link", target: "A", display: "A" },
+      { kind: "text", text: "{{ [[B]] }}" },
+    ]);
+  });
+
+  it("skips wiki-links inside multiple separate templates", () => {
+    expect(tokenizeCanvasText("{{ [[A]] }} x {{ [[B]] }} [[C]]")).toEqual([
+      { kind: "text", text: "{{ [[A]] }} x {{ [[B]] }} " },
+      { kind: "link", target: "C", display: "C" },
+    ]);
+  });
+
+  it("handles template at start of string", () => {
+    expect(tokenizeCanvasText("{{ [[A]] }} then [[B]]")).toEqual([
+      { kind: "text", text: "{{ [[A]] }} then " },
+      { kind: "link", target: "B", display: "B" },
+    ]);
+  });
+
+  it("handles template at end of string", () => {
+    expect(tokenizeCanvasText("[[A]] then {{ [[B]] }}")).toEqual([
+      { kind: "link", target: "A", display: "A" },
+      { kind: "text", text: " then {{ [[B]] }}" },
+    ]);
+  });
+
+  it("skips wiki-link whose span overlaps a template expression", () => {
+    expect(tokenizeCanvasText("[[foo{{bar}}baz]]")).toEqual([
+      { kind: "text", text: "[[foo{{bar}}baz]]" },
+    ]);
+  });
+
+  it("template with no wiki-links does not affect behaviour", () => {
+    expect(tokenizeCanvasText("see [[A]] and {{ date }}")).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "link", target: "A", display: "A" },
+      { kind: "text", text: " and {{ date }}" },
+    ]);
+  });
 });
