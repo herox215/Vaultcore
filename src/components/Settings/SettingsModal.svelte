@@ -592,8 +592,12 @@
             id="build-version"
             class="vc-build-version"
             data-testid="settings-build-version"
-            title="Format: <commits-auf-main>-g<short-sha> · <commit-datum>. Höhere Commit-Zahl = neuer."
+            data-tooltip="Format: <commits-auf-main>-g<short-sha> · <commit-datum>. Höhere Commit-Zahl = neuer."
           >{__VC_BUILD_VERSION__}</code>
+          <!-- Redundant hint for assistive tech — the CSS tooltip only fires on hover. -->
+          <span class="vc-visually-hidden">
+            Format: commits auf main, g, short sha, Commit-Datum. Höhere Commit-Zahl bedeutet neuer.
+          </span>
         </div>
       </section>
     </div>
@@ -987,6 +991,7 @@
 
   /* Build version (#313) */
   .vc-build-version {
+    position: relative;
     font-family: var(--vc-font-mono);
     font-size: 12px;
     color: var(--color-text-muted);
@@ -996,6 +1001,39 @@
     border-radius: 4px;
     user-select: text;
     cursor: help;
+  }
+  /* CSS tooltip — replaces native title= which WKWebView (Tauri) fails to render (#328). */
+  .vc-build-version[data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    max-width: 360px;
+    padding: 6px 10px;
+    background: var(--color-surface-strong, #222);
+    color: var(--color-text-on-strong, #fff);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    font-family: var(--vc-font-sans, inherit);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: normal;
+    width: max-content;
+    pointer-events: none;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .vc-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* Conflict modal (#65) */
