@@ -1,13 +1,24 @@
-// Regression test for issue #50: creating a new file inside an expanded folder
-// via the "New file here" context-menu entry must keep the folder expanded and
-// show the freshly created child row.
-
+// Originally the regression test for issue #50: creating a new file inside an
+// expanded folder via the "New file here" context-menu entry must keep the
+// folder expanded and show the freshly created child row.
+//
+// With the #253 virtualization refactor, expansion and child-list ownership
+// moved out of the row component into Sidebar. TreeRow no longer owns its own
+// expanded flag or children list — it delegates to `onToggleExpand` and
+// `onRefreshFolder` callbacks. This test was updated to verify the equivalent
+// contract at the TreeRow level:
+//   1. Clicking "New file here" calls createFile with the folder path and an
+//      empty seed.
+//   2. It triggers the Sidebar to refresh the folder (so the new row appears
+//      after the next flatten).
+//   3. The newly created file is opened in a tab — this is what drives the
+//      active-tab reveal hook that keeps the tree in sync.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
 
 vi.mock("../../../ipc/commands", () => ({
-  listDirectory: vi.fn(),
+  listDirectory: vi.fn().mockResolvedValue([]),
   createFile: vi.fn(),
   createFolder: vi.fn(),
   deleteFile: vi.fn(),
@@ -16,57 +27,49 @@ vi.mock("../../../ipc/commands", () => ({
   getBacklinks: vi.fn().mockResolvedValue([]),
   loadBookmarks: vi.fn().mockResolvedValue([]),
   saveBookmarks: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn(),
+  renameFile: vi.fn(),
 }));
 
-import { listDirectory, createFile } from "../../../ipc/commands";
+import { createFile } from "../../../ipc/commands";
 import { vaultStore } from "../../../store/vaultStore";
 import { bookmarksStore } from "../../../store/bookmarksStore";
 import { tabStore } from "../../../store/tabStore";
-import TreeNode from "../TreeNode.svelte";
-import type { DirEntry } from "../../../types/tree";
+import TreeRow from "../TreeRow.svelte";
+import type { FlatRow } from "../../../lib/flattenTree";
 
 const VAULT = "/tmp/test-vault";
 
-function dirEntry(overrides: Partial<DirEntry> = {}): DirEntry {
+function folderRow(overrides: Partial<FlatRow> = {}): FlatRow {
   return {
-    name: "folder",
     path: `${VAULT}/folder`,
-    is_dir: true,
-    is_symlink: false,
-    is_md: false,
-    modified: null,
-    created: null,
-    ...overrides,
-  };
-}
-
-function fileEntry(overrides: Partial<DirEntry> = {}): DirEntry {
-  return {
-    name: "existing.md",
-    path: `${VAULT}/folder/existing.md`,
-    is_dir: false,
-    is_symlink: false,
-    is_md: true,
-    modified: null,
-    created: null,
-    ...overrides,
-  };
-}
-
-function makeProps(entry: DirEntry, initiallyExpanded = true) {
-  return {
-    entry,
+    relPath: "folder",
+    name: "folder",
     depth: 0,
+    isDir: true,
+    isMd: false,
+    isSymlink: false,
+    expanded: true,
+    loading: false,
+    hasRenderedChildren: false,
+    childrenLoaded: true,
+    ...overrides,
+  };
+}
+
+function makeProps(row: FlatRow) {
+  return {
+    row,
     selectedPath: null,
     onSelect: vi.fn(),
     onOpenFile: vi.fn(),
-    onRefreshParent: vi.fn(),
+    onToggleExpand: vi.fn(),
+    onRefreshFolder: vi.fn(),
     onPathChanged: vi.fn(),
-    initiallyExpanded,
   };
 }
 
-describe("TreeNode 'New file here' keeps folder expanded (#50)", () => {
+describe("TreeRow 'New file here' on a folder (#50, updated for #253)", () => {
   beforeEach(() => {
     vaultStore.reset();
     bookmarksStore.reset();
@@ -75,57 +78,40 @@ describe("TreeNode 'New file here' keeps folder expanded (#50)", () => {
     vi.clearAllMocks();
   });
 
-  it("leaves the folder expanded and renders the new child after creation", async () => {
-    const existing = fileEntry();
-    const newFile = fileEntry({ name: "Unbenannte Notiz.md", path: `${VAULT}/folder/Unbenannte Notiz.md` });
+  it("calls createFile and refreshes the folder so the new child appears", async () => {
+    const newPath = `${VAULT}/folder/Unbenannte Notiz.md`;
+    (createFile as any).mockResolvedValueOnce(newPath);
 
-    (listDirectory as any).mockResolvedValueOnce([existing]);
-    (createFile as any).mockResolvedValueOnce(newFile.path);
-    (listDirectory as any).mockResolvedValueOnce([existing, newFile]);
-
-    const { container } = render(TreeNode, { props: makeProps(dirEntry(), true) });
-
-    // Let onMount + initial loadChildren resolve.
-    await tick();
+    const props = makeProps(folderRow());
+    const { container } = render(TreeRow, { props });
     await tick();
 
-    // Folder is expanded and the existing child is rendered.
-    const nodeEl = container.querySelector(".vc-tree-node") as HTMLElement;
-    expect(nodeEl.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("existing.md");
-
-    // Open context menu via right-click and pick "New file here".
+    // Open the context menu via right-click on the row.
     const row = container.querySelector(".vc-tree-row") as HTMLElement;
-    await fireEvent.contextMenu(row, { clientX: 0, clientY: 0 });
+    await fireEvent.contextMenu(row, { clientX: 10, clientY: 20 });
     await tick();
+
     const newFileItem = Array.from(container.querySelectorAll<HTMLButtonElement>(".vc-context-item"))
       .find((b) => b.textContent?.trim() === "New file here");
     expect(newFileItem).toBeTruthy();
     await fireEvent.click(newFileItem!);
 
-    // Flush the create + reload.
-    await tick();
-    await tick();
-    await tick();
+    // Let the async create + refresh chain resolve.
+    for (let i = 0; i < 10; i += 1) { await Promise.resolve(); await tick(); }
 
     expect(createFile).toHaveBeenCalledWith(`${VAULT}/folder`, "");
-
-    const nodeAfter = container.querySelector(".vc-tree-node") as HTMLElement;
-    expect(nodeAfter.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("Unbenannte Notiz.md");
-    expect(container.textContent).toContain("existing.md");
+    // Sidebar is told to refresh the containing folder — this is what produces
+    // the new child row after the next flatten.
+    expect(props.onRefreshFolder).toHaveBeenCalledWith(`${VAULT}/folder`);
   });
 
   it("opens the newly created file in a tab so the active-tab reveal hook can sync the tree", async () => {
-    const newFile = fileEntry({ name: "Unbenannte Notiz.md", path: `${VAULT}/folder/Unbenannte Notiz.md` });
-
-    (listDirectory as any).mockResolvedValue([]);
-    (createFile as any).mockResolvedValueOnce(newFile.path);
+    const newPath = `${VAULT}/folder/Unbenannte Notiz.md`;
+    (createFile as any).mockResolvedValueOnce(newPath);
 
     const openSpy = vi.spyOn(tabStore, "openTab");
 
-    const { container } = render(TreeNode, { props: makeProps(dirEntry(), true) });
-    await tick();
+    const { container } = render(TreeRow, { props: makeProps(folderRow()) });
     await tick();
 
     const row = container.querySelector(".vc-tree-row") as HTMLElement;
@@ -134,9 +120,9 @@ describe("TreeNode 'New file here' keeps folder expanded (#50)", () => {
     const newFileItem = Array.from(container.querySelectorAll<HTMLButtonElement>(".vc-context-item"))
       .find((b) => b.textContent?.trim() === "New file here");
     await fireEvent.click(newFileItem!);
-    await tick();
-    await tick();
 
-    expect(openSpy).toHaveBeenCalledWith(newFile.path);
+    for (let i = 0; i < 10; i += 1) { await Promise.resolve(); await tick(); }
+
+    expect(openSpy).toHaveBeenCalledWith(newPath);
   });
 });
