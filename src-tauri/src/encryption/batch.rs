@@ -73,6 +73,7 @@ pub fn encrypt_file_in_place(
 /// Note: the production IPC `unlock` path keeps files in their encrypted
 /// on-disk form and decrypts on read (deferred to #345.2). This helper
 /// is used by the encrypt-roundtrip tests now.
+#[allow(dead_code)]
 pub fn decrypt_file_to_plaintext(
     key: &[u8; KEY_LEN],
     path: &Path,

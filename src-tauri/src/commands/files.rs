@@ -23,7 +23,6 @@ use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
 use crate::indexer::memory::FileMeta;
-use crate::indexer::walk_md_files;
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};

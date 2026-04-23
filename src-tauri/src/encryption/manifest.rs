@@ -152,6 +152,9 @@ pub fn upsert(
 
 /// Convert a canonical absolute path inside the vault into the
 /// forward-slash vault-relative form used in manifest entries.
+/// Kept public because the PR 345.3 resume-encryption flow will
+/// consume it; silenced for now so dead-code doesn't flag it.
+#[allow(dead_code)]
 pub fn rel_path(vault_root: &Path, abs: &Path) -> Result<String, VaultError> {
     let rel = abs.strip_prefix(vault_root).map_err(|_| {
         VaultError::PermissionDenied {
