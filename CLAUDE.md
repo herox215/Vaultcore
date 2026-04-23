@@ -36,6 +36,8 @@ Technology stack not yet documented.
 
 Every task — feature, bug, or small fix — follows these steps. Parallelize with subagents wherever steps are independent.
 
+**Trivial-change exception:** Changes that are clearly trivial — typos, doc tweaks, comment fixes, ≤ 20 LOC confined to a single file, no architectural or cross-module impact — skip Socrates (step 3) and may skip Aristotle (step 9) at the implementer's discretion. Ticket + PR + tests still apply. If in doubt, run the full flow.
+
 1. **Ensure a ticket exists.** Check GitHub first. If none exists, do a short scoped research pass (don't overshoot), describe in broad terms what needs to be done, ask the user about anything unclear, then open the issue.
    - **If the work touches UI, visual design, or interaction patterns**, consult **Vitruvius** before or while drafting the ticket. Vitruvius returns a design brief plus a short constraint list to embed in the ticket body, and surfaces open design questions (style, placement, interaction) to be answered by the user before the issue is filed. Skip this sub-step for pure backend / non-visual work.
 
@@ -62,7 +64,7 @@ Every task — feature, bug, or small fix — follows these steps. Parallelize w
 
 10. **Address the review.** The implementing agent resolves the inline comments and pushes fixes.
 
-11. **Re-review.** Reviewer checks the fixes; loop until clean. **Maximum 3 iterations** — if it hasn't converged by then, escalate to the user rather than spinning in circles.
+11. **Re-review.** Reviewer checks the fixes; loop until clean. **Maximum 2 iterations** — if it hasn't converged by then, escalate to the user rather than spinning in circles.
 
 12. **User acceptance test (gate).** The user accepts manually. No merge without UAT.
 
