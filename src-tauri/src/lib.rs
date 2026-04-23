@@ -192,6 +192,11 @@ pub fn run() {
             commands::templates::read_template,
             commands::export::export_note_html,
             commands::export::render_note_html,
+            commands::encryption::encrypt_folder,
+            commands::encryption::unlock_folder,
+            commands::encryption::lock_folder,
+            commands::encryption::lock_all_folders,
+            commands::encryption::list_encrypted_folders,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

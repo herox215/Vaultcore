@@ -19,6 +19,7 @@
 // directly. The two code paths MUST stay logically identical — if you
 // change one, change both.
 
+use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
 use crate::indexer::memory::FileMeta;
@@ -26,6 +27,24 @@ use crate::indexer::walk_md_files;
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+
+/// #345: refuse a path that sits inside a currently-locked encrypted
+/// folder. Every FS mutation / read entry point calls this after
+/// canonicalization so one registry check gates the whole surface.
+/// `ensure_inside_vault` already gates the canonical target; write
+/// paths that compute `final_path = canonical_parent.join(name)` must
+/// additionally call this on the final prospective path — otherwise a
+/// plain file could be renamed/moved INTO a locked folder and silently
+/// bypass the gate.
+fn ensure_unlocked(state: &VaultState, canonical: &Path) -> Result<(), VaultError> {
+    let canon = CanonicalPath::assume_canonical(canonical.to_path_buf());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(VaultError::PathLocked {
+            path: canonical.display().to_string(),
+        });
+    }
+    Ok(())
+}
 
 /// T-02 mitigation: canonicalize `target` and confirm it sits inside the
 /// currently-open vault.
@@ -48,6 +67,9 @@ fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, Vau
             path: canonical_target.display().to_string(),
         });
     }
+    drop(guard);
+    // #345: gate reads/writes that target a locked encrypted subtree.
+    ensure_unlocked(state, &canonical_target)?;
     Ok(canonical_target)
 }
 
@@ -99,6 +121,12 @@ pub async fn write_file(
         .file_name()
         .ok_or_else(|| VaultError::PermissionDenied { path: path.clone() })?;
     let final_path = canonical_parent.join(file_name);
+
+    // #345: the parent gate caught locked-folder writes when the parent
+    // itself sits inside a locked root. This second check catches the
+    // edge case where the parent is plain but the target IS a locked
+    // root (e.g. writing straight into /vault/locked as a leaf).
+    ensure_unlocked(&state, &final_path)?;
 
     // D-12 self-filtering: record before the fs call so the watcher ignores
     // the resulting event.
@@ -188,6 +216,11 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
     if !canonical_parent.starts_with(&vault) {
         return Err(VaultError::PermissionDenied { path: canonical_parent.display().to_string() });
     }
+    drop(guard);
+    // #345: parent-inside gate. The final prospective target (parent ++
+    // file_name) is additionally checked by each caller after they
+    // compute it — belt-and-braces against locked-leaf edge cases.
+    ensure_unlocked(state, &canonical_parent)?;
     Ok((canonical_parent, vault))
 }
 
@@ -256,6 +289,9 @@ pub fn create_file_impl(state: &VaultState, parent: String, name: String) -> Res
 
     let base_name = if name.is_empty() { "Untitled.md" } else { &name };
     let final_path = find_available_name(&canonical_parent, base_name);
+
+    // #345: locked-leaf gate (same rationale as write_file).
+    ensure_unlocked(state, &final_path)?;
 
     record_write(state, final_path.clone());
     std::fs::write(&final_path, "").map_err(VaultError::Io)?;
@@ -375,6 +411,9 @@ pub async fn rename_file_impl(state: &VaultState, old_path: String, new_name: St
     // Validate new path stays inside vault
     let (canonical_new_parent, _vault) = ensure_parent_inside_vault(state, &new_path)?;
     let canonical_new = canonical_new_parent.join(&new_name);
+    // #345: block renames that target (or land inside) a locked root,
+    // even when the source is plain.
+    ensure_unlocked(state, &canonical_new)?;
 
     // Count wiki-links before rename (D-16)
     let old_stem = canonical_old
@@ -634,6 +673,10 @@ pub async fn move_file_impl(state: &VaultState, from: String, to_folder: String)
         .ok_or_else(|| VaultError::PermissionDenied { path: from.clone() })?;
 
     let dest = canonical_to_folder.join(file_name);
+    // #345: block moves that land inside a locked root. Both source
+    // and destination must be unlocked; the source was already gated
+    // by `ensure_inside_vault` above.
+    ensure_unlocked(state, &dest)?;
 
     if dest.exists() {
         return Err(VaultError::Io(std::io::Error::new(
@@ -774,6 +817,11 @@ pub async fn save_attachment(
             path: canonical_folder.display().to_string(),
         });
     }
+    // #345: attachments into an encrypted folder are refused. We do
+    // not attempt to seal the attachment for the user — the encrypt
+    // flow operates on a whole-folder batch, not per-file. This gate
+    // keeps the contract clean: an encrypted folder stays uniform.
+    ensure_unlocked(&state, &canonical_folder)?;
 
     // Determine final filename with collision avoidance (cap at 1000).
     let (stem, ext) = if let Some(dot) = filename.rfind('.') {

@@ -212,6 +212,7 @@ fn direntry_serde_uses_snake_case_keys() {
         is_md: true,
         modified: Some(1_700_000_000),
         created: None,
+        encryption: crate::commands::tree::EncryptionState::NotEncrypted,
     };
 
     let value = serde_json::to_value(&entry).expect("DirEntry must serialise to JSON");

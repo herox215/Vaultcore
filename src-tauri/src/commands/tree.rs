@@ -19,11 +19,32 @@
 // so unit tests can call it without a running Tauri app. The
 // `#[tauri::command]` wrapper is a thin shim over the impl.
 
+use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
 use crate::VaultState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+
+/// #345: encryption state of a folder node.
+///
+/// `NotEncrypted` — plain folder, no special treatment.
+/// `Locked`       — folder was encrypted and is currently sealed. The
+///                  frontend renders a Lock icon, collapses the row,
+///                  and refuses to descend into it.
+/// `Unlocked`     — folder was encrypted and the key is currently in
+///                  the in-memory keyring. The frontend renders a
+///                  LockOpen icon and allows normal browsing.
+///
+/// Files (is_dir == false) always carry `NotEncrypted` — the file
+/// itself is gated by the parent folder's state in the UI.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EncryptionState {
+    NotEncrypted,
+    Locked,
+    Unlocked,
+}
 
 /// A single entry in a directory listing.
 #[derive(Serialize, Clone, Debug)]
@@ -37,6 +58,10 @@ pub struct DirEntry {
     pub modified: Option<u64>,
     /// Seconds since UNIX_EPOCH. None if metadata unavailable (Linux ext4 often returns Err here).
     pub created: Option<u64>,
+    /// #345: encryption state for folder rows. Always `NotEncrypted`
+    /// for files; the frontend renders icons + disables expansion based
+    /// on this field for directory rows.
+    pub encryption: EncryptionState,
 }
 
 /// T-02-01 mitigation: validate that `target` is inside the current vault.
@@ -118,6 +143,24 @@ pub fn list_directory_impl(state: &VaultState, path: String) -> Result<Vec<DirEn
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs());
 
+        let encryption = if is_dir {
+            // #345: reflect the locked-path registry. The registry
+            // stores canonical absolute paths of encrypted roots; we
+            // check both "this is an encrypted root" (locked) and
+            // "this is an unlocked encrypted root" (derived key lives
+            // in the keyring).
+            let canon = CanonicalPath::assume_canonical(entry_path.clone());
+            if state.locked_paths.is_locked(&canon) {
+                EncryptionState::Locked
+            } else if state.keyring.key_clone(&entry_path).ok().flatten().is_some() {
+                EncryptionState::Unlocked
+            } else {
+                EncryptionState::NotEncrypted
+            }
+        } else {
+            EncryptionState::NotEncrypted
+        };
+
         entries.push(DirEntry {
             name,
             path: entry_path.to_string_lossy().into_owned(),
@@ -126,6 +169,7 @@ pub fn list_directory_impl(state: &VaultState, path: String) -> Result<Vec<DirEn
             is_md,
             modified,
             created,
+            encryption,
         });
     }
 
