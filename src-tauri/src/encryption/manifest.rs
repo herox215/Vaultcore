@@ -4,14 +4,23 @@
 // existing per-vault sidecar convention used by bookmarks/snippets and
 // survives vault moves (unlike an app-data-keyed sidecar).
 //
-// Schema:
-//   [{ path, createdAt, salt, state }, …]
-// - path:      forward-slash vault-relative path (platform-stable).
-// - createdAt: ISO-8601 UTC timestamp of the encrypt operation.
-// - salt:      base64-encoded 16-byte Argon2id salt (per-folder).
-// - state:     "encrypting" | "encrypted". "encrypting" means a batch
-//              was interrupted and the folder may contain a mix of
-//              plain + ciphertext files — resume flow is PR 345.3.
+// Schema (versioned wrapper):
+//   { "schemaVersion": 1, "entries": [{ path, createdAt, salt, state }, …] }
+// - schemaVersion: integer. Every reader validates. Newer minor fields
+//                  on existing shape coexist without a bump. Shape
+//                  changes require a bump + migration path.
+// - path:          forward-slash vault-relative path (platform-stable).
+// - createdAt:     ISO-8601 UTC timestamp of the encrypt operation.
+// - salt:          base64-encoded 16-byte Argon2id salt (per-folder).
+// - state:         "encrypting" | "encrypted". "encrypting" means a
+//                  batch was interrupted and the folder may contain a
+//                  mix of plain + ciphertext files — resume flow is
+//                  PR 345.3.
+//
+// Backwards compatibility: the reader also accepts the bare-array legacy
+// shape (no entries were ever shipped with it — this is defensive, in
+// case a dev build landed without the wrapper) so a silent parse break
+// never happens in the wild.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +32,14 @@ use crate::error::VaultError;
 
 pub const SIDECAR_DIR: &str = ".vaultcore";
 pub const MANIFEST_FILENAME: &str = "encrypted-folders.json";
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Manifest {
+    pub schema_version: u32,
+    pub entries: Vec<EncryptedFolderMeta>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +92,20 @@ pub fn read_manifest(vault_root: &Path) -> Result<Vec<EncryptedFolderMeta>, Vaul
             if s.trim().is_empty() {
                 return Ok(Vec::new());
             }
+            // Try the versioned wrapper first; fall back to bare array
+            // for defensive forward-compat with any dev build that
+            // shipped without the wrapper.
+            if let Ok(m) = serde_json::from_str::<Manifest>(&s) {
+                if m.schema_version > CURRENT_SCHEMA_VERSION {
+                    return Err(VaultError::CryptoError {
+                        msg: format!(
+                            "manifest schemaVersion {} newer than supported {}; upgrade required",
+                            m.schema_version, CURRENT_SCHEMA_VERSION
+                        ),
+                    });
+                }
+                return Ok(m.entries);
+            }
             serde_json::from_str::<Vec<EncryptedFolderMeta>>(&s).map_err(|e| {
                 VaultError::CryptoError {
                     msg: format!("manifest parse error: {e}"),
@@ -93,7 +124,11 @@ pub fn write_manifest(
     let dir = vault_root.join(SIDECAR_DIR);
     std::fs::create_dir_all(&dir).map_err(VaultError::Io)?;
     let p = manifest_path(vault_root);
-    let json = serde_json::to_string_pretty(entries).map_err(|e| VaultError::CryptoError {
+    let wrapper = Manifest {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        entries: entries.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&wrapper).map_err(|e| VaultError::CryptoError {
         msg: format!("manifest serialize error: {e}"),
     })?;
     std::fs::write(&p, json).map_err(VaultError::Io)?;
@@ -197,6 +232,47 @@ mod tests {
             state: FolderState::Encrypted,
         };
         assert_eq!(meta.salt_bytes().unwrap(), salt);
+    }
+
+    #[test]
+    fn write_produces_versioned_wrapper() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), &[]).unwrap();
+        let json = std::fs::read_to_string(
+            dir.path().join(SIDECAR_DIR).join(MANIFEST_FILENAME),
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["schemaVersion"], CURRENT_SCHEMA_VERSION);
+        assert!(parsed["entries"].is_array());
+    }
+
+    #[test]
+    fn read_accepts_bare_array_legacy_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(SIDECAR_DIR)).unwrap();
+        let p = dir.path().join(SIDECAR_DIR).join(MANIFEST_FILENAME);
+        std::fs::write(
+            &p,
+            r#"[{"path":"a","createdAt":"t","salt":"AAAAAAAAAAAAAAAAAAAAAA==","state":"encrypted"}]"#,
+        )
+        .unwrap();
+        let back = read_manifest(dir.path()).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].path, "a");
+    }
+
+    #[test]
+    fn read_rejects_newer_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(SIDECAR_DIR)).unwrap();
+        let p = dir.path().join(SIDECAR_DIR).join(MANIFEST_FILENAME);
+        std::fs::write(&p, r#"{"schemaVersion":999,"entries":[]}"#).unwrap();
+        let err = read_manifest(dir.path()).unwrap_err();
+        match err {
+            VaultError::CryptoError { msg } => assert!(msg.contains("999")),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

@@ -23,6 +23,33 @@ use zeroize::Zeroizing;
 use crate::encryption::crypto::KEY_LEN;
 use crate::error::VaultError;
 
+/// Newtype wrapping a path the caller asserts is already canonical.
+/// `is_locked` accepts only this — compilation-forced contract so PR 1b
+/// cannot silently pass a non-canonical path and see a false negative
+/// on macOS (`/var` vs `/private/var`), Windows (`\\?\C:`) or symlinks.
+#[derive(Debug, Clone)]
+pub struct CanonicalPath(PathBuf);
+
+impl CanonicalPath {
+    /// Canonicalize `path` on the filesystem. Errors bubble up so the
+    /// call site handles "file does not exist" distinctly from "locked".
+    pub fn canonicalize(path: &Path) -> std::io::Result<Self> {
+        Ok(Self(std::fs::canonicalize(path)?))
+    }
+
+    /// Escape hatch for callers that already hold a canonical `PathBuf`
+    /// (e.g. `ensure_inside_vault` has just canonicalized the target
+    /// and does not want to syscall twice). Marked with a name that
+    /// makes the assumption visible at every call site.
+    pub fn assume_canonical(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
 #[derive(Default)]
 pub struct LockedPathRegistry {
     roots: RwLock<HashSet<PathBuf>>,
@@ -33,10 +60,12 @@ impl LockedPathRegistry {
         Self::default()
     }
 
-    /// Returns `true` if `path` sits inside any currently-locked root
-    /// (including the root itself). `path` must be canonical — callers
-    /// are responsible for canonicalizing before calling.
-    pub fn is_locked(&self, path: &Path) -> bool {
+    /// Returns `true` if the canonical path sits inside any currently-
+    /// locked root (including the root itself). The `CanonicalPath`
+    /// newtype enforces canonicalization at the type level — callers
+    /// that hold only a raw `&Path` must build one via
+    /// `CanonicalPath::canonicalize` first.
+    pub fn is_locked(&self, path: &CanonicalPath) -> bool {
         let guard = match self.roots.read() {
             Ok(g) => g,
             Err(_) => return true, // fail-closed on poisoned state
@@ -44,7 +73,7 @@ impl LockedPathRegistry {
         if guard.is_empty() {
             return false;
         }
-        path.ancestors().any(|a| guard.contains(a))
+        path.as_path().ancestors().any(|a| guard.contains(a))
     }
 
     pub fn lock_root(&self, root: PathBuf) -> Result<(), VaultError> {
@@ -72,11 +101,13 @@ impl LockedPathRegistry {
         Ok(())
     }
 
-    pub fn snapshot(&self) -> Vec<PathBuf> {
-        match self.roots.read() {
-            Ok(g) => g.iter().cloned().collect(),
-            Err(_) => Vec::new(),
-        }
+    /// Returns all currently-locked roots. Fails closed on poisoned
+    /// state — parity with `is_locked`, so a callsite that renders UI
+    /// ("show lock icons for these roots") never silently sees an
+    /// empty list when the registry is broken.
+    pub fn snapshot(&self) -> Result<Vec<PathBuf>, VaultError> {
+        let g = self.roots.read().map_err(|_| VaultError::LockPoisoned)?;
+        Ok(g.iter().cloned().collect())
     }
 }
 
@@ -111,15 +142,20 @@ impl Keyring {
         Ok(())
     }
 
-    /// Run `f` with a read-only reference to the key for `root`. Keeps
-    /// the key behind the mutex; callers receive the `f` return value.
-    pub fn with_key<R>(
-        &self,
-        root: &Path,
-        f: impl FnOnce(&[u8; KEY_LEN]) -> R,
-    ) -> Result<Option<R>, VaultError> {
+    /// Clone the derived key for `root` into a fresh `Zeroizing<[u8;32]>`
+    /// and release the mutex before the caller does any work with it.
+    /// Callers perform decrypt using the returned key without serializing
+    /// on the keyring mutex — critical for the hot read path (editor +
+    /// indexer + search can all decrypt concurrently).
+    ///
+    /// Returns `None` if the root is not currently unlocked.
+    pub fn key_clone(&self, root: &Path) -> Result<Option<Zeroizing<[u8; KEY_LEN]>>, VaultError> {
         let g = self.keys.lock().map_err(|_| VaultError::LockPoisoned)?;
-        Ok(g.get(root).map(|k| f(k)))
+        Ok(g.get(root).map(|k| {
+            let mut out = Zeroizing::new([0u8; KEY_LEN]);
+            out.copy_from_slice(k.as_slice());
+            out
+        }))
     }
 }
 
@@ -127,20 +163,24 @@ impl Keyring {
 mod tests {
     use super::*;
 
+    fn canon(p: &str) -> CanonicalPath {
+        CanonicalPath::assume_canonical(PathBuf::from(p))
+    }
+
     #[test]
     fn empty_registry_locks_nothing() {
         let r = LockedPathRegistry::new();
-        assert!(!r.is_locked(Path::new("/tmp/vault/note.md")));
+        assert!(!r.is_locked(&canon("/tmp/vault/note.md")));
     }
 
     #[test]
     fn lock_root_marks_descendants_locked() {
         let r = LockedPathRegistry::new();
         r.lock_root(PathBuf::from("/vault/secret")).unwrap();
-        assert!(r.is_locked(Path::new("/vault/secret")));
-        assert!(r.is_locked(Path::new("/vault/secret/note.md")));
-        assert!(r.is_locked(Path::new("/vault/secret/sub/deep.md")));
-        assert!(!r.is_locked(Path::new("/vault/plain/note.md")));
+        assert!(r.is_locked(&canon("/vault/secret")));
+        assert!(r.is_locked(&canon("/vault/secret/note.md")));
+        assert!(r.is_locked(&canon("/vault/secret/sub/deep.md")));
+        assert!(!r.is_locked(&canon("/vault/plain/note.md")));
     }
 
     #[test]
@@ -148,7 +188,7 @@ mod tests {
         let r = LockedPathRegistry::new();
         r.lock_root(PathBuf::from("/vault/secret")).unwrap();
         r.unlock_root(Path::new("/vault/secret")).unwrap();
-        assert!(!r.is_locked(Path::new("/vault/secret/note.md")));
+        assert!(!r.is_locked(&canon("/vault/secret/note.md")));
     }
 
     #[test]
@@ -159,9 +199,9 @@ mod tests {
             PathBuf::from("/vault/b"),
         ])
         .unwrap();
-        assert!(r.is_locked(Path::new("/vault/a/x.md")));
-        assert!(r.is_locked(Path::new("/vault/b/y.md")));
-        assert!(!r.is_locked(Path::new("/vault/c/z.md")));
+        assert!(r.is_locked(&canon("/vault/a/x.md")));
+        assert!(r.is_locked(&canon("/vault/b/y.md")));
+        assert!(!r.is_locked(&canon("/vault/c/z.md")));
     }
 
     #[test]
@@ -169,7 +209,7 @@ mod tests {
         let r = LockedPathRegistry::new();
         r.lock_root(PathBuf::from("/vault/a")).unwrap();
         r.clear().unwrap();
-        assert!(!r.is_locked(Path::new("/vault/a")));
+        assert!(!r.is_locked(&canon("/vault/a")));
     }
 
     #[test]
@@ -178,24 +218,34 @@ mod tests {
         // must NOT be locked just because `/vault/secret` is.
         let r = LockedPathRegistry::new();
         r.lock_root(PathBuf::from("/vault/secret")).unwrap();
-        assert!(!r.is_locked(Path::new("/vault/secretplans/note.md")));
+        assert!(!r.is_locked(&canon("/vault/secretplans/note.md")));
     }
 
     #[test]
-    fn keyring_zeroizes_on_remove() {
-        // We can't observe zeroization directly, but we can confirm the
-        // slot is gone and the Zeroizing drop path ran without panicking.
+    fn snapshot_returns_all_locked_roots() {
+        let r = LockedPathRegistry::new();
+        r.lock_root(PathBuf::from("/vault/a")).unwrap();
+        r.lock_root(PathBuf::from("/vault/b")).unwrap();
+        let mut got = r.snapshot().unwrap();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![PathBuf::from("/vault/a"), PathBuf::from("/vault/b")]
+        );
+    }
+
+    #[test]
+    fn keyring_clone_and_release() {
         let k = Keyring::new();
         let key = Zeroizing::new([1u8; KEY_LEN]);
         k.insert(PathBuf::from("/vault/a"), key).unwrap();
-        let got = k
-            .with_key(Path::new("/vault/a"), |b| b[0])
-            .unwrap();
-        assert_eq!(got, Some(1));
+        let got = k.key_clone(Path::new("/vault/a")).unwrap().unwrap();
+        assert_eq!(got[0], 1);
+        // Cloned bytes are equal but live in a separate allocation — the
+        // mutex is released by the time the caller reads the key.
+        drop(got);
         k.remove(Path::new("/vault/a")).unwrap();
-        let gone = k
-            .with_key(Path::new("/vault/a"), |_| ())
-            .unwrap();
+        let gone = k.key_clone(Path::new("/vault/a")).unwrap();
         assert!(gone.is_none());
     }
 }

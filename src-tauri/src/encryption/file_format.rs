@@ -56,8 +56,14 @@ pub fn parse(bytes: &[u8]) -> Result<([u8; NONCE_LEN], &[u8]), VaultError> {
     Ok((nonce, &bytes[HEADER_LEN..]))
 }
 
-/// Write `bytes` to `target` atomically (temp-file + rename). The temp
-/// lives in the same directory so `rename` is a single-FS syscall.
+/// Write `bytes` to `target` atomically (temp-file + rename + parent
+/// fsync). The temp lives in the same directory so `rename` is a single
+/// -FS syscall. On POSIX, we additionally `fsync` the parent directory
+/// so the rename itself is durable — without this, a power loss after
+/// `fs::rename` can be lost (the directory entry update may still be in
+/// buffered dirty state) and the file reverts to its pre-rename state
+/// or disappears entirely. Windows's `MoveFileExW` already provides
+/// durable rename semantics, so the parent-fsync step is skipped there.
 pub fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), VaultError> {
     let parent = target.parent().ok_or_else(|| VaultError::PermissionDenied {
         path: target.display().to_string(),
@@ -86,6 +92,23 @@ pub fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), VaultError> {
     if let Err(e) = fs::rename(&tmp, target) {
         let _ = fs::remove_file(&tmp);
         return Err(VaultError::Io(e));
+    }
+
+    // Durability of the rename itself. Needed on POSIX (ext4, APFS, …)
+    // where the directory entry update is buffered. A parent-fsync
+    // failure is not fatal — the rename already succeeded — but we log
+    // it so the rare case ("fsync returned EIO") is observable.
+    #[cfg(unix)]
+    {
+        if let Ok(dir) = fs::File::open(parent) {
+            if let Err(e) = dir.sync_all() {
+                log::warn!(
+                    "parent-dir fsync after rename failed for {}: {}",
+                    target.display(),
+                    e
+                );
+            }
+        }
     }
     Ok(())
 }

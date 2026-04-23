@@ -90,7 +90,12 @@ impl VaultError {
             | Self::MergeConflict { path }
             | Self::InvalidEncoding { path }
             | Self::PathLocked { path } => Some(path.clone()),
-            Self::CryptoError { msg } => Some(msg.clone()),
+            // `extra_data` is the IPC `data` field, reserved for a path
+            // so frontend callers can `navigate(err.data)`. CryptoError
+            // carries a human message, not a path — surfacing it here
+            // would break that contract. The message still ships via
+            // `Display` (the IPC `message` field); nothing is lost.
+            Self::CryptoError { .. } | Self::WrongPassword => None,
             _ => None,
         }
     }
