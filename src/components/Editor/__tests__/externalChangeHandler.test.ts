@@ -24,13 +24,22 @@ function makeDeps(overrides: {
   editorHash: string;
   mergeOutcome?: "clean" | "conflict";
   mergedContent?: string;
+  mergeNewHash?: string;
 }) {
   const getFileHash = vi.fn().mockResolvedValue(overrides.diskHash);
   const sha256 = vi.fn().mockResolvedValue(overrides.editorHash);
-  const mergeExternalChange = vi.fn().mockResolvedValue({
-    outcome: overrides.mergeOutcome ?? "clean",
-    merged_content: overrides.mergedContent ?? "",
-  });
+  // Tagged-union shape: clean carries new_hash; conflict does not.
+  const mergedContent = overrides.mergedContent ?? "";
+  const mergeOutcome = overrides.mergeOutcome ?? "clean";
+  const mergeResult =
+    mergeOutcome === "clean"
+      ? {
+          outcome: "clean" as const,
+          merged_content: mergedContent,
+          new_hash: overrides.mergeNewHash ?? "fake-merged-hash",
+        }
+      : { outcome: "conflict" as const, merged_content: mergedContent };
+  const mergeExternalChange = vi.fn().mockResolvedValue(mergeResult);
   return {
     getFileHash,
     sha256Hex: sha256,
@@ -56,12 +65,18 @@ describe("decideExternalModifyAction", () => {
     expect(deps._mocks.mergeExternalChange).not.toHaveBeenCalled();
   });
 
-  it("returns clean-merge with the fresh disk hash so lastSavedHash can be refreshed", async () => {
+  it("returns clean-merge with the backend's new_hash so lastSavedHash tracks disk", async () => {
+    // #339: the backend writes merged bytes itself and returns new_hash.
+    // The pre-merge `diskHash` is stale — we MUST prefer new_hash so the
+    // next autosave doesn't re-enter the merge path against a phantom
+    // hash mismatch. The tagged union guarantees new_hash on clean, so
+    // the consumer has nothing to fall back to.
     const deps = makeDeps({
-      diskHash: "bb",
+      diskHash: "bb", // external content hash BEFORE merge
       editorHash: "aa",
       mergeOutcome: "clean",
       mergedContent: "merged!",
+      mergeNewHash: "dd", // hash of merged bytes AFTER backend wrote
     });
 
     const action = await decideExternalModifyAction(deps, {
@@ -73,7 +88,7 @@ describe("decideExternalModifyAction", () => {
     expect(action).toEqual({
       kind: "clean-merge",
       mergedContent: "merged!",
-      diskHash: "bb",
+      diskHash: "dd", // NOT "bb" — new_hash wins
     });
     expect(deps._mocks.mergeExternalChange).toHaveBeenCalledWith(
       "/v/a.md",

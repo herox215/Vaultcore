@@ -70,8 +70,8 @@ fn seed_file_index(state: &VaultState, vault_root: &std::path::Path, rel_paths: 
 /// fallback. Fails today because `rename_file_impl` does not update the
 /// in-memory `FileIndex` — the rel_path map the click handler consults keeps
 /// the stale OLD path.
-#[test]
-fn rename_keeps_in_folder_wiki_link_resolvable() {
+#[tokio::test]
+async fn rename_keeps_in_folder_wiki_link_resolvable() {
     let dir = tempdir().unwrap();
     let vault_root = dir.path();
 
@@ -104,6 +104,7 @@ fn rename_keeps_in_folder_wiki_link_resolvable() {
         old_abs.to_string_lossy().into_owned(),
         "B-new.md".into(),
     )
+    .await
     .expect("rename_file_impl must succeed");
 
     // Disk is renamed (sanity — not the assertion under test).
@@ -143,8 +144,8 @@ fn rename_keeps_in_folder_wiki_link_resolvable() {
 /// note moves between folders. After `move_file_impl(folder/B.md -> other/)`,
 /// the new rel_path `other/B.md` must be in the FileIndex and the old one
 /// must be gone (#277).
-#[test]
-fn move_keeps_wiki_link_resolvable_in_new_folder() {
+#[tokio::test]
+async fn move_keeps_wiki_link_resolvable_in_new_folder() {
     let dir = tempdir().unwrap();
     let vault_root = dir.path();
 
@@ -164,6 +165,7 @@ fn move_keeps_wiki_link_resolvable_in_new_folder() {
         from_abs.to_string_lossy().into_owned(),
         canonical_other.to_string_lossy().into_owned(),
     )
+    .await
     .expect("move_file_impl must succeed");
 
     assert!(other.join("B.md").exists(), "disk move must succeed");
@@ -187,8 +189,8 @@ fn move_keeps_wiki_link_resolvable_in_new_folder() {
 /// `canonical_old == canonical_new`. The FileIndex entry must stay present
 /// with the new `relative_path` string (so UI shows the new casing); hash /
 /// aliases from the prior entry must be preserved (#277).
-#[test]
-fn case_only_rename_preserves_file_index_entry() {
+#[tokio::test]
+async fn case_only_rename_preserves_file_index_entry() {
     let dir = tempdir().unwrap();
     let vault_root = dir.path();
 
@@ -215,6 +217,7 @@ fn case_only_rename_preserves_file_index_entry() {
         canonical.join("Note.md").to_string_lossy().into_owned(),
         "note.md".into(),
     )
+    .await
     .expect("rename must succeed");
 
     let fi = state.file_index.read().unwrap();

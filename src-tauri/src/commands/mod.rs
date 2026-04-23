@@ -1,5 +1,6 @@
 pub mod vault;
 pub mod files;
+pub mod index_dispatch;
 pub mod tree;
 pub mod search;
 pub mod links;

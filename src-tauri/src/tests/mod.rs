@@ -5,6 +5,7 @@ mod vault_stats;
 mod tree;
 mod watcher;
 mod merge;
+mod merge_external_change;
 mod indexer;
 mod indexer_single_read;
 mod link_graph;

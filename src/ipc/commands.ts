@@ -156,15 +156,40 @@ export async function countWikiLinks(filename: string): Promise<number> {
   }
 }
 
-export interface MergeResult {
-  outcome: "clean" | "conflict";
-  merged_content: string;
-}
+/**
+ * Tagged union mirroring the Rust `MergeCommandResult` enum.
+ *
+ * Narrow on `outcome` before accessing variant fields:
+ *
+ * ```ts
+ * if (result.outcome === "clean") {
+ *   // result.new_hash is guaranteed here
+ * }
+ * ```
+ *
+ * Issue #339: `new_hash` exists ONLY on "clean" because only "clean"
+ * causes the backend to write. On "conflict" the backend left disk
+ * untouched, so there's no new hash to report.
+ */
+export type MergeResult =
+  | {
+      outcome: "clean";
+      merged_content: string;
+      new_hash: string;
+    }
+  | {
+      outcome: "conflict";
+      merged_content: string;
+    };
 
 /**
  * SYNC-06/07: Perform a three-way merge for an external file change.
  * base = lastSavedContent, left = editorContent, right = current disk content.
- * Returns outcome ("clean" | "conflict") and the merged content.
+ *
+ * Issue #339: on "clean" the backend writes the merged bytes to disk
+ * itself and returns `new_hash` — the caller must NOT re-write via
+ * `writeFile`. Doing so would double-dispatch index updates and risk
+ * feedback loops with the watcher.
  */
 export async function mergeExternalChange(
   path: string,
