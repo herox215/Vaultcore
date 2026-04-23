@@ -540,8 +540,8 @@
       cycleTabNext: () => { tabStore.cycleTab(1); },
       cycleTabPrev: () => { tabStore.cycleTab(-1); },
       closeActiveTab: () => {
-        const activeId = get(tabStore).activeTabId;
-        if (activeId) tabStore.closeTab(activeId);
+        const active = tabStore.getActiveTab();
+        if (active) tabStore.closeTab(active.id);
       },
       createNewNote: () => { void createNewNote(); },
       createNewCanvas: () => { void createNewCanvas(); },
