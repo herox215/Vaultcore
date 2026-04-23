@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { EditorView } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
   import TabBar from "../Tabs/TabBar.svelte";
@@ -304,9 +305,7 @@
    */
   function handleWikiLinkClick(event: Event): void {
     const detail = (event as CustomEvent).detail as { target: string; resolved: boolean };
-    let vault: string | null = null;
-    const u = vaultStore.subscribe((s) => { vault = s.currentPath; });
-    u();
+    const vault = get(vaultStore).currentPath;
     if (!vault) return;
 
     // #309 — the decoration's `data-wiki-resolved` attribute reflects the
@@ -397,11 +396,8 @@
     if (state.pending.token === prevReloadToken) return;
     prevReloadToken = state.pending.token;
 
-    let vault: string | null = null;
-    const u = vaultStore.subscribe((s) => { vault = s.currentPath; });
-    u();
-    if (!vault) return;
-    const vaultPath = vault as string;
+    const vaultPath = get(vaultStore).currentPath;
+    if (!vaultPath) return;
 
     for (const relPath of state.pending.paths) {
       const absPath = `${vaultPath}/${relPath}`;
