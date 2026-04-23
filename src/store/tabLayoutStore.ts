@@ -49,12 +49,30 @@ export const tabLayoutStore = {
 
   /**
    * Reorder the tab IDs in a specific pane (used by drag-to-reorder in TabBar).
-   * Callers are responsible for passing a permutation of the current pane IDs.
+   * `newIds` MUST be a permutation of the current pane IDs — anything else
+   * breaks the `splitState ⊆ tabs` invariant. Validated in dev builds so a
+   * caller bug fails loudly instead of producing torn state.
    */
   reorderPane(pane: "left" | "right", newIds: string[]): void {
-    _core.update((state) => ({
-      ...state,
-      splitState: { ...state.splitState, [pane]: newIds },
-    }));
+    _core.update((state) => {
+      const current = state.splitState[pane];
+      if (import.meta.env?.DEV) {
+        const isPermutation =
+          current.length === newIds.length &&
+          new Set(current).size === new Set(newIds).size &&
+          current.every((id) => newIds.includes(id));
+        if (!isPermutation) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `[tabLayoutStore] reorderPane(${pane}) called with non-permutation`,
+            { current, newIds },
+          );
+        }
+      }
+      return {
+        ...state,
+        splitState: { ...state.splitState, [pane]: newIds },
+      };
+    });
   },
 };

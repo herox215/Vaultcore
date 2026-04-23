@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { tabLifecycleStore } from "./tabLifecycleStore";
-import { _reset } from "./tabStoreCore";
+import { _core, _reset } from "./tabStoreCore";
 
 beforeEach(() => {
   _reset();
@@ -223,17 +223,32 @@ describe("tabLifecycleStore", () => {
   });
 
   describe("activateTab", () => {
-    it("sets activeTabId and switches activePane", () => {
+    it("sets activeTabId on same-pane activation and keeps activePane unchanged", () => {
       const id1 = tabLifecycleStore.openTab("/vault/a.md");
-      const id2 = tabLifecycleStore.openTab("/vault/b.md");
-      tabLifecycleStore.activateTab(id2);
-      // move id2 to right via the tabStore shim would be nicer but this keeps
-      // the test within lifecycle; use the core through a direct move-to-pane
-      // integration in tabStore.test.ts instead. Here, just confirm identity.
+      tabLifecycleStore.openTab("/vault/b.md");
       tabLifecycleStore.activateTab(id1);
       const state = get(tabLifecycleStore);
       expect(state.activeTabId).toBe(id1);
       expect(state.splitState.activePane).toBe("left");
+    });
+
+    it("flips activePane when the target tab lives in the other pane", () => {
+      // Seed state directly via _core to keep this lifecycle-scoped test from
+      // depending on tabLayoutStore.moveToPane.
+      const id1 = tabLifecycleStore.openTab("/vault/a.md");
+      const id2 = tabLifecycleStore.openTab("/vault/b.md");
+      _core.update((s) => ({
+        ...s,
+        splitState: { left: [id1], right: [id2], activePane: "left" },
+        activeTabId: id1,
+      }));
+      expect(get(tabLifecycleStore).splitState.activePane).toBe("left");
+
+      tabLifecycleStore.activateTab(id2);
+
+      const state = get(tabLifecycleStore);
+      expect(state.activeTabId).toBe(id2);
+      expect(state.splitState.activePane).toBe("right");
     });
   });
 
@@ -247,6 +262,45 @@ describe("tabLifecycleStore", () => {
       const tab = tabLifecycleStore.getActiveTab();
       expect(tab?.id).toBe(id);
       expect(tab?.filePath).toBe("/vault/a.md");
+    });
+  });
+
+  describe("save-snapshot per-tab metadata", () => {
+    it("setLastSavedContent persists the base snapshot for three-way merge", () => {
+      const id = tabLifecycleStore.openTab("/vault/a.md");
+      tabLifecycleStore.setLastSavedContent(id, "snapshot body");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.lastSavedContent).toBe("snapshot body");
+    });
+
+    it("setLastSavedHash records the disk hash on the tab", () => {
+      const id = tabLifecycleStore.openTab("/vault/a.md");
+      tabLifecycleStore.setLastSavedHash(id, "abc123");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.lastSavedHash).toBe("abc123");
+    });
+
+    it("setLastSavedHash(id, null) is distinguishable from never-set (#80)", () => {
+      const id = tabLifecycleStore.openTab("/vault/a.md");
+      const before = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(before?.lastSavedHash).toBeUndefined();
+      tabLifecycleStore.setLastSavedHash(id, null);
+      const after = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(after?.lastSavedHash).toBeNull();
+      expect(after?.lastSavedHash === undefined).toBe(false);
+    });
+
+    it("save-snapshot mutations are scoped to the given tab", () => {
+      const a = tabLifecycleStore.openTab("/vault/a.md");
+      const b = tabLifecycleStore.openTab("/vault/b.md");
+      tabLifecycleStore.setLastSavedContent(a, "A body");
+      tabLifecycleStore.setLastSavedHash(a, "hash-a");
+      const tabA = get(tabLifecycleStore).tabs.find((t) => t.id === a);
+      const tabB = get(tabLifecycleStore).tabs.find((t) => t.id === b);
+      expect(tabA?.lastSavedContent).toBe("A body");
+      expect(tabA?.lastSavedHash).toBe("hash-a");
+      expect(tabB?.lastSavedContent).toBe("");
+      expect(tabB?.lastSavedHash).toBeUndefined();
     });
   });
 

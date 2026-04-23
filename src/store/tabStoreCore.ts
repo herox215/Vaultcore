@@ -1,11 +1,16 @@
 // tabStoreCore — shared writable backing the three tab facades (#341).
 //
-// Decision rule for where a new method belongs:
-//   • tabLifecycleStore — tab identity (open/close/activate/cycle) and
-//     per-tab metadata (dirty flag, view mode, scroll positions, rename).
-//   • tabLayoutStore    — pane arrangement (moveToPane, reorderPane).
-//   • tabReloadStore    — disk-sync signals and post-save snapshot state
-//     (lastSavedContent, lastSavedHash, request-reload token).
+// Decision rule for where a new method belongs — split by data shape,
+// not by causal origin. A setter belongs to the facade that owns the
+// slice of state it mutates:
+//   • tabLifecycleStore — anything that reads/writes the Tab[] slice
+//     (open/close/activate/cycle + every per-tab field: isDirty,
+//     viewMode, scrollPos, lastSavedContent, lastSavedHash, ...).
+//   • tabLayoutStore    — anything that reads/writes the SplitState slice
+//     (moveToPane, reorderPane).
+//   • tabReloadStore    — disk-sync signal that does NOT live in the
+//     shared core; it has its own private writable for the one-shot
+//     reload token dispatched by the rename-cascade path.
 //
 // The three facades share one private writable here. Every cross-concern
 // mutation (e.g. closeTab touches tabs + splitState + activeTabId) lives in

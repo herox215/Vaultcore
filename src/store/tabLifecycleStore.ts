@@ -321,4 +321,28 @@ export const tabLifecycleStore = {
       splitState: { left: [], right: [], activePane: "left" },
     });
   },
+
+  /**
+   * Update the base snapshot content used for three-way merge (Plan 05).
+   * Called after auto-save completes, so the snapshot tracks what's on disk.
+   */
+  setLastSavedContent(tabId: string, content: string): void {
+    _core.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedContent: content } : t)),
+    }));
+  },
+
+  /**
+   * Record the SHA-256 hash VaultCore wrote for this tab's last save.
+   * Called by EditorPane after every successful writeFile so the auto-save
+   * merge-check can compare disk hash against the per-tab expected hash
+   * (#80 — global editorStore.lastSavedHash leaked across tabs).
+   */
+  setLastSavedHash(tabId: string, hash: string | null): void {
+    _core.update((state) => ({
+      ...state,
+      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, lastSavedHash: hash } : t)),
+    }));
+  },
 };
