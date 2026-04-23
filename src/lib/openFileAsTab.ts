@@ -38,7 +38,11 @@ function findLockingRoot(absPath: string): string | null {
   const entries = get(encryptedFolders);
   if (entries.length === 0) return null;
   const normalizedAbs = absPath.replace(/\\/g, "/");
-  const normalizedVault = vaultRoot.replace(/\\/g, "/");
+  // #345: strip trailing separators from the vault root BEFORE we
+  // join with the rel path — otherwise `/vault/` + `secret` produced
+  // `/vault//secret` and the prefix check silently missed every
+  // locked folder on systems where the vault path ends with a slash.
+  const normalizedVault = vaultRoot.replace(/\\/g, "/").replace(/\/+$/, "");
   for (const entry of entries) {
     const rootAbs = `${normalizedVault}/${entry.path}`;
     if (normalizedAbs === rootAbs || normalizedAbs.startsWith(rootAbs + "/")) {
@@ -59,17 +63,19 @@ function findLockingRoot(absPath: string): string | null {
 }
 
 export async function openFileAsTab(absPath: string): Promise<string | null> {
-  // #345: if the target sits inside an encrypted root, route through
-  // readFile first so the backend decides. A locked folder returns
-  // PathLocked; we surface the unlock modal instead of opening an
-  // empty or error tab.
+  // #345: if the target sits inside an encrypted root that the user
+  // is holding locked, open the unlock modal instead of routing into
+  // the viewer (which would fail with a cryptic "file is binary" or
+  // "invalid encoding" error on ciphertext). The `findLockingRoot`
+  // check is O(k) against the encryptedFolders store; if no
+  // encrypted folders exist it short-circuits to null at zero cost.
+  //
+  // We only prompt here for paths inside a known encrypted root that
+  // COULD be locked. Paths outside any encrypted root skip this
+  // entirely — no double read_file on the happy path.
   const lockingRoot = findLockingRoot(absPath);
   if (lockingRoot) {
     try {
-      // Cheap probe — on an unlocked folder this succeeds quickly.
-      // On a locked folder the backend returns PathLocked and we
-      // open the unlock modal; on success the user retries the
-      // click (the modal does not auto-navigate in this MVP).
       await readFile(absPath);
     } catch (err) {
       if (isVaultError(err) && err.kind === "PathLocked") {
@@ -79,7 +85,8 @@ export async function openFileAsTab(absPath: string): Promise<string | null> {
         });
         return null;
       }
-      // Fall through to the normal classifier on other errors.
+      // Any other error (incl. binary ciphertext) falls through; the
+      // classifier below will handle InvalidEncoding → "unsupported".
     }
   }
 

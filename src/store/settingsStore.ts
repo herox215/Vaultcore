@@ -196,7 +196,11 @@ function readInitial(): SettingsState {
     const dFormat = localStorage.getItem(K_DAILY_FORMAT);
     const dTemplate = localStorage.getItem(K_DAILY_TEMPLATE);
     const semantic = localStorage.getItem(K_SEMANTIC);
-    const autoLockRaw = Number(localStorage.getItem(K_AUTO_LOCK_MINUTES));
+    // #345: guard against the Number("") = 0 silent-zero trap. A missing
+    // value must fall through to DEFAULT, not to 0 (which would disable
+    // auto-lock on first run for every fresh install).
+    const autoLockRawStr = localStorage.getItem(K_AUTO_LOCK_MINUTES);
+    const autoLockRaw = autoLockRawStr === null ? NaN : Number(autoLockRawStr);
     return {
       fontBody: isBodyFont(b) ? b : initial.fontBody,
       fontMono: isMonoFont(m) ? m : initial.fontMono,
