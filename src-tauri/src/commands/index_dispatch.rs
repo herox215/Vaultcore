@@ -26,8 +26,37 @@
 
 use std::path::Path;
 
+use tokio::sync::mpsc::Sender;
+
 use crate::indexer::{parser, tantivy_index, IndexCmd};
 use crate::VaultState;
+
+/// Enqueue a Tantivy `AddFile` command for `abs_path` using `content` as
+/// the source. Sole authority for the Tantivy document shape — every
+/// self-write path (dispatch_self_write, update_links_after_rename
+/// cascade, any future caller) must route through here so title / body /
+/// hash extraction stays consistent.
+///
+/// Fire-and-forget: drops the send error on a closed channel (writer
+/// gone). Does NOT enqueue the Commit — callers batch multiple AddFiles
+/// followed by a single Commit.
+pub(crate) async fn dispatch_tantivy_upsert(tx: &Sender<IndexCmd>, abs_path: &Path, content: &str) {
+    let stem = abs_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let title = tantivy_index::extract_title(content, &stem);
+    let body = parser::strip_markdown(content);
+    let hash = crate::hash::hash_bytes(content.as_bytes());
+    let _ = tx
+        .send(IndexCmd::AddFile {
+            path: abs_path.to_path_buf(),
+            title,
+            body,
+            hash,
+        })
+        .await;
+}
 
 /// Dispatch all index updates for a file we just wrote ourselves.
 ///
@@ -83,21 +112,7 @@ pub(crate) async fn dispatch_self_write(state: &VaultState, abs_path: &Path, con
         })
         .await;
 
-    let stem = abs_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let body = parser::strip_markdown(content);
-    let title = tantivy_index::extract_title(content, &stem);
-    let hash = crate::hash::hash_bytes(content.as_bytes());
-    let _ = tx
-        .send(IndexCmd::AddFile {
-            path: abs_path.to_path_buf(),
-            title,
-            body,
-            hash,
-        })
-        .await;
+    dispatch_tantivy_upsert(&tx, abs_path, content).await;
     let _ = tx.send(IndexCmd::Commit).await;
 }
 

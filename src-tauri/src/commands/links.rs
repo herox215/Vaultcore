@@ -469,8 +469,9 @@ pub async fn update_links_after_rename(
     // until re-indexing. The link graph is already updated inline above
     // (#250 keeps that direct-mutation path for perf — routing through
     // dispatch_self_write would regress the StemIndex optimization). Fire
-    // just the Tantivy side here. Tags are not affected — the rewrite
-    // only touches wiki-link text.
+    // just the Tantivy side here via the shared upsert helper so the
+    // document shape stays in sync with dispatch_self_write. Tags aren't
+    // affected — the rewrite only touches wiki-link text.
     let tx = {
         let guard = state.index_coordinator.lock().map_err(|_| VaultError::IndexCorrupt)?;
         guard.as_ref().map(|c| c.tx.clone())
@@ -478,20 +479,7 @@ pub async fn update_links_after_rename(
     if let Some(tx) = tx {
         for (source_rel, new_content) in &rewrites {
             let abs_path = vault_root.join(source_rel);
-            let stem = abs_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let title = crate::indexer::tantivy_index::extract_title(new_content, &stem);
-            let body = crate::indexer::parser::strip_markdown(new_content);
-            let hash = crate::hash::hash_bytes(new_content.as_bytes());
-            let _ = tx
-                .send(crate::indexer::IndexCmd::AddFile {
-                    path: abs_path,
-                    title,
-                    body,
-                    hash,
-                })
+            crate::commands::index_dispatch::dispatch_tantivy_upsert(&tx, &abs_path, new_content)
                 .await;
         }
         let _ = tx.send(crate::indexer::IndexCmd::Commit).await;

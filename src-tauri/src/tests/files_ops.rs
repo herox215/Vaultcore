@@ -83,8 +83,8 @@ fn create_folder_creates_directory() {
 }
 
 // Test 5: rename_file renames on disk, returns link_count=0 when no links
-#[test]
-fn rename_file_renames_and_returns_zero_link_count() {
+#[tokio::test]
+async fn rename_file_renames_and_returns_zero_link_count() {
     let dir = tempdir().unwrap();
     let state = state_with_vault(dir.path());
     let old_path = dir.path().join("old.md");
@@ -93,7 +93,9 @@ fn rename_file_renames_and_returns_zero_link_count() {
         &state,
         old_path.to_string_lossy().into_owned(),
         "new.md".into(),
-    ).unwrap();
+    )
+    .await
+    .unwrap();
     let expected_new = dir.path().join("new.md");
     assert!(!old_path.exists(), "old.md should no longer exist");
     assert!(expected_new.exists(), "new.md should exist");
@@ -102,8 +104,8 @@ fn rename_file_renames_and_returns_zero_link_count() {
 }
 
 // Test 6: rename_file returns link_count>0 when wiki-links exist
-#[test]
-fn rename_file_counts_wiki_links() {
+#[tokio::test]
+async fn rename_file_counts_wiki_links() {
     let dir = tempdir().unwrap();
     let state = state_with_vault(dir.path());
     // Create a file to rename
@@ -117,7 +119,9 @@ fn rename_file_counts_wiki_links() {
         &state,
         target.to_string_lossy().into_owned(),
         "renamed.md".into(),
-    ).unwrap();
+    )
+    .await
+    .unwrap();
     assert!(result.link_count >= 2, "Should have found at least 2 wiki-links, got {}", result.link_count);
 }
 
@@ -162,8 +166,8 @@ async fn delete_file_collision_in_trash_auto_suffixes() {
 }
 
 // Test 9: move_file moves to target folder and returns new path
-#[test]
-fn move_file_moves_to_target_folder() {
+#[tokio::test]
+async fn move_file_moves_to_target_folder() {
     let dir = tempdir().unwrap();
     let state = state_with_vault(dir.path());
     let source = dir.path().join("source.md");
@@ -174,7 +178,9 @@ fn move_file_moves_to_target_folder() {
         &state,
         source.to_string_lossy().into_owned(),
         dest_folder.to_string_lossy().into_owned(),
-    ).unwrap();
+    )
+    .await
+    .unwrap();
     let expected_dest = dest_folder.join("source.md");
     assert!(!source.exists(), "Source file should be gone");
     assert!(expected_dest.exists(), "File should be in destination folder");
@@ -182,8 +188,8 @@ fn move_file_moves_to_target_folder() {
 }
 
 // Test 10: move_file rejects destination outside vault
-#[test]
-fn move_file_rejects_outside_vault() {
+#[tokio::test]
+async fn move_file_rejects_outside_vault() {
     let vault_dir = tempdir().unwrap();
     let outside_dir = tempdir().unwrap();
     let state = state_with_vault(vault_dir.path());
@@ -193,7 +199,8 @@ fn move_file_rejects_outside_vault() {
         &state,
         source.to_string_lossy().into_owned(),
         outside_dir.path().to_string_lossy().into_owned(),
-    );
+    )
+    .await;
     match result {
         Err(VaultError::PermissionDenied { .. }) => {}
         other => panic!("expected PermissionDenied, got {:?}", other),
