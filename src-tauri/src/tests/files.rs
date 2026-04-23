@@ -372,6 +372,8 @@ async fn read_file_impl(state: &VaultState, path: String) -> Result<String, Vaul
         std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: path.clone() },
         _ => VaultError::Io(e),
     })?;
+    // #345: decrypt on read for unlocked encrypted folders.
+    let bytes = crate::encryption::maybe_decrypt_read(state, &canonical_target, bytes)?;
     String::from_utf8(bytes).map_err(|_| VaultError::InvalidEncoding { path })
 }
 
@@ -409,7 +411,9 @@ async fn write_file_impl(
         return Err(VaultError::PathLocked { path: final_path.display().to_string() });
     }
     let bytes = content.as_bytes();
-    std::fs::write(&final_path, bytes).map_err(|e| match e.kind() {
+    // #345: encrypt on write for unlocked encrypted folders.
+    let bytes_on_disk = crate::encryption::maybe_encrypt_write(state, &final_path, bytes)?;
+    std::fs::write(&final_path, &bytes_on_disk).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path },
         std::io::ErrorKind::StorageFull => VaultError::DiskFull,
         _ => VaultError::Io(e),

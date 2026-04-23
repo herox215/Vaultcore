@@ -85,6 +85,10 @@ pub async fn read_file(
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },
         _ => VaultError::Io(e),
     })?;
+    // #345: transparent decrypt when the file lives in an unlocked
+    // encrypted folder. No-op for plain vault files so the hot path
+    // cost for the common case is one manifest read (cached + small).
+    let bytes = crate::encryption::maybe_decrypt_read(&state, &canonical, bytes)?;
     // D-17: non-UTF-8 bytes never load into the editor.
     String::from_utf8(bytes).map_err(|_| VaultError::InvalidEncoding { path })
 }
@@ -135,7 +139,11 @@ pub async fn write_file(
     }
 
     let bytes = content.as_bytes();
-    std::fs::write(&final_path, bytes).map_err(|e| match e.kind() {
+    // #345: if the target sits in an unlocked encrypted root, seal
+    // the bytes before they hit disk. Outside any encrypted folder
+    // this is a zero-cost passthrough.
+    let bytes_on_disk = crate::encryption::maybe_encrypt_write(&state, &final_path, bytes)?;
+    std::fs::write(&final_path, &bytes_on_disk).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },
         // StorageFull is the std name for disk-full on Linux/Windows.
         std::io::ErrorKind::StorageFull => VaultError::DiskFull,
@@ -294,7 +302,11 @@ pub fn create_file_impl(state: &VaultState, parent: String, name: String) -> Res
     ensure_unlocked(state, &final_path)?;
 
     record_write(state, final_path.clone());
-    std::fs::write(&final_path, "").map_err(VaultError::Io)?;
+    // #345: encrypt the (empty) payload when the target sits in an
+    // unlocked encrypted root so the brand-new file is consistent
+    // with its siblings on disk.
+    let bytes = crate::encryption::maybe_encrypt_write(state, &final_path, b"")?;
+    std::fs::write(&final_path, &bytes).map_err(VaultError::Io)?;
 
     // #307: write_ignore (D-12) suppresses the watcher's natural create event,
     // which would normally populate FileIndex. Insert directly so `resolve_link`
@@ -777,7 +789,11 @@ pub fn get_file_hash_impl(state: &VaultState, path: String) -> Result<String, Va
         },
         _ => VaultError::Io(e),
     })?;
-    Ok(hash_bytes(&bytes))
+    // #345: hash the plaintext, not the ciphertext, so the frontend
+    // conflict-detection hashes (which are always computed over
+    // plaintext) match.
+    let plaintext = crate::encryption::maybe_decrypt_read(state, &canonical, bytes)?;
+    Ok(hash_bytes(&plaintext))
 }
 
 #[tauri::command]

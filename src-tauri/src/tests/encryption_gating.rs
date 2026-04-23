@@ -292,6 +292,100 @@ async fn encrypt_then_lock_cycle_end_to_end() {
     assert!(matches!(err, crate::error::VaultError::WrongPassword));
 }
 
+#[tokio::test]
+async fn read_file_decrypts_under_unlocked_root() {
+    use crate::encryption::batch::{encrypt_file_in_place, write_sentinel};
+    use crate::encryption::crypto::{derive_key, random_salt};
+    use crate::encryption::manifest::{upsert, EncryptedFolderMeta, FolderState};
+    use crate::VaultState;
+    use zeroize::Zeroizing;
+
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().canonicalize().unwrap();
+    let folder = vault.join("private");
+    std::fs::create_dir_all(&folder).unwrap();
+    let note_path = folder.join("diary.md");
+    std::fs::write(&note_path, b"# Diary\n\nToday I built VaultCore.\n").unwrap();
+
+    // Produce the on-disk layout the IPC flow would produce.
+    let salt = random_salt();
+    let key = derive_key(b"pw", &salt).unwrap();
+    upsert(
+        &vault,
+        EncryptedFolderMeta {
+            path: "private".into(),
+            created_at: "2026-04-24T00:00:00Z".into(),
+            salt: EncryptedFolderMeta::encode_salt(&salt),
+            state: FolderState::Encrypted,
+        },
+    )
+    .unwrap();
+    write_sentinel(&folder, &key).unwrap();
+    encrypt_file_in_place(&key, &note_path).unwrap();
+
+    // Now set up state as-if the user had unlocked the folder via the IPC.
+    let state = VaultState::default();
+    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    let folder_canon = folder.canonicalize().unwrap();
+    // Not locked — but key present in the keyring.
+    let mut key_copy = Zeroizing::new([0u8; 32]);
+    key_copy.copy_from_slice(key.as_slice());
+    state.keyring.insert(folder_canon.clone(), key_copy).unwrap();
+
+    // read via the encryption helper — must return decrypted bytes.
+    let on_disk = std::fs::read(&note_path).unwrap();
+    let plaintext =
+        crate::encryption::maybe_decrypt_read(&state, &note_path, on_disk).unwrap();
+    assert_eq!(plaintext, b"# Diary\n\nToday I built VaultCore.\n");
+}
+
+#[tokio::test]
+async fn write_file_encrypts_under_unlocked_root() {
+    // Round-trip guarantee: the bytes produced by `maybe_encrypt_write`
+    // are round-trippable via `maybe_decrypt_read` with the same
+    // keyring entry. Without this guarantee a save-then-reopen cycle
+    // would corrupt user content.
+    use crate::encryption::crypto::{derive_key, random_salt};
+    use crate::encryption::manifest::{upsert, EncryptedFolderMeta, FolderState};
+    use crate::VaultState;
+    use zeroize::Zeroizing;
+
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().canonicalize().unwrap();
+    let folder = vault.join("notebook");
+    std::fs::create_dir_all(&folder).unwrap();
+    let salt = random_salt();
+    let key = derive_key(b"pw", &salt).unwrap();
+    upsert(
+        &vault,
+        EncryptedFolderMeta {
+            path: "notebook".into(),
+            created_at: "t".into(),
+            salt: EncryptedFolderMeta::encode_salt(&salt),
+            state: FolderState::Encrypted,
+        },
+    )
+    .unwrap();
+
+    let state = VaultState::default();
+    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    let folder_canon = folder.canonicalize().unwrap();
+    let mut key_copy = Zeroizing::new([0u8; 32]);
+    key_copy.copy_from_slice(key.as_slice());
+    state.keyring.insert(folder_canon.clone(), key_copy).unwrap();
+
+    let note = folder.join("fresh.md");
+    let plaintext = b"fresh note written while unlocked";
+    let sealed =
+        crate::encryption::maybe_encrypt_write(&state, &note, plaintext).unwrap();
+    assert_ne!(sealed, plaintext, "payload must be sealed");
+    std::fs::write(&note, &sealed).unwrap();
+    let back = std::fs::read(&note).unwrap();
+    let decrypted =
+        crate::encryption::maybe_decrypt_read(&state, &note, back).unwrap();
+    assert_eq!(decrypted, plaintext);
+}
+
 #[test]
 fn walk_md_files_skipping_prunes_subtree() {
     use crate::indexer::walk_md_files_skipping;
