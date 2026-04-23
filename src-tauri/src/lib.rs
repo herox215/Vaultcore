@@ -4,6 +4,7 @@ pub mod hash;
 pub mod watcher;
 pub mod merge;
 pub mod indexer;
+pub mod encryption;
 
 #[cfg(feature = "embeddings")]
 pub mod embeddings;
@@ -91,6 +92,14 @@ pub struct VaultState {
     /// see the same live `VectorIndex` the embed worker writes to.
     #[cfg(feature = "embeddings")]
     pub query_handles: Arc<Mutex<Option<Arc<embeddings::QueryHandles>>>>,
+
+    // #345: per-folder encryption. `locked_paths` is the authoritative
+    // gate checked by every FS / indexer / link-graph / search entry.
+    // `keyring` caches derived keys for currently-unlocked roots; both
+    // clear on vault close and app quit (no persistence of unlocked
+    // state across restart).
+    pub locked_paths: Arc<encryption::LockedPathRegistry>,
+    pub keyring: Arc<encryption::Keyring>,
 }
 
 impl Default for VaultState {
@@ -108,6 +117,8 @@ impl Default for VaultState {
             reindex_handle: Arc::new(Mutex::new(None)),
             #[cfg(feature = "embeddings")]
             query_handles: Arc::new(Mutex::new(None)),
+            locked_paths: Arc::new(encryption::LockedPathRegistry::new()),
+            keyring: Arc::new(encryption::Keyring::new()),
         }
     }
 }
