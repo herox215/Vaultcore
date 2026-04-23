@@ -43,7 +43,7 @@ describe("flattenTree — #345 encryption", () => {
       // Even if the locked folder is in the expanded set (would happen
       // if the user expanded it before locking), flatten must drop it.
       expanded: new Set(["secret"]),
-      sortBy: "name-asc",
+      sortBy: "name",
     };
     const rows = flattenTree(model);
     expect(rows).toHaveLength(1);
@@ -70,7 +70,7 @@ describe("flattenTree — #345 encryption", () => {
         ["/vault/journal", { children: [child], childrenLoaded: true, loading: false }],
       ]),
       expanded: new Set(["journal"]),
-      sortBy: "name-asc",
+      sortBy: "name",
     };
     const rows = flattenTree(model);
     expect(rows.map((r) => r.name)).toEqual(["journal", "2026.md"]);
@@ -92,7 +92,7 @@ describe("flattenTree — #345 encryption", () => {
       rootEntries: [plain],
       folders: new Map(),
       expanded: new Set(),
-      sortBy: "name-asc",
+      sortBy: "name",
     };
     const rows = flattenTree(model);
     expect(rows[0]!.encryption).toBe("not-encrypted");
