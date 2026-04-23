@@ -24,12 +24,14 @@ function makeDeps(overrides: {
   editorHash: string;
   mergeOutcome?: "clean" | "conflict";
   mergedContent?: string;
+  mergeNewHash?: string | null;
 }) {
   const getFileHash = vi.fn().mockResolvedValue(overrides.diskHash);
   const sha256 = vi.fn().mockResolvedValue(overrides.editorHash);
   const mergeExternalChange = vi.fn().mockResolvedValue({
     outcome: overrides.mergeOutcome ?? "clean",
     merged_content: overrides.mergedContent ?? "",
+    new_hash: overrides.mergeNewHash ?? null,
   });
   return {
     getFileHash,
@@ -56,12 +58,17 @@ describe("decideExternalModifyAction", () => {
     expect(deps._mocks.mergeExternalChange).not.toHaveBeenCalled();
   });
 
-  it("returns clean-merge with the fresh disk hash so lastSavedHash can be refreshed", async () => {
+  it("returns clean-merge with the backend's new_hash so lastSavedHash tracks disk", async () => {
+    // #339: the backend writes merged bytes itself and returns new_hash.
+    // The pre-merge `diskHash` is stale — we MUST prefer new_hash so the
+    // next autosave doesn't re-enter the merge path against a phantom
+    // hash mismatch.
     const deps = makeDeps({
-      diskHash: "bb",
+      diskHash: "bb", // external content hash BEFORE merge
       editorHash: "aa",
       mergeOutcome: "clean",
       mergedContent: "merged!",
+      mergeNewHash: "dd", // hash of merged bytes AFTER backend wrote
     });
 
     const action = await decideExternalModifyAction(deps, {
@@ -73,13 +80,44 @@ describe("decideExternalModifyAction", () => {
     expect(action).toEqual({
       kind: "clean-merge",
       mergedContent: "merged!",
-      diskHash: "bb",
+      diskHash: "dd", // NOT "bb" — new_hash wins
     });
     expect(deps._mocks.mergeExternalChange).toHaveBeenCalledWith(
       "/v/a.md",
       "local",
       "base",
     );
+  });
+
+  it("falls back to hashing merged_content when new_hash is missing", async () => {
+    // Defence against an older backend that doesn't populate new_hash.
+    // Must NOT use the pre-merge diskHash — it reflects external content,
+    // not the merged bytes the backend wrote (or would have written).
+    const deps = makeDeps({
+      diskHash: "bb",
+      editorHash: "aa",
+      mergeOutcome: "clean",
+      mergedContent: "merged!",
+      mergeNewHash: null,
+    });
+    // Force sha256Hex to distinguish its two call sites: the first call
+    // (editor hash, up front) returns "aa"; the second (fallback) returns
+    // the hash of mergedContent.
+    deps._mocks.sha256
+      .mockResolvedValueOnce("aa")
+      .mockResolvedValueOnce("computed-merged-hash");
+
+    const action = await decideExternalModifyAction(deps, {
+      path: "/v/a.md",
+      editorContent: "local",
+      lastSavedContent: "base",
+    });
+
+    expect(action).toEqual({
+      kind: "clean-merge",
+      mergedContent: "merged!",
+      diskHash: "computed-merged-hash",
+    });
   });
 
   it("returns conflict with the fresh disk hash so the next autosave is unambiguous", async () => {

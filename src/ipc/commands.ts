@@ -159,12 +159,23 @@ export async function countWikiLinks(filename: string): Promise<number> {
 export interface MergeResult {
   outcome: "clean" | "conflict";
   merged_content: string;
+  /**
+   * SHA-256 hex of the merged bytes the backend wrote to disk. Populated
+   * on "clean" only — on "conflict" the backend does NOT write, so the
+   * caller keeps the existing editor content and `new_hash` is null
+   * (issue #339).
+   */
+  new_hash: string | null;
 }
 
 /**
  * SYNC-06/07: Perform a three-way merge for an external file change.
  * base = lastSavedContent, left = editorContent, right = current disk content.
- * Returns outcome ("clean" | "conflict") and the merged content.
+ *
+ * Issue #339: on "clean" the backend writes the merged bytes to disk
+ * itself and returns `new_hash` — the caller must NOT re-write via
+ * `writeFile`. Doing so would double-dispatch index updates and risk
+ * feedback loops with the watcher.
  */
 export async function mergeExternalChange(
   path: string,

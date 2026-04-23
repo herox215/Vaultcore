@@ -18,7 +18,11 @@ export interface ExternalModifyDeps {
     path: string,
     local: string,
     base: string,
-  ) => Promise<{ outcome: "clean" | "conflict"; merged_content: string }>;
+  ) => Promise<{
+    outcome: "clean" | "conflict";
+    merged_content: string;
+    new_hash: string | null;
+  }>;
   /** SHA-256 hex of the given UTF-8 string. Injected so tests can stub it. */
   sha256Hex: (s: string) => Promise<string>;
 }
@@ -44,11 +48,14 @@ export interface ExternalModifyInput {
  *   no toast. Fires for self-writes that slipped past `WriteIgnoreList` and
  *   for external touches that produced identical bytes (git checkout same
  *   commit, Time Machine, Spotlight metadata writes).
- * - `clean-merge`: disk diverged from our base snapshot; the three-way merge
- *   resolved cleanly. The caller must replace the CM6 doc with
- *   `mergedContent` and record `diskHash` as the new `lastSavedHash`.
- * - `conflict`: merge failed; the caller keeps the editor's local content
- *   but still records `diskHash` so the next autosave writes through
+ * - `clean-merge`: disk diverged from our base snapshot; the three-way
+ *   merge resolved cleanly AND the backend persisted the merged bytes to
+ *   disk (#339). The caller must replace the CM6 doc with `mergedContent`
+ *   and record `diskHash` as the new `lastSavedHash`. The caller MUST NOT
+ *   call `writeFile` again — the backend already wrote.
+ * - `conflict`: merge failed; the backend did NOT write. The caller keeps
+ *   the editor's local content but still records `diskHash` (the external
+ *   version still on disk) so the next autosave writes through
  *   deliberately (the documented "lokale Version behalten" behaviour).
  */
 export async function decideExternalModifyAction(
@@ -71,10 +78,18 @@ export async function decideExternalModifyAction(
   );
 
   if (result.outcome === "clean") {
+    // Prefer the backend's `new_hash` (#339): the backend just wrote the
+    // merged bytes, so its hash is the authoritative next-disk-state. The
+    // `diskHash` computed before the merge call reflects the PRE-merge
+    // external content and is stale by the time we get here. Fall back to
+    // hashing the merged content on the rare path where `new_hash` is
+    // missing (older backend).
+    const mergedHash =
+      result.new_hash ?? (await deps.sha256Hex(result.merged_content));
     return {
       kind: "clean-merge",
       mergedContent: result.merged_content,
-      diskHash,
+      diskHash: mergedHash,
     };
   }
   return { kind: "conflict", diskHash };

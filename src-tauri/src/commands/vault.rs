@@ -401,12 +401,21 @@ pub(crate) fn format_iso8601_utc(epoch_secs: i64) -> String {
 // ─── merge_external_change command ───────────────────────────────────────────
 
 /// Result returned by the merge_external_change command.
+///
+/// `new_hash` is `Some(...)` on "clean" — the backend has written the merged
+/// bytes to disk and the returned hash is SHA-256 of `merged_content` (matches
+/// `hash_bytes` / the value `write_file` returns, so callers can align
+/// `lastSavedHash` without hashing client-side). `None` on "conflict" — the
+/// backend did not write; disk still holds the external content and the
+/// caller keeps the local buffer (issue #339).
 #[derive(Serialize, Clone, Debug)]
 pub struct MergeCommandResult {
     /// "clean" or "conflict"
     pub outcome: String,
     /// The merged content (for "clean") or the original local content (for "conflict")
     pub merged_content: String,
+    /// SHA-256 hex of the merged bytes written to disk. `None` on conflict.
+    pub new_hash: Option<String>,
 }
 
 /// Perform a three-way merge for an external file change.
@@ -419,9 +428,28 @@ pub struct MergeCommandResult {
 ///
 /// Security: path is validated to be inside the open vault before reading disk
 /// content (T-02-18 mitigation).
+///
+/// Issue #339: on a clean merge the backend now *writes the merged bytes to
+/// disk itself* and dispatches the same IndexCmd updates `write_file` does.
+/// The frontend no longer writes on clean-merge; it consumes `new_hash` and
+/// aligns its `lastSavedHash` tracker. The watcher-driven event for our own
+/// write is suppressed by `write_ignore` (D-12); dispatching inline here is
+/// what keeps the in-memory LinkGraph / TagIndex / Tantivy index in sync.
 #[tauri::command]
 pub async fn merge_external_change(
     state: tauri::State<'_, crate::VaultState>,
+    path: String,
+    editor_content: String,
+    last_saved_content: String,
+) -> Result<MergeCommandResult, crate::error::VaultError> {
+    merge_external_change_impl(&state, path, editor_content, last_saved_content).await
+}
+
+/// Testable body of `merge_external_change`. See the note in
+/// `commands/files.rs:16-20` on the `tauri::State`-can't-be-constructed
+/// convention.
+pub(crate) async fn merge_external_change_impl(
+    state: &crate::VaultState,
     path: String,
     editor_content: String,
     last_saved_content: String,
@@ -457,16 +485,75 @@ pub async fn merge_external_change(
     let merge_result = three_way_merge(&last_saved_content, &editor_content, &disk_content);
 
     match merge_result {
-        MergeOutcome::Clean(merged) => Ok(MergeCommandResult {
-            outcome: "clean".to_string(),
-            merged_content: merged,
-        }),
-        MergeOutcome::Conflict(local) => Ok(MergeCommandResult {
-            outcome: "conflict".to_string(),
-            merged_content: local,
-        }),
+        MergeOutcome::Clean(merged) => {
+            let is_md = canonical
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+
+            // D-12 / BUG-05.1: record write_ignore BEFORE the disk write so
+            // the watcher's resulting modify event gets suppressed. Without
+            // this the watcher path + the inline dispatch below would both
+            // fire UpdateLinks for the same content — harmless but noisy.
+            if let Ok(mut list) = state.write_ignore.lock() {
+                list.record(canonical.clone());
+            }
+
+            let bytes = merged.as_bytes();
+            std::fs::write(&canonical, bytes).map_err(|e| match e.kind() {
+                std::io::ErrorKind::PermissionDenied => {
+                    crate::error::VaultError::PermissionDenied { path: path.clone() }
+                }
+                std::io::ErrorKind::StorageFull => crate::error::VaultError::DiskFull,
+                _ => crate::error::VaultError::Io(e),
+            })?;
+
+            // Index dispatch — write_ignore suppresses the watcher, so we
+            // dispatch LinkGraph + TagIndex + Tantivy updates ourselves.
+            if is_md {
+                crate::commands::index_dispatch::dispatch_self_write(
+                    state,
+                    &canonical,
+                    &merged,
+                )
+                .await;
+            }
+
+            // #196 parity: re-embed the merged content (non-blocking).
+            #[cfg(feature = "embeddings")]
+            if is_md {
+                crate::commands::files::dispatch_embed_update(
+                    state,
+                    canonical.clone(),
+                    &merged,
+                );
+            }
+
+            let new_hash = crate::hash::hash_bytes(bytes);
+
+            Ok(MergeCommandResult {
+                outcome: "clean".to_string(),
+                merged_content: merged,
+                new_hash: Some(new_hash),
+            })
+        }
+        MergeOutcome::Conflict(local) => {
+            // No disk write, no dispatch. The watcher already dispatched
+            // UpdateLinks/UpdateTags for the external content when the
+            // event fired; the local buffer doesn't live on disk until the
+            // user resolves the conflict with a later save (which goes
+            // through `write_file` and dispatches its own updates). If the
+            // watcher dropped its dispatch via channel overflow (#139),
+            // the graph is transiently stale here — that's #139's territory,
+            // not this fix's.
+            Ok(MergeCommandResult {
+                outcome: "conflict".to_string(),
+                merged_content: local,
+                new_hash: None,
+            })
+        }
     }
 }
+
 
 // ─── #201 PR-B: reindex IPC ──────────────────────────────────────────────────
 
