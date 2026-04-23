@@ -126,6 +126,18 @@ pub async fn search_fulltext(
             .map_err(|_| VaultError::IndexCorrupt)?;
     snippet_gen.set_max_num_chars(200);
 
+    // #345: snapshot the locked roots once for the whole result-set
+    // sweep. Docs for now-locked paths may still exist in Tantivy when
+    // a folder was locked after indexing; filter at read time.
+    let locked_snapshot = state.locked_paths.snapshot().unwrap_or_default();
+    let path_is_locked = |p: &std::path::Path| {
+        if locked_snapshot.is_empty() {
+            return false;
+        }
+        let canon = crate::encryption::CanonicalPath::assume_canonical(p.to_path_buf());
+        state.locked_paths.is_locked(&canon)
+    };
+
     // Collect results.
     let mut results = Vec::with_capacity(top_docs.len());
     for (score, doc_address) in top_docs {
@@ -138,6 +150,11 @@ pub async fn search_fulltext(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        // Drop hits under a currently-locked root.
+        if !path.is_empty() && path_is_locked(std::path::Path::new(&path)) {
+            continue;
+        }
 
         let title = doc
             .get_first(title_field)
@@ -198,7 +215,7 @@ pub async fn search_filename(
     };
 
     // Gather paths + per-file aliases in a single lock hold.
-    let (paths, file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
+    let (mut paths, mut file_aliases): (Vec<String>, Vec<(String, Vec<String>)>) = {
         let fi = file_index_arc
             .read()
             .map_err(|_| VaultError::IndexCorrupt)?;
@@ -210,6 +227,44 @@ pub async fn search_filename(
             .collect();
         (paths, aliases)
     };
+
+    // #345: strip locked-folder paths + aliases before fuzzy-scoring.
+    // Precomputed rel-prefix checker short-circuits in the common
+    // "no encrypted folders" case at zero cost.
+    let locked_prefixes: Vec<String> = {
+        let snap = state.locked_paths.snapshot().unwrap_or_default();
+        if snap.is_empty() {
+            Vec::new()
+        } else {
+            let vault = match state.current_vault.lock() {
+                Ok(g) => g.clone(),
+                Err(_) => None,
+            };
+            match vault {
+                Some(root) => snap
+                    .into_iter()
+                    .filter_map(|p| {
+                        p.strip_prefix(&root)
+                            .ok()
+                            .map(|r| r.to_string_lossy().replace('\\', "/"))
+                    })
+                    .collect(),
+                None => Vec::new(),
+            }
+        }
+    };
+    if !locked_prefixes.is_empty() {
+        let is_rel_locked = |rel: &str| -> bool {
+            locked_prefixes.iter().any(|root| {
+                rel == root
+                    || rel
+                        .strip_prefix(root)
+                        .is_some_and(|tail| tail.starts_with('/'))
+            })
+        };
+        paths.retain(|p| !is_rel_locked(p));
+        file_aliases.retain(|(p, _)| !is_rel_locked(p));
+    }
 
     // Build nucleo pattern with special syntax support.
     let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);

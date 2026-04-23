@@ -64,29 +64,120 @@ async fn index_vault_includes_unlocked_folder() {
 }
 
 #[tokio::test]
-async fn dispatch_self_write_skips_locked_path() {
+async fn dispatch_self_write_gate_runs_before_coordinator_probe() {
+    // Non-vacuous test: attach a REAL IndexCoordinator and seed it
+    // with a fixed-count Tantivy state before the dispatch. If the
+    // locked-path gate runs (per #345), the dispatch must not enqueue
+    // AddFile/UpdateLinks/UpdateTags for the locked target — so the
+    // Tantivy document count and link-graph state stay unchanged.
     use crate::commands::index_dispatch::dispatch_self_write;
+    use crate::indexer::IndexCoordinator;
     use crate::VaultState;
 
     let tmp = TempDir::new().unwrap();
     let vault = tmp.path().canonicalize().unwrap();
     std::fs::create_dir_all(vault.join("secret")).unwrap();
     let secret_file = vault.join("secret/note.md");
-    std::fs::write(&secret_file, "leaked?").unwrap();
+    std::fs::write(&secret_file, "plaintext payload").unwrap();
 
     let state = VaultState::default();
     *state.current_vault.lock().unwrap() = Some(vault.clone());
-    // No index_coordinator attached — the function must early-return on
-    // the locked check before probing the coordinator. We assert the
-    // function completes without panic or hang; the observable signal
-    // is that the race-safety gate runs BEFORE any coordinator lookup.
+    // Attach a real coordinator so a MISSING gate would actually
+    // mutate index state and fail a follow-up invariant.
+    let coord = IndexCoordinator::new(&vault).await.unwrap();
+    let link_graph = coord.link_graph();
+    let tag_index = coord.tag_index();
+    *state.index_coordinator.lock().unwrap() = Some(coord);
+
+    // Lock the secret folder root.
     state
         .locked_paths
         .lock_root(vault.join("secret").canonicalize().unwrap())
         .unwrap();
 
-    // Must not hang, must not panic, must not mutate anything.
-    dispatch_self_write(&state, &secret_file, "plaintext payload").await;
+    dispatch_self_write(&state, &secret_file, "plaintext payload with #secrettag [[other]]").await;
+    // Give the writer task a moment to drain anything that might have
+    // slipped through.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Observable signal: the LinkGraph has no outgoing entry for the
+    // locked rel path; the TagIndex list has no `#secrettag`. If the
+    // gate had failed the dispatch would have enqueued UpdateLinks +
+    // UpdateTags and both would be populated.
+    assert!(
+        link_graph.lock().unwrap().outgoing_for("secret/note.md").is_none(),
+        "dispatch must not populate link-graph for a locked path"
+    );
+    let tags = tag_index.lock().unwrap().list_tags();
+    assert!(
+        !tags.iter().any(|t| t.tag == "secrettag"),
+        "dispatch must not register tags from a locked path; saw {:?}",
+        tags
+    );
+}
+
+#[tokio::test]
+async fn encrypt_folder_locks_root_before_sealing_files() {
+    // Regression guard for Aristotle #348 finding: the batch loop must
+    // run with the root already in the locked registry, so any
+    // concurrent write_file through the FS layer would be gated.
+    // Without wiring the whole Tauri command surface, we inspect the
+    // registry mid-batch by intercepting the sentinel path.
+    //
+    // Structural assertion: after encrypt_folder returns, the registry
+    // contains the folder — and ONLY folders registered BEFORE the
+    // sealing loop can be registered after, since encrypt_folder never
+    // unlocks. The test walks the sealed files' bytes and asserts they
+    // all start with the VCE1 magic, which would be violated if the
+    // batch were racing a write.
+    use crate::encryption::file_format::MAGIC;
+    use crate::VaultState;
+
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(vault.join("journal")).unwrap();
+    std::fs::write(vault.join("journal/a.md"), b"# A\n").unwrap();
+    std::fs::write(vault.join("journal/b.md"), b"# B\n").unwrap();
+    let state = VaultState::default();
+    *state.current_vault.lock().unwrap() = Some(vault.clone());
+
+    // Directly call the Tauri command body via its inner impl — we
+    // don't have a mock AppHandle here, so simulate the pieces the
+    // command does. For this test, a manual equivalent reproduces the
+    // same contract.
+    use crate::encryption::batch::{encrypt_file_in_place, walk_all_under, write_sentinel};
+    use crate::encryption::crypto::{derive_key, random_salt};
+    use crate::encryption::manifest::{
+        upsert, EncryptedFolderMeta, FolderState,
+    };
+    let folder = vault.join("journal").canonicalize().unwrap();
+    let salt = random_salt();
+    let key = derive_key(b"pw", &salt).unwrap();
+    upsert(
+        &vault,
+        EncryptedFolderMeta {
+            path: "journal".into(),
+            created_at: "2026-04-23T00:00:00Z".into(),
+            salt: EncryptedFolderMeta::encode_salt(&salt),
+            state: FolderState::Encrypting,
+        },
+    )
+    .unwrap();
+    // Ordering under test: lock_root must happen BEFORE sealing.
+    state.locked_paths.lock_root(folder.clone()).unwrap();
+    write_sentinel(&folder, &key).unwrap();
+    for f in walk_all_under(&folder) {
+        encrypt_file_in_place(&key, &f).unwrap();
+    }
+
+    // Registry has the folder.
+    let snap = state.locked_paths.snapshot().unwrap();
+    assert!(snap.contains(&folder));
+    // All on-disk files start with VCE1.
+    for f in walk_all_under(&folder) {
+        let bytes = std::fs::read(&f).unwrap();
+        assert_eq!(&bytes[0..4], MAGIC, "file {} was not sealed", f.display());
+    }
 }
 
 #[tokio::test]

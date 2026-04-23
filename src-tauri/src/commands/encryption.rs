@@ -214,6 +214,15 @@ pub async fn encrypt_folder(
     };
     upsert(&vault_root, meta_encrypting.clone())?;
 
+    // #345 race fix: lock the root BEFORE touching any file so a
+    // concurrent `write_file` through the IPC layer cannot overwrite
+    // ciphertext with plaintext during the batch. The batch itself
+    // bypasses the `ensure_unlocked` gate because it calls
+    // `encrypt_file_in_place` (which uses `fs::read` + `write_atomic`
+    // directly, NOT `commands/files.rs::write_file`). External IPC
+    // writes are blocked by the gate; the batch proceeds on disk.
+    state.locked_paths.lock_root(folder_canon.clone())?;
+
     // Write the sentinel so unlock has something to probe.
     write_sentinel(&folder_canon, &key)?;
 
@@ -252,10 +261,6 @@ pub async fn encrypt_folder(
     };
     upsert(&vault_root, meta_final)?;
 
-    // Register as locked. Do NOT leave it unlocked after encrypt — the
-    // user re-enters the password to gain access. Matches "no
-    // persistence of unlocked state across restart".
-    state.locked_paths.lock_root(folder_canon.clone())?;
     // Evict any in-memory key for this root (there should be none).
     let _ = state.keyring.remove(&folder_canon);
 
@@ -294,12 +299,14 @@ pub async fn unlock_folder(
     // `VaultError::WrongPassword` here (remapped inside verify_sentinel).
     verify_sentinel(&folder_canon, &key)?;
 
-    // Release the registry lock FIRST, then stash the key. Any read
-    // that races and wins against is_locked will see the folder
-    // unlocked but no key yet — decrypt fails cleanly, user retries.
-    // We do the reverse on lock.
-    state.locked_paths.unlock_root(&folder_canon)?;
+    // Stash the key FIRST, then release the registry lock. Order
+    // matters: a reader that races between the two operations must
+    // never see "unlocked=true, no key in keyring" — that window would
+    // produce spurious decrypt failures on the happy path. With this
+    // ordering every reader that observes `is_locked=false` is
+    // guaranteed to find a key in the keyring too.
     state.keyring.insert(folder_canon.clone(), key)?;
+    state.locked_paths.unlock_root(&folder_canon)?;
 
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())

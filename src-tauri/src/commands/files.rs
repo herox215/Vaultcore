@@ -27,6 +27,7 @@ use crate::indexer::walk_md_files;
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// #345: refuse a path that sits inside a currently-locked encrypted
 /// folder. Every FS mutation / read entry point calls this after
@@ -427,9 +428,16 @@ pub async fn rename_file_impl(state: &VaultState, old_path: String, new_name: St
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
+    // #345: scan only unlocked .md files. A locked file contains VCE1
+    // ciphertext — reading its bytes through regex would produce junk
+    // matches and leak structure. The walker is given a skip predicate
+    // consulting the shared registry.
+    let skip_registry = Arc::clone(&state.locked_paths);
     let mut link_count: u32 = 0;
-    for md_path in walk_md_files(&vault_root) {
-        // Skip the file being renamed itself
+    for md_path in crate::indexer::walk_md_files_skipping(&vault_root, move |p| {
+        let canon = CanonicalPath::assume_canonical(p.to_path_buf());
+        skip_registry.is_locked(&canon)
+    }) {
         if md_path == canonical_old {
             continue;
         }
@@ -889,8 +897,14 @@ pub fn count_wiki_links_impl(state: &VaultState, filename: String) -> Result<u32
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
+    // #345: count only unlocked .md files — see rename_file_impl for
+    // rationale. Walker consults the shared registry.
+    let skip_registry = Arc::clone(&state.locked_paths);
     let mut total: u32 = 0;
-    for md_path in walk_md_files(&vault_root) {
+    for md_path in crate::indexer::walk_md_files_skipping(&vault_root, move |p| {
+        let canon = CanonicalPath::assume_canonical(p.to_path_buf());
+        skip_registry.is_locked(&canon)
+    }) {
         if let Ok(contents) = std::fs::read_to_string(&md_path) {
             total += re.find_iter(&contents).count() as u32;
         }
