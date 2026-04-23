@@ -402,20 +402,31 @@ pub(crate) fn format_iso8601_utc(epoch_secs: i64) -> String {
 
 /// Result returned by the merge_external_change command.
 ///
-/// `new_hash` is `Some(...)` on "clean" — the backend has written the merged
-/// bytes to disk and the returned hash is SHA-256 of `merged_content` (matches
-/// `hash_bytes` / the value `write_file` returns, so callers can align
-/// `lastSavedHash` without hashing client-side). `None` on "conflict" — the
-/// backend did not write; disk still holds the external content and the
-/// caller keeps the local buffer (issue #339).
+/// Tagged enum: `outcome` discriminates, and each variant carries exactly
+/// the payload that makes sense for it. Clean always has a `new_hash` (the
+/// backend wrote the merged bytes to disk); Conflict never does (the
+/// backend left disk untouched). Serialized shape:
+///
+/// - `{ "outcome": "clean",    "merged_content": "...", "new_hash": "..." }`
+/// - `{ "outcome": "conflict", "merged_content": "..." }`
+///
+/// The frontend consumer in `externalChangeHandler.ts` narrows on
+/// `outcome` before reading variant-specific fields.
 #[derive(Serialize, Clone, Debug)]
-pub struct MergeCommandResult {
-    /// "clean" or "conflict"
-    pub outcome: String,
-    /// The merged content (for "clean") or the original local content (for "conflict")
-    pub merged_content: String,
-    /// SHA-256 hex of the merged bytes written to disk. `None` on conflict.
-    pub new_hash: Option<String>,
+#[serde(tag = "outcome", rename_all = "lowercase")]
+pub enum MergeCommandResult {
+    /// Three-way merge produced a non-conflicting result. The backend has
+    /// written `merged_content` to disk; `new_hash` is SHA-256 of those
+    /// bytes (matches `hash_bytes` / the value `write_file` returns, so
+    /// callers can align `lastSavedHash` without hashing client-side).
+    Clean {
+        merged_content: String,
+        new_hash: String,
+    },
+    /// Merge could not be resolved without overlap. Backend did NOT write.
+    /// `merged_content` here is the local (editor) content — the caller
+    /// keeps it and lets the next autosave write through deliberately.
+    Conflict { merged_content: String },
 }
 
 /// Perform a three-way merge for an external file change.
@@ -530,10 +541,9 @@ pub(crate) async fn merge_external_change_impl(
 
             let new_hash = crate::hash::hash_bytes(bytes);
 
-            Ok(MergeCommandResult {
-                outcome: "clean".to_string(),
+            Ok(MergeCommandResult::Clean {
                 merged_content: merged,
-                new_hash: Some(new_hash),
+                new_hash,
             })
         }
         MergeOutcome::Conflict(local) => {
@@ -545,10 +555,8 @@ pub(crate) async fn merge_external_change_impl(
             // watcher dropped its dispatch via channel overflow (#139),
             // the graph is transiently stale here — that's #139's territory,
             // not this fix's.
-            Ok(MergeCommandResult {
-                outcome: "conflict".to_string(),
+            Ok(MergeCommandResult::Conflict {
                 merged_content: local,
-                new_hash: None,
             })
         }
     }

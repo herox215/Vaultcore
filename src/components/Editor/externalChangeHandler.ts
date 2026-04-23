@@ -12,17 +12,17 @@
 // `WriteIgnoreList` TTL on slow saves; the byte-identical shortcut collapses
 // that case to a hash-sync with no user-visible toast.
 
+export type MergeRpcResult =
+  | { outcome: "clean"; merged_content: string; new_hash: string }
+  | { outcome: "conflict"; merged_content: string };
+
 export interface ExternalModifyDeps {
   getFileHash: (path: string) => Promise<string>;
   mergeExternalChange: (
     path: string,
     local: string,
     base: string,
-  ) => Promise<{
-    outcome: "clean" | "conflict";
-    merged_content: string;
-    new_hash: string | null;
-  }>;
+  ) => Promise<MergeRpcResult>;
   /** SHA-256 hex of the given UTF-8 string. Injected so tests can stub it. */
   sha256Hex: (s: string) => Promise<string>;
 }
@@ -78,18 +78,15 @@ export async function decideExternalModifyAction(
   );
 
   if (result.outcome === "clean") {
-    // Prefer the backend's `new_hash` (#339): the backend just wrote the
-    // merged bytes, so its hash is the authoritative next-disk-state. The
-    // `diskHash` computed before the merge call reflects the PRE-merge
-    // external content and is stale by the time we get here. Fall back to
-    // hashing the merged content on the rare path where `new_hash` is
-    // missing (older backend).
-    const mergedHash =
-      result.new_hash ?? (await deps.sha256Hex(result.merged_content));
+    // The backend just wrote the merged bytes, so its `new_hash` is the
+    // authoritative next-disk-state. The `diskHash` computed before the
+    // merge call reflects the PRE-merge external content and is stale by
+    // the time we get here — always prefer new_hash. The tagged union
+    // guarantees new_hash exists on this branch.
     return {
       kind: "clean-merge",
       mergedContent: result.merged_content,
-      diskHash: mergedHash,
+      diskHash: result.new_hash,
     };
   }
   return { kind: "conflict", diskHash };

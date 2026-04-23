@@ -701,11 +701,14 @@
             });
           }
 
-          // Align lastSavedHash with the hash the backend just wrote (clean)
-          // or leave disk-as-is on conflict (user keeps local buffer; next
-          // autosave hits the hash-matches branch and writes through).
+          // On clean the backend just wrote; new_hash is the authoritative
+          // next-disk-state. On conflict the backend did NOT write — hash
+          // the merged (== local) content so the next autosave doesn't
+          // re-enter merge against a stale expected hash.
           const newHash =
-            result.new_hash ?? (await sha256Hex(result.merged_content));
+            result.outcome === "clean"
+              ? result.new_hash
+              : await sha256Hex(result.merged_content);
           editorStore.setLastSavedHash(newHash);
           tabStore.setLastSavedHash(tabId, newHash);
           tabStore.setLastSavedContent(tabId, result.merged_content);

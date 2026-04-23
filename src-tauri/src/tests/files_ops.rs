@@ -122,13 +122,15 @@ fn rename_file_counts_wiki_links() {
 }
 
 // Test 7: delete_file moves to .trash/, auto-creates .trash/, original gone
-#[test]
-fn delete_file_moves_to_trash_and_removes_original() {
+#[tokio::test]
+async fn delete_file_moves_to_trash_and_removes_original() {
     let dir = tempdir().unwrap();
     let state = state_with_vault(dir.path());
     let file_path = dir.path().join("deleteme.md");
     fs::write(&file_path, "content").unwrap();
-    delete_file_impl(&state, file_path.to_string_lossy().into_owned()).unwrap();
+    delete_file_impl(&state, file_path.to_string_lossy().into_owned())
+        .await
+        .unwrap();
     // Original should be gone
     assert!(!file_path.exists(), "Original file should be gone");
     // .trash/ should be created
@@ -140,8 +142,8 @@ fn delete_file_moves_to_trash_and_removes_original() {
 }
 
 // Test 8: delete_file collision in .trash/ auto-suffixes
-#[test]
-fn delete_file_collision_in_trash_auto_suffixes() {
+#[tokio::test]
+async fn delete_file_collision_in_trash_auto_suffixes() {
     let dir = tempdir().unwrap();
     let state = state_with_vault(dir.path());
     // Pre-populate .trash/ with a file of the same name
@@ -151,7 +153,9 @@ fn delete_file_collision_in_trash_auto_suffixes() {
     // Now delete a file with the same name
     let file_path = dir.path().join("note.md");
     fs::write(&file_path, "new content").unwrap();
-    delete_file_impl(&state, file_path.to_string_lossy().into_owned()).unwrap();
+    delete_file_impl(&state, file_path.to_string_lossy().into_owned())
+        .await
+        .unwrap();
     // Should create "note 1.md" in .trash/
     let suffixed = trash_dir.join("note 1.md");
     assert!(suffixed.exists(), "note 1.md should be created in .trash/ on collision");

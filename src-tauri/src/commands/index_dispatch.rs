@@ -11,10 +11,18 @@
 // command (write_file, merge_external_change on clean, delete_file,
 // rename_file, move_file, update_links_after_rename) routes through here.
 //
-// Best-effort contract: when the IndexCoordinator isn't attached (vault not
-// open / boot race) or the channel is full, we silently drop and let the
-// next cold-start rebuild repopulate. Disk-level failures stay with the
-// caller — we only dispatch after the caller has already succeeded on disk.
+// Contract:
+// - When the IndexCoordinator isn't attached (vault not open / boot race),
+//   we silently no-op and let the next cold-start rebuild repopulate.
+// - When the coordinator IS attached, each `tx.send().await` applies async
+//   backpressure and blocks until the writer task accepts the command.
+//   The IPC thread is the right place to block (unlike the notify callback,
+//   which can't); the 8192-slot channel (#139) keeps bursts bounded.
+// - Send errors (writer task gone) are ignored — same observable effect as
+//   the no-coordinator case. The caller's disk write has already succeeded;
+//   the index trails until the next rebuild.
+// - Disk-level failures stay with the caller — we only dispatch after the
+//   caller has already succeeded on disk.
 
 use std::path::Path;
 

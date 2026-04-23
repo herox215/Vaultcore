@@ -3,11 +3,9 @@
 // and dispatches UpdateLinks / UpdateTags / Tantivy AddFile + Commit so
 // the in-memory indexes never trail the on-disk state.
 //
-// These tests drive a `_impl` mirror of the command body (see the note in
-// tests/files.rs:16-20 — tauri::State cannot be constructed outside a
-// running Tauri app). The mirror here reflects the CURRENT command body;
-// Phase 2 of the ticket replaces it with a call into a real `_impl`
-// helper in commands/vault.rs. Until then these tests are red.
+// Tests drive `merge_external_change_impl` in commands/vault.rs directly
+// (tauri::State can't be constructed outside a running Tauri app, see
+// tests/files.rs:16-20 for the convention).
 
 #![cfg(test)]
 #![allow(clippy::await_holding_lock)]
@@ -112,7 +110,24 @@ async fn wait_for<F: Fn() -> bool>(desc: &str, cond: F) {
 
 // Tests drive the real `_impl` in commands/vault.rs directly — no mirror
 // needed because merge_external_change_impl is `pub(crate)`.
-use crate::commands::vault::merge_external_change_impl;
+use crate::commands::vault::{merge_external_change_impl, MergeCommandResult};
+
+/// Destructure `MergeCommandResult` into flat `(outcome, merged_content,
+/// new_hash)` triples so tests can assert without repeating a match at
+/// every call site. The tagged enum is the source of truth on the
+/// production side (see `commands/vault.rs::MergeCommandResult`); this
+/// helper just saves boilerplate.
+fn parts(r: &MergeCommandResult) -> (&'static str, &str, Option<&str>) {
+    match r {
+        MergeCommandResult::Clean {
+            merged_content,
+            new_hash,
+        } => ("clean", merged_content.as_str(), Some(new_hash.as_str())),
+        MergeCommandResult::Conflict { merged_content } => {
+            ("conflict", merged_content.as_str(), None)
+        }
+    }
+}
 
 // ─── Test 1: add link ────────────────────────────────────────────────────────
 
@@ -143,8 +158,9 @@ fn merge_clean_external_add_links_refreshes_backlinks() {
         .await
         .expect("merge ok");
 
-        assert_eq!(result.outcome, "clean");
-        assert_eq!(result.merged_content, external);
+        let (outcome, merged, _) = parts(&result);
+        assert_eq!(outcome, "clean");
+        assert_eq!(merged, external);
 
         drain(&state).await;
 
@@ -197,7 +213,7 @@ fn merge_clean_external_remove_link_shrinks_backlinks() {
         .await
         .expect("merge ok");
 
-        assert_eq!(result.outcome, "clean");
+        assert_eq!(parts(&result).0, "clean");
 
         drain(&state).await;
 
@@ -345,11 +361,12 @@ fn merge_clean_writes_merged_bytes_to_disk() {
         .await
         .expect("merge ok");
 
-        assert_eq!(result.outcome, "clean");
+        let (outcome, merged, _) = parts(&result);
+        assert_eq!(outcome, "clean");
 
         let on_disk = std::fs::read_to_string(&b_abs).unwrap();
         assert_eq!(
-            on_disk, result.merged_content,
+            on_disk, merged,
             "disk must match merged_content after authoritative write",
         );
     });
@@ -410,9 +427,10 @@ fn merge_clean_returns_hash_of_merged_content() {
         .await
         .expect("merge ok");
 
-        let expected = crate::hash::hash_bytes(result.merged_content.as_bytes());
+        let (_, merged, new_hash) = parts(&result);
+        let expected = crate::hash::hash_bytes(merged.as_bytes());
         assert_eq!(
-            result.new_hash.as_deref(),
+            new_hash,
             Some(expected.as_str()),
             "new_hash must equal SHA-256 of merged_content on clean",
         );
@@ -507,10 +525,11 @@ fn merge_conflict_keeps_local_and_skips_disk_write_and_dispatch() {
         .await
         .expect("merge ok");
 
-        assert_eq!(result.outcome, "conflict");
-        assert_eq!(result.merged_content, editor);
+        let (outcome, merged, new_hash) = parts(&result);
+        assert_eq!(outcome, "conflict");
+        assert_eq!(merged, editor);
         assert!(
-            result.new_hash.is_none(),
+            new_hash.is_none(),
             "new_hash must be None on conflict — backend did not write",
         );
 
@@ -555,7 +574,7 @@ fn merge_non_md_file_does_not_dispatch_index() {
         .await
         .expect("merge ok");
 
-        assert_eq!(result.outcome, "clean");
+        assert_eq!(parts(&result).0, "clean");
 
         drain(&state).await;
 
@@ -600,79 +619,119 @@ fn merge_outside_vault_returns_permission_denied_and_does_not_dispatch() {
     });
 }
 
-// ─── Test 12 (bis): delete refreshes backlinks + tags ───────────────────────
+// ─── Test 12 (bis): delete evicts the deleted file from LinkGraph + TagIndex ─
 
 #[test]
-fn delete_refreshes_backlinks_and_tags() {
+fn delete_evicts_deleted_file_from_link_graph_and_tag_index() {
     // Covers the #339 audit gap: before the fix, delete_file recorded
     // write_ignore and moved the file to .trash but never dispatched
     // RemoveLinks / RemoveTags, leaving the graphs stale.
+    //
+    // Drives `delete_file_impl` directly — dispatch lives inside `_impl`
+    // (see commands/files.rs::delete_file_impl), so this test covers the
+    // exact production contract the tauri wrapper exercises, not a
+    // side-channel of manually-chained helpers.
     tokio_test_block_on(async {
         let tmp = TempDir::new().unwrap();
         let vault = tmp.path();
-        let a_abs = write_md(vault, "A.md", "# A\n");
+        // A.md carries its own tags so we can assert both link-graph AND
+        // tag-index eviction for the deleted file.
+        let a_abs = write_md(vault, "A.md", "# A\n[[B]]\n#alpha\n#shared\n");
         write_md(vault, "B.md", "[[A]]\n#shared\n");
 
         let state = state_with_vault_and_coord(vault).await;
 
-        // Precondition: the graphs reflect the seed.
+        // Precondition: indexes reflect the seeded content. Without this
+        // the post-delete assertions could pass trivially on an empty
+        // graph. We assert every piece the fix is supposed to evict.
         {
             let coord_guard = state.index_coordinator.lock().unwrap();
             let coord = coord_guard.as_ref().unwrap();
             let lg = coord.link_graph();
             let ti = coord.tag_index();
+
+            let lg_guard = lg.lock().unwrap();
             assert!(
-                lg.lock()
-                    .unwrap()
-                    .outgoing_for("B.md")
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|l| l.target_raw == "A"),
-                "B.md must link to A pre-delete",
+                lg_guard.outgoing_for("A.md").is_some(),
+                "A.md must be a link-graph source pre-delete",
             );
+            drop(lg_guard);
+
+            let ti_guard = ti.lock().unwrap();
             assert!(
-                ti.lock()
-                    .unwrap()
-                    .tags_for_file("B.md")
-                    .iter()
-                    .any(|t| t == "shared"),
-                "B.md must have #shared pre-delete",
+                ti_guard.tags_for_file("A.md").iter().any(|t| t == "alpha"),
+                "A.md must carry #alpha pre-delete",
+            );
+            assert_eq!(
+                ti_guard
+                    .list_tags()
+                    .into_iter()
+                    .find(|u| u.tag == "shared")
+                    .map(|u| u.count)
+                    .unwrap_or(0),
+                2,
+                "#shared must be on both files pre-delete",
             );
         }
 
-        // Drive delete via the command body (the tauri wrapper needs an
-        // AppHandle we can't synthesize cleanly). `delete_file_impl` + the
-        // explicit dispatch mirror what `delete_file` does, exactly as the
-        // files.rs `_impl` convention prescribes.
+        // Drive the real production contract: delete_file_impl performs
+        // the disk rename AND the index dispatch. If a future change
+        // removes the dispatch from _impl, the assertions below break.
         crate::commands::files::delete_file_impl(&state, a_abs.to_string_lossy().into_owned())
+            .await
             .expect("delete ok");
-        crate::commands::index_dispatch::dispatch_self_delete(&state, &a_abs).await;
 
         drain(&state).await;
 
         let coord_guard = state.index_coordinator.lock().unwrap();
         let coord = coord_guard.as_ref().unwrap();
         let lg = coord.link_graph();
-        let fi = coord.file_index();
+        let ti = coord.tag_index();
 
-        // A.md is gone from outgoing (source was deleted).
+        // A.md evicted from LinkGraph: no outgoing, no tag entries.
         wait_for("A.md dropped from link graph", || {
-            let lg_guard = lg.lock().unwrap();
-            lg_guard.outgoing_for("A.md").is_none()
+            lg.lock().unwrap().outgoing_for("A.md").is_none()
+        })
+        .await;
+        wait_for("A.md dropped from tag index", || {
+            ti.lock().unwrap().tags_for_file("A.md").is_empty()
         })
         .await;
 
-        // B.md's [[A]] link becomes unresolved (A no longer exists).
+        // Global tag counts shrink: #alpha is gone entirely, #shared drops to 1.
+        let ti_guard = ti.lock().unwrap();
+        assert!(
+            !ti_guard.list_tags().iter().any(|u| u.tag == "alpha"),
+            "#alpha should be gone from the global list",
+        );
+        assert_eq!(
+            ti_guard
+                .list_tags()
+                .into_iter()
+                .find(|u| u.tag == "shared")
+                .map(|u| u.count)
+                .unwrap_or(0),
+            1,
+            "#shared count must drop to 1 (only B.md remains)",
+        );
+
+        // Incoming edge from B.md → A.md is still present in LinkGraph,
+        // because RemoveLinks only evicts A as a SOURCE. Re-resolving
+        // every file that pointed at A is a separate responsibility
+        // (cascade re-resolution on delete) and isn't what #339 fixes —
+        // we assert the incoming-edge shape here to lock the CURRENT
+        // contract in place, so a future cascade-resolution change
+        // deliberately breaks this assertion and forces a re-read.
         let lg_guard = lg.lock().unwrap();
-        let fi_guard = fi.read().unwrap();
-        let a_backlinks = lg_guard.get_backlinks("A.md", &fi_guard);
-        // Backlinks list may still contain B.md (it points at the now-
-        // missing target). What matters is that nothing falsely claims
-        // the deleted file still has outgoing links.
-        // The critical assertion: outgoing_for(A) is None after dispatch.
-        drop(lg_guard);
-        drop(fi_guard);
-        let _ = a_backlinks; // touched for clarity
+        let incoming = lg_guard
+            .incoming_for("A.md")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            incoming.iter().any(|src| src == "B.md"),
+            "B.md's [[A]] edge is expected to remain in LinkGraph after A's deletion \
+             (cascade re-resolution is out of #339 scope); got incoming = {incoming:?}",
+        );
     });
 }
 
@@ -698,10 +757,10 @@ fn merge_channel_absent_does_not_error() {
         )
         .await;
 
-        // Must succeed even with no coordinator — dispatches are best-effort
-        // and silently drop.
+        // Must succeed even with no coordinator — dispatches no-op when
+        // the coordinator isn't attached (see dispatch_self_write contract).
         assert!(result.is_ok(), "merge must not error without a coordinator");
         let r = result.unwrap();
-        assert_eq!(r.outcome, "clean");
+        assert_eq!(parts(&r).0, "clean");
     });
 }
