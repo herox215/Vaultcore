@@ -46,3 +46,13 @@ VaultCore_MVP_Spezifikation_v3.md
 CLAUDE.md
 AGENTS.md
 .claude*
+
+# …except project-shared agent config that belongs in the repo
+!CLAUDE.md
+!.claude/
+.claude/*
+!.claude/agents/
+.claude/agents/*
+!.claude/agents/socrates.md
+!.claude/agents/aristotle.md
+!.claude/agents/vitruvius.md
