@@ -89,9 +89,12 @@ pub fn encrypt_bytes(
 }
 
 /// AEAD-decrypt `ciphertext_and_tag` with `key` + the matching `nonce`.
-/// A tag mismatch — whether from tampered bytes or a wrong key — comes
-/// back as `VaultError::WrongPassword` so the caller does not need to
-/// distinguish; both cases are "key does not decrypt this blob".
+/// A tag mismatch returns `VaultError::CryptoError { msg: "aead tag …" }`
+/// — this layer has no way to know whether the caller is probing a
+/// password (→ should be remapped to `WrongPassword`) or decrypting a
+/// content file (→ stay as `CryptoError` so UX can say "this file looks
+/// corrupt"). The sentinel-probe path in `batch::verify_sentinel` does
+/// the remap; content-read paths leave it as-is.
 pub fn decrypt_bytes(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
@@ -100,7 +103,9 @@ pub fn decrypt_bytes(
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     cipher
         .decrypt(XNonce::from_slice(nonce), ciphertext_and_tag)
-        .map_err(|_| VaultError::WrongPassword)
+        .map_err(|e| VaultError::CryptoError {
+            msg: format!("aead decrypt failed: {e}"),
+        })
 }
 
 #[cfg(test)]
@@ -118,13 +123,16 @@ mod tests {
     }
 
     #[test]
-    fn wrong_password_returns_wrong_password_error() {
+    fn wrong_key_returns_crypto_error() {
+        // AEAD-layer failure stays as CryptoError. The sentinel probe in
+        // `batch::verify_sentinel` is the layer that remaps this to
+        // `WrongPassword` for the unlock flow.
         let key_a = derive_key(b"right", b"saltsaltsaltsalt").unwrap();
         let key_b = derive_key(b"wrong", b"saltsaltsaltsalt").unwrap();
         let nonce = random_nonce();
         let ct = encrypt_bytes(&key_a, &nonce, b"secret").unwrap();
         let err = decrypt_bytes(&key_b, &nonce, &ct).unwrap_err();
-        assert!(matches!(err, VaultError::WrongPassword));
+        assert!(matches!(err, VaultError::CryptoError { .. }));
     }
 
     #[test]
@@ -135,7 +143,7 @@ mod tests {
         // Flip one byte in the body.
         ct[0] ^= 0x01;
         let err = decrypt_bytes(&key, &nonce, &ct).unwrap_err();
-        assert!(matches!(err, VaultError::WrongPassword));
+        assert!(matches!(err, VaultError::CryptoError { .. }));
     }
 
     #[test]

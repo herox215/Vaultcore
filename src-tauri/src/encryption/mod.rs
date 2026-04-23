@@ -1,9 +1,15 @@
 // #345 — per-folder encryption at rest.
 //
-// Obsidian-compat note: ciphertext .md files under an encrypted folder
-// are not readable by Obsidian, but the surrounding vault remains
+// Obsidian-compat note: ciphertext files under an encrypted folder are
+// not readable by Obsidian, but the surrounding vault remains
 // compatible. Users opt in per folder; the vault structure itself is
 // untouched.
+//
+// Encryption scope per folder: every regular file, not only `.md`.
+// Attachments (images pasted into notes, PDFs, CSV exports, canvas
+// files) are sealed together with the notes they belong to — otherwise
+// the "this folder is private" contract would silently leak through
+// the embedded-asset side door.
 //
 // Crypto choices are frozen — see `crypto.rs` for rationale. Changing
 // them requires a file-format magic bump (VCE1 → VCE2) and migration.
@@ -18,13 +24,18 @@
 //    existing commands/{vault,files,search,…}.rs convention; encryption/
 //    holds the domain primitives only.)
 
-pub mod batch;
-pub mod crypto;
-pub mod file_format;
-pub mod manifest;
-pub mod registry;
+pub(crate) mod batch;
+pub(crate) mod crypto;
+pub(crate) mod file_format;
+pub(crate) mod manifest;
+pub(crate) mod registry;
 
-pub use registry::{Keyring, LockedPathRegistry};
+// Public surface — kept intentionally narrow. PRs 1b/2/3 import only
+// the state primitives (registry types + newtype) and the sentinel
+// constants needed at module boundaries. Internal primitives like
+// `encrypt_bytes`, `frame`, and `random_nonce` stay crate-private to
+// prevent drift in future call sites.
+pub use registry::{CanonicalPath, Keyring, LockedPathRegistry};
 
 /// Name of the per-folder sentinel file that probes a candidate
 /// unlock-password. It starts with `.` so walk_md_files / list_directory

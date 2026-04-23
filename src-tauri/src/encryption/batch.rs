@@ -15,15 +15,27 @@ use crate::encryption::file_format::{frame, parse, write_atomic, MAGIC};
 use crate::encryption::{SENTINEL_FILENAME, SENTINEL_PLAINTEXT};
 use crate::error::VaultError;
 
-/// Iterate `.md` files strictly inside `root`. Used by the encrypt/unlock
-/// batch operations. Does not recurse into dot-prefixed dirs (e.g. the
-/// sidecar `.vaultcore/`) and skips the sentinel.
-pub fn walk_md_under(root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+/// Iterate every regular file strictly inside `root`. Used by the
+/// encrypt/unlock batch operations.
+///
+/// An encrypted folder must seal every file it contains, not just the
+/// `.md` notes — otherwise attachments (images pasted into notes, PDFs,
+/// excalidraw canvases, CSV exports) would stay plaintext with no
+/// warning, breaking the "folder is private" contract.
+///
+/// Skips:
+/// - dot-prefixed directories (`.vaultcore/` sidecar, `.trash/`, `.git/`)
+/// - dot-prefixed files (the sentinel `.vaultcore-folder-key-check`,
+///   any hidden platform metadata)
+/// - symlinks (`follow_links=false`), so a symlink into a locked folder
+///   cannot be used to exfiltrate plaintext through the walk.
+pub fn walk_all_under(root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
-            // Skip hidden dirs (e.g. .vaultcore, .trash, .git).
+            // Skip hidden dirs (e.g. .vaultcore, .trash, .git) and hidden
+            // files (e.g. the sentinel we write ourselves).
             e.depth() == 0
                 || !e
                     .file_name()
@@ -33,11 +45,6 @@ pub fn walk_md_under(root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
         .map(|e| e.into_path())
-        .filter(|p| {
-            p.extension()
-                .map(|ext| ext.eq_ignore_ascii_case("md"))
-                .unwrap_or(false)
-        })
 }
 
 /// Encrypt one plaintext file in place. Reads, seals, writes atomically.
@@ -85,7 +92,10 @@ pub fn write_sentinel(root: &Path, key: &[u8; KEY_LEN]) -> Result<(), VaultError
 }
 
 /// Returns `Ok(true)` if the sentinel decrypts cleanly, `Err(WrongPassword)`
-/// if AEAD tag fails, and an IO/crypto error for missing/corrupt files.
+/// on AEAD tag failure (remapped from the generic `CryptoError` that
+/// `decrypt_bytes` produces — this is the sentinel-probe layer, so a tag
+/// mismatch means the password was wrong), and `CryptoError` for missing
+/// or structurally-broken container files.
 pub fn verify_sentinel(root: &Path, key: &[u8; KEY_LEN]) -> Result<bool, VaultError> {
     let path = root.join(SENTINEL_FILENAME);
     let bytes = fs::read(&path).map_err(|e| match e.kind() {
@@ -98,8 +108,14 @@ pub fn verify_sentinel(root: &Path, key: &[u8; KEY_LEN]) -> Result<bool, VaultEr
         _ => VaultError::Io(e),
     })?;
     let (nonce, body) = parse(&bytes)?;
-    let pt = decrypt_bytes(key, &nonce, body)?;
-    Ok(pt == SENTINEL_PLAINTEXT)
+    match decrypt_bytes(key, &nonce, body) {
+        Ok(pt) => Ok(pt == SENTINEL_PLAINTEXT),
+        // Remap AEAD failure → WrongPassword because at the sentinel
+        // layer the caller (unlock flow) is probing a candidate key.
+        // A tag mismatch is always "bad password" here.
+        Err(VaultError::CryptoError { .. }) => Err(VaultError::WrongPassword),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -120,15 +136,22 @@ mod tests {
     }
 
     #[test]
-    fn walk_md_under_skips_non_md_and_hidden() {
+    fn walk_all_under_covers_attachments_skips_hidden() {
         let (_g, root) = sample_tree();
-        let mut files: Vec<_> = walk_md_under(&root)
+        let mut files: Vec<_> = walk_all_under(&root)
             .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
             .collect();
         files.sort();
+        // `note.txt` and `sub/b.md` must be in scope; hidden
+        // `.secret.md` must not. The walker is deliberately extension-
+        // agnostic so attachments don't fall out of encryption scope.
         assert_eq!(
             files,
-            vec![PathBuf::from("a.md"), PathBuf::from("sub/b.md")]
+            vec![
+                PathBuf::from("a.md"),
+                PathBuf::from("note.txt"),
+                PathBuf::from("sub/b.md"),
+            ]
         );
     }
 
@@ -136,7 +159,7 @@ mod tests {
     fn encrypt_then_decrypt_roundtrip_on_disk() {
         let (_g, root) = sample_tree();
         let key = derive_key(b"pw", b"saltsaltsaltsalt").unwrap();
-        for p in walk_md_under(&root) {
+        for p in walk_all_under(&root) {
             encrypt_file_in_place(&key, &p).unwrap();
         }
         // Each file now starts with VCE1 magic.
