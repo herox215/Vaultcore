@@ -44,6 +44,7 @@
     openEncryptModal,
     openUnlockModal,
   } from "../../store/encryptionModalStore";
+  import { disarmAutoLock } from "../../store/autoLockStore";
   import { lockFolder } from "../../ipc/commands";
   import type { FlatRow } from "../../lib/flattenTree";
 
@@ -577,6 +578,10 @@
             closeContextMenu();
             try {
               await lockFolder(row.path);
+              // #345: cancel the pending auto-lock timer for this
+              // root — manual lock wins, no need to fire the IPC
+              // again when the timer expires.
+              disarmAutoLock(row.relPath);
             } catch (e) {
               if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
               else toastStore.error("Failed to lock folder");

@@ -23,13 +23,10 @@
     disarmAutoLock,
     resetAutoLockStore,
   } from "../../store/autoLockStore";
-  import { encryptedFolders } from "../../store/encryptedFoldersStore";
-  import { listenEncryptedFoldersChanged } from "../../ipc/events";
   import {
     encryptFolder,
     unlockFolder,
   } from "../../ipc/commands";
-  import { listenEncryptProgress } from "../../ipc/events";
   import { vaultErrorCopy } from "../../types/errors";
   import { isVaultError } from "../../types/errors";
   import { tabStore } from "../../store/tabStore";
@@ -265,6 +262,10 @@
     unsubActiveTabReveal?.();
     document.removeEventListener("mousemove", handleMousemove);
     document.removeEventListener("mouseup", handleMouseup);
+    // #345: tear down timers + activity listeners + visibility
+    // listener so a subsequent mount starts clean (vault switch,
+    // HMR, etc.).
+    resetAutoLockStore();
   });
 
   function toggleSidebar() {
@@ -594,31 +595,16 @@
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
 
-    // #345: wire the auto-lock timer. Listeners attach once (idempotent
-    // under repeated mounts) and react to vault switches via the
-    // folders-changed event. `$vaultStore` is auto-subscribed by
-    // Svelte so we read the current path reactively instead of the
-    // non-existent `_snapshot` hook.
+    // #345: wire the auto-lock timer. Attach once; the store itself
+    // manages listener idempotency. Individual roots are armed from
+    // the unlock-success branch + disarmed from the manual-lock
+    // branch — NOT from `encrypted_folders_changed`, which cannot
+    // distinguish lock from unlock from encrypt and would otherwise
+    // re-arm timers on locked folders. `$vaultStore` drives the
+    // reactive vault-path update into the store.
     attachAutoLockListeners({
       vaultPath: $vaultStore.currentPath,
       target: document,
-    });
-    void listenEncryptedFoldersChanged(() => {
-      // When a folder's state flips, re-arm or disarm the matching
-      // timer. Iterate and ensure every unlocked root has a timer,
-      // every locked root has none. `state: "encrypting"` is a
-      // transient crash-resume marker, not locked — treat it like
-      // unlocked so the timer stays armed until the batch finishes.
-      const root = $vaultStore.currentPath;
-      for (const e of $encryptedFolders) {
-        // Manifest entries all represent encrypted roots. Whether
-        // they're currently locked or unlocked comes from the sidebar
-        // DirEntry; we re-arm on every pulse and let locks win via
-        // the backend's registry check inside the IPC. On a lock
-        // event the next pulse's arm still hits a locked root — the
-        // lock IPC then returns quickly without harm.
-        armAutoLock(e.path, root);
-      }
     });
 
     // #174 — any FS change flips the search index to "stale". The omni-search
@@ -913,6 +899,13 @@
       const m = $encryptionModal!;
       try {
         await unlockFolder(m.folderPath, password);
+        // #345: derive the vault-relative root path for the timer.
+        const vault = $vaultStore.currentPath?.replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
+        const normFolder = m.folderPath.replace(/\\/g, "/");
+        const rootRel = vault && normFolder.startsWith(vault + "/")
+          ? normFolder.slice(vault.length + 1)
+          : normFolder;
+        armAutoLock(rootRel, $vaultStore.currentPath);
         closeEncryptionModal();
         if (m.kind === "unlock" && m.onUnlocked) {
           await m.onUnlocked();

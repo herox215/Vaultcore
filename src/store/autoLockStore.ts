@@ -3,154 +3,165 @@
 // Policy:
 // - Frontend-only timer. ZERO per-keystroke IPC. The lock action
 //   hits the backend exactly once per expiry.
-// - Activity that resets the timer: any keydown / pointerdown on the
-//   editor tab container. Debounced to 1 second inside the store so
-//   bursts of keystrokes become a single reset.
-// - Focus changes DO NOT reset the timer (user decision). Only real
-//   input resets it. Backgrounded apps continue to count down on wall
-//   clock time.
+// - Activity: keydown / pointerdown on the configured target
+//   (typically `document`). Debounced inside the store so a burst
+//   of keystrokes counts as one reset.
+// - Focus changes DO NOT reset the timer. Only real input.
 // - visibilitychange hidden→visible: if `Date.now()` shows the user
-//   has been away longer than the timeout, lock immediately. This
-//   defends against browser/OS timer throttling under suspension.
-// - Per-root timers are kept in a Map so multiple unlocked folders
-//   can run independently.
+//   has been away longer than the timeout, lock immediately. Defends
+//   against OS timer throttling while backgrounded.
+// - One timer per unlocked root. We read the currently-active tab
+//   from `tabStore` on every activity pulse to decide which root
+//   (if any) owns the activity — no brittle DOM attribute contract.
 
 import { settingsStore } from "./settingsStore";
-import { encryptedFolders } from "./encryptedFoldersStore";
+import { tabStore } from "./tabStore";
 import { lockFolder } from "../ipc/commands";
 
-type Timer = ReturnType<typeof setTimeout>;
+type TimerHandle = ReturnType<typeof setTimeout>;
 
 interface TimerState {
-  /** `performance.now()` at the last activity — wall-clock-safe for
-   *  visibility-restore checks via `Date.now()` offset. */
+  /** `performance.now()` snapshot at the last activity. */
   lastActivity: number;
   /** Outstanding setTimeout handle, if any. */
-  handle: Timer | null;
+  handle: TimerHandle | null;
+  /** Absolute path of the root — cached so lock IPC survives a
+   *  mid-countdown vault switch of the reactive `vaultRoot`. */
+  absPath: string;
 }
 
 const timers = new Map<string, TimerState>();
 let timeoutMs = 0;
 let attached = false;
 let unsubscribeSettings: (() => void) | null = null;
-let unsubscribeFolders: (() => void) | null = null;
 let detachActivity: (() => void) | null = null;
 let detachVisibility: (() => void) | null = null;
+let activeVaultRoot: string | null = null;
+const ACTIVITY_DEBOUNCE_MS = 1000;
 
-/** Rel-path → derived absolute path via vault root. The store keeps
- *  only relative paths so we need the vault root at lock time. */
-let vaultAbsoluteRoot: string | null = null;
-
-function now(): number {
+function nowMs(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : Date.now();
 }
 
-function clear(root: string): void {
+function clearTimer(root: string): void {
   const t = timers.get(root);
-  if (t?.handle) {
-    clearTimeout(t.handle);
-  }
+  if (t?.handle) clearTimeout(t.handle);
   timers.delete(root);
 }
 
-async function lockAbs(abs: string): Promise<void> {
+async function fireLock(abs: string): Promise<void> {
   try {
     await lockFolder(abs);
   } catch {
-    // Swallow: a lock failure most likely means the folder got
-    // unlocked elsewhere or the vault closed. Next open resets state.
+    // Swallow: the folder may have been locked elsewhere (user action,
+    // vault switch). Next open resets state.
   }
 }
 
-function schedule(root: string, abs: string): void {
+function schedule(root: string, absPath: string): void {
   if (timeoutMs <= 0) return;
-  clear(root);
+  const prev = timers.get(root);
+  if (prev?.handle) clearTimeout(prev.handle);
   const handle = setTimeout(() => {
+    const t = timers.get(root);
     timers.delete(root);
-    void lockAbs(abs);
+    void fireLock(t?.absPath ?? absPath);
   }, timeoutMs);
-  timers.set(root, { lastActivity: now(), handle });
+  timers.set(root, { lastActivity: nowMs(), handle, absPath });
 }
 
-export function recordActivityForPath(pathRel: string): void {
+function joinAbs(vaultRoot: string, relPath: string): string {
+  // Vault root may or may not have a trailing separator. Normalize
+  // so `openFileAsTab`'s sibling bug (doubled slash) doesn't repeat
+  // here.
+  const trimmed = vaultRoot.replace(/[\\/]+$/, "");
+  return `${trimmed}/${relPath}`;
+}
+
+function recordActivityForAbsTabPath(tabAbsPath: string): void {
   if (timeoutMs <= 0) return;
-  if (!vaultAbsoluteRoot) return;
-  // Find which unlocked root (if any) owns this path. The store
-  // carries vault-relative paths; a path is inside a root iff it
-  // starts with the root prefix + "/".
-  for (const root of timers.keys()) {
-    if (pathRel === root || pathRel.startsWith(root + "/")) {
-      const abs = rootToAbs(root);
-      schedule(root, abs);
+  if (!activeVaultRoot) return;
+  // Normalize separators for the prefix check.
+  const normTabAbs = tabAbsPath.replace(/\\/g, "/");
+  const normVault = activeVaultRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  for (const [rootRel, state] of timers.entries()) {
+    const normRoot = `${normVault}/${rootRel}`.replace(/\/+$/, "");
+    if (normTabAbs === normRoot || normTabAbs.startsWith(normRoot + "/")) {
+      schedule(rootRel, state.absPath);
       return;
     }
   }
 }
 
-function rootToAbs(rootRel: string): string {
-  // vault absolute root is normalized to forward slashes by the
-  // vaultStore. We join with a forward-slash separator and let the
-  // OS's canonicalize smooth out native separators when the backend
-  // receives this.
-  if (!vaultAbsoluteRoot) return rootRel;
-  const sep = vaultAbsoluteRoot.endsWith("/") || vaultAbsoluteRoot.endsWith("\\") ? "" : "/";
-  return `${vaultAbsoluteRoot}${sep}${rootRel}`;
+/**
+ * Start (or replace) the auto-lock timer for a root that was just
+ * unlocked. `vaultRoot` may be passed null — we then cache whatever
+ * the last vault root was; callers that want to swap vault MUST
+ * first call `resetAutoLockStore()`.
+ */
+export function armAutoLock(rootRel: string, vaultRoot: string | null): void {
+  if (vaultRoot) activeVaultRoot = vaultRoot;
+  if (!activeVaultRoot) return;
+  if (timeoutMs <= 0) return;
+  const abs = joinAbs(activeVaultRoot, rootRel);
+  schedule(rootRel, abs);
 }
 
 /**
- * Start the auto-lock subsystem. Call exactly once per app mount.
- * Subsequent calls are idempotent — the store attaches exactly one
- * settings subscription, one folders subscription, and one set of
- * listeners.
+ * Disarm a root that was manually locked. Safe to call on a root
+ * that is not currently armed — no-ops in that case.
+ */
+export function disarmAutoLock(rootRel: string): void {
+  clearTimer(rootRel);
+}
+
+/**
+ * Wire the activity listeners + settings subscription. Exactly once
+ * per app mount. Subsequent calls after a `resetAutoLockStore()`
+ * re-attach; calls without a reset are idempotent.
  */
 export function attachAutoLockListeners(args: {
   vaultPath: string | null;
   /** Element whose keydown / pointerdown resets the timer. */
   target: Document | HTMLElement;
 }): void {
-  vaultAbsoluteRoot = args.vaultPath;
-  if (attached) return;
+  if (attached) {
+    // Allow vault-root updates even on an already-attached store, so
+    // the parent component can keep a single attach call and pass
+    // `$vaultStore.currentPath` reactively.
+    activeVaultRoot = args.vaultPath;
+    return;
+  }
   attached = true;
+  activeVaultRoot = args.vaultPath;
 
   unsubscribeSettings = settingsStore.subscribe((s) => {
-    timeoutMs = Math.max(0, s.autoLockMinutes) * 60 * 1000;
+    const nextTimeout = Math.max(0, s.autoLockMinutes) * 60 * 1000;
+    const changed = nextTimeout !== timeoutMs;
+    timeoutMs = nextTimeout;
+    if (!changed) return;
     if (timeoutMs === 0) {
-      for (const root of [...timers.keys()]) clear(root);
+      for (const root of [...timers.keys()]) clearTimer(root);
     } else {
-      // Reset any running timer so a setting change takes effect
-      // without requiring the user to make fresh activity.
+      // Restart running timers so the new duration takes effect
+      // without requiring fresh activity.
       for (const [root, state] of timers.entries()) {
-        if (state.handle) clearTimeout(state.handle);
-        const abs = rootToAbs(root);
-        schedule(root, abs);
+        schedule(root, state.absPath);
       }
     }
   });
 
-  unsubscribeFolders = encryptedFolders.subscribe(() => {
-    // Nothing to do for the store contents themselves — the timers
-    // Map is keyed off registered activities. When a folder relocks
-    // via any path we get an `encrypted_folders_changed` pulse and
-    // the `DirEntry.encryption` flip is what surfaces through the UI.
-  });
-
-  // Passive activity listeners — zero per-keystroke IPC. We only
-  // wake on the debounced tail.
   let lastTick = 0;
-  const onActivity = (e: Event) => {
-    const t = now();
-    if (t - lastTick < 1000) return; // 1 s debounce inside the store
+  const onActivity = () => {
+    const t = nowMs();
+    if (t - lastTick < ACTIVITY_DEBOUNCE_MS) return;
     lastTick = t;
-    // Find the active editor tab to know which rel path is active.
-    // The tab store exposes the active path asynchronously; to keep
-    // this path sync and zero-IPC we consult a minimal DOM hint the
-    // Editor sets on the pane container.
-    const editor = document.querySelector<HTMLElement>("[data-encrypted-path]");
-    const rel = editor?.dataset.encryptedPath ?? null;
-    if (rel) recordActivityForPath(rel);
-    void e; // silence unused
+    const active = tabStore.getActiveTab?.();
+    if (active?.filePath) {
+      recordActivityForAbsTabPath(active.filePath);
+    }
   };
   args.target.addEventListener("keydown", onActivity, { passive: true });
   args.target.addEventListener("pointerdown", onActivity, { passive: true });
@@ -159,16 +170,14 @@ export function attachAutoLockListeners(args: {
     args.target.removeEventListener("pointerdown", onActivity);
   };
 
-  // visibility-restore backup: if the OS throttled our setTimeout
-  // while backgrounded, lock immediately on return if the deadline
-  // passed.
   const onVisibility = () => {
     if (document.hidden) return;
-    const cutoff = now() - timeoutMs;
-    for (const [root, state] of timers.entries()) {
+    if (timeoutMs <= 0) return;
+    const cutoff = nowMs() - timeoutMs;
+    for (const [root, state] of [...timers.entries()]) {
       if (state.lastActivity < cutoff) {
-        clear(root);
-        void lockAbs(rootToAbs(root));
+        clearTimer(root);
+        void fireLock(state.absPath);
       }
     }
   };
@@ -178,35 +187,31 @@ export function attachAutoLockListeners(args: {
   };
 }
 
-/** Start a timer for a root that was just unlocked. */
-export function armAutoLock(rootRel: string, vaultRoot: string | null): void {
-  if (timeoutMs <= 0) return;
-  vaultAbsoluteRoot = vaultRoot;
-  schedule(rootRel, rootToAbs(rootRel));
-}
-
-/** Disarm a root that was manually locked. */
-export function disarmAutoLock(rootRel: string): void {
-  clear(rootRel);
-}
-
-/** Tear down every timer, subscription, and DOM listener. Called on
- *  vault close / app teardown. */
+/**
+ * Tear down every timer, subscription, and DOM listener. Called on
+ * vault close, vault switch, and app teardown so a subsequent
+ * `attachAutoLockListeners` starts from a clean slate without stale
+ * rel-path timers that could resolve against a new vault root.
+ */
 export function resetAutoLockStore(): void {
-  for (const root of [...timers.keys()]) clear(root);
+  for (const root of [...timers.keys()]) clearTimer(root);
   unsubscribeSettings?.();
-  unsubscribeFolders?.();
   detachActivity?.();
   detachVisibility?.();
   unsubscribeSettings = null;
-  unsubscribeFolders = null;
   detachActivity = null;
   detachVisibility = null;
   attached = false;
-  vaultAbsoluteRoot = null;
+  activeVaultRoot = null;
 }
 
 /** Test hook — do not use in production code. */
 export function _getActiveTimers(): string[] {
   return [...timers.keys()];
+}
+
+/** Test hook — do not use in production code. */
+export function _resetForTest(): void {
+  resetAutoLockStore();
+  timeoutMs = 0;
 }
