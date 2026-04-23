@@ -45,3 +45,104 @@ pub const SENTINEL_FILENAME: &str = ".vaultcore-folder-key-check";
 /// Deterministic plaintext sealed by the sentinel. Decrypting this with
 /// a candidate key confirms (or denies) the password.
 pub const SENTINEL_PLAINTEXT: &[u8] = b"VCE1-SENTINEL-v1";
+
+use std::path::{Path, PathBuf};
+
+use crate::error::VaultError;
+
+/// Locate the absolute path of the encrypted root that contains
+/// `canonical`, if any. Returns `None` when the path is outside
+/// every encrypted folder. Uses the manifest because the locked
+/// registry drops entries on unlock — the manifest is the canonical
+/// "which folders are encrypted at rest" source of truth.
+pub fn find_enclosing_encrypted_root(
+    vault_root: &Path,
+    canonical: &Path,
+) -> Result<Option<PathBuf>, VaultError> {
+    let metas = manifest::read_manifest(vault_root)?;
+    if metas.is_empty() {
+        return Ok(None);
+    }
+    for m in &metas {
+        let abs = vault_root.join(&m.path);
+        let Ok(root_canon) = std::fs::canonicalize(&abs) else {
+            continue;
+        };
+        if canonical == root_canon.as_path() || canonical.starts_with(&root_canon) {
+            return Ok(Some(root_canon));
+        }
+    }
+    Ok(None)
+}
+
+/// Decrypt `bytes` when `canonical` lives inside an unlocked
+/// encrypted root, otherwise return them unchanged.
+///
+/// Bytes pass through untouched when:
+/// - the path is outside every encrypted root, OR
+/// - the bytes do not start with the VCE1 magic (a plain file that
+///   leaked into the folder via an external tool or a half-finished
+///   encrypt batch — tolerated so the user can still read/repair).
+pub fn maybe_decrypt_read(
+    state: &crate::VaultState,
+    canonical: &Path,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>, VaultError> {
+    let vault_root = {
+        let guard = state
+            .current_vault
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        match guard.as_ref() {
+            Some(p) => p.clone(),
+            None => return Ok(bytes),
+        }
+    };
+    let Some(root) = find_enclosing_encrypted_root(&vault_root, canonical)? else {
+        return Ok(bytes);
+    };
+    if !bytes.starts_with(file_format::MAGIC) {
+        return Ok(bytes);
+    }
+    let key = state
+        .keyring
+        .key_clone(&root)?
+        .ok_or_else(|| VaultError::PathLocked {
+            path: canonical.display().to_string(),
+        })?;
+    let (nonce, body) = file_format::parse(&bytes)?;
+    crypto::decrypt_bytes(&key, &nonce, body)
+}
+
+/// Encrypt `bytes` when `canonical` lives inside an unlocked
+/// encrypted root, otherwise return them unchanged. The sealed
+/// output is ready to be written atomically via
+/// `file_format::write_atomic`.
+pub fn maybe_encrypt_write(
+    state: &crate::VaultState,
+    canonical: &Path,
+    bytes: &[u8],
+) -> Result<Vec<u8>, VaultError> {
+    let vault_root = {
+        let guard = state
+            .current_vault
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        match guard.as_ref() {
+            Some(p) => p.clone(),
+            None => return Ok(bytes.to_vec()),
+        }
+    };
+    let Some(root) = find_enclosing_encrypted_root(&vault_root, canonical)? else {
+        return Ok(bytes.to_vec());
+    };
+    let key = state
+        .keyring
+        .key_clone(&root)?
+        .ok_or_else(|| VaultError::PathLocked {
+            path: canonical.display().to_string(),
+        })?;
+    let nonce = crypto::random_nonce();
+    let ct = crypto::encrypt_bytes(&key, &nonce, bytes)?;
+    Ok(file_format::frame(&nonce, &ct))
+}
