@@ -49,6 +49,14 @@ pulldown-cmark = "0.13"
 serde_yml = "0.0.12"
 base64 = "0.22"
 
+# #345: per-folder encryption at rest. Pure-Rust primitives so the
+# bundle stays offline/zero-network and builds on all three targets
+# without system crypto libs.
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+
 # Embeddings stack — gated behind `embeddings` feature.
 # `ort` with the `load-dynamic` feature dlopen's libonnxruntime at runtime
 # from a Tauri-bundled resource (#191) instead of linking statically.

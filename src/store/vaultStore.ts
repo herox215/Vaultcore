@@ -36,6 +36,28 @@ const initial: VaultState = {
 // per-session state. Components call these helpers directly.
 const _treeCache = new Map<string, DirEntry[]>();
 
+/**
+ * #345 — encrypted-folders store lifecycle hooks. Wrapped in lazy
+ * resolvers that don't fail on a missing module (Vitest may mock
+ * `ipc/commands` / `ipc/events` without stubbing these exports).
+ */
+async function initEncryptedFoldersStoreLazy(): Promise<void> {
+  try {
+    const mod = await import("./encryptedFoldersStore");
+    await mod.initEncryptedFoldersStore();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("encryptedFoldersStore init failed", e);
+  }
+}
+
+function resetEncryptedFoldersStoreLazy(): void {
+  // eslint-disable-next-line @typescript-eslint/no-floating-promises
+  void import("./encryptedFoldersStore")
+    .then((mod) => mod.resetEncryptedFoldersStore())
+    .catch(() => {});
+}
+
 const _store = writable<VaultState>({ ...initial });
 
 export const vaultStore = {
@@ -60,6 +82,12 @@ export const vaultStore = {
       fileCount: args.fileCount,
       errorMessage: null,
     }));
+    // #345: prime the encrypted-folders store + subscribe to change
+    // events. Safe to call on every vault open — the store tears down
+    // any previous subscription before re-initialising. The store
+    // itself is guarded against IPC failures (see
+    // `initEncryptedFoldersStore`) so this call never rejects.
+    void initEncryptedFoldersStoreLazy();
   },
   setError(errorMessage: string): void {
     _store.update((s) => ({ ...s, status: "error", errorMessage }));
@@ -67,6 +95,8 @@ export const vaultStore = {
   reset(): void {
     _treeCache.clear();
     _store.set({ ...initial });
+    // #345: drop any encrypted-folders state the previous vault owned.
+    resetEncryptedFoldersStoreLazy();
   },
   setSidebarWidth(width: number): void {
     _store.update((s) => ({ ...s, sidebarWidth: width }));

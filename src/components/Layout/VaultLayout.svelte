@@ -10,6 +10,23 @@
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import ReindexStatusbar from "../Statusbar/ReindexStatusbar.svelte";
+  import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
+  import EncryptFolderModal from "../common/EncryptFolderModal.svelte";
+  import {
+    encryptionModal,
+    closeEncryptionModal,
+    setEncryptionModalError,
+  } from "../../store/encryptionModalStore";
+  import {
+    attachAutoLockListeners,
+    armAutoLock,
+    disarmAutoLock,
+    resetAutoLockStore,
+  } from "../../store/autoLockStore";
+  import {
+    encryptFolder,
+    unlockFolder,
+  } from "../../ipc/commands";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
@@ -243,6 +260,10 @@
     unsubActiveTabReveal?.();
     document.removeEventListener("mousemove", handleMousemove);
     document.removeEventListener("mouseup", handleMouseup);
+    // #345: tear down timers + activity listeners + visibility
+    // listener so a subsequent mount starts clean (vault switch,
+    // HMR, etc.).
+    resetAutoLockStore();
   });
 
   function toggleSidebar() {
@@ -556,10 +577,33 @@
       exportActiveNotePdf: () => { void exportActiveNotePdf(); },
       toggleReadingMode: () => { toggleActiveReadingMode(); },
       insertTemplate: () => { templatePickerOpen = true; },
+      // #345 — palette-triggered "lock everything".
+      lockAllEncryptedFolders: async () => {
+        try {
+          const { lockAllFolders } = await import("../../ipc/commands");
+          await lockAllFolders();
+          toastStore.info("All encrypted folders locked");
+        } catch (e) {
+          if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
+          else toastStore.error("Failed to lock folders");
+        }
+      },
     });
     initHotkeyOverrides();
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
+
+    // #345: wire the auto-lock timer. Attach once; the store itself
+    // manages listener idempotency. Individual roots are armed from
+    // the unlock-success branch + disarmed from the manual-lock
+    // branch — NOT from `encrypted_folders_changed`, which cannot
+    // distinguish lock from unlock from encrypt and would otherwise
+    // re-arm timers on locked folders. `$vaultStore` drives the
+    // reactive vault-path update into the store.
+    attachAutoLockListeners({
+      vaultPath: $vaultStore.currentPath,
+      target: document,
+    });
 
     // #174 — any FS change flips the search index to "stale". The omni-search
     // modal will auto-rebuild on next open. Subscription lives here (not in
@@ -818,6 +862,70 @@
 
 <!-- #201: reindex progress overlay. Self-hides while idle. -->
 <ReindexStatusbar />
+
+<!-- #345: global mount for the encryption modals. Encrypt modal stays
+     open during the batch so the user sees progress; it closes on
+     completion or on error. -->
+{#if $encryptionModal?.kind === "encrypt"}
+  <EncryptFolderModal
+    open={true}
+    folderLabel={$encryptionModal.folderLabel}
+    onConfirm={async (password) => {
+      const folderPath = $encryptionModal!.folderPath;
+      try {
+        await encryptFolder(folderPath, password);
+        closeEncryptionModal();
+        toastStore.info("Folder encrypted");
+      } catch (e) {
+        closeEncryptionModal();
+        if (isVaultError(e)) {
+          toastStore.error(vaultErrorCopy(e));
+        } else {
+          toastStore.error("Failed to encrypt folder");
+        }
+      }
+    }}
+    onCancel={closeEncryptionModal}
+  />
+{/if}
+{#if $encryptionModal?.kind === "unlock"}
+  <PasswordPromptModal
+    open={true}
+    folderLabel={$encryptionModal.folderLabel}
+    error={$encryptionModal.error ?? null}
+    onConfirm={async (password) => {
+      const m = $encryptionModal!;
+      try {
+        await unlockFolder(m.folderPath, password);
+        // #345: derive the vault-relative root path for the timer.
+        const vault = $vaultStore.currentPath?.replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
+        const normFolder = m.folderPath.replace(/\\/g, "/");
+        const rootRel = vault && normFolder.startsWith(vault + "/")
+          ? normFolder.slice(vault.length + 1)
+          : normFolder;
+        armAutoLock(rootRel, $vaultStore.currentPath);
+        closeEncryptionModal();
+        if (m.kind === "unlock" && m.onUnlocked) {
+          await m.onUnlocked();
+        }
+      } catch (e) {
+        if (isVaultError(e) && e.kind === "WrongPassword") {
+          setEncryptionModalError("wrong");
+        } else if (isVaultError(e) && e.kind === "CryptoError") {
+          setEncryptionModalError("crypto");
+        } else {
+          closeEncryptionModal();
+          if (isVaultError(e)) {
+            toastStore.error(vaultErrorCopy(e));
+          } else {
+            toastStore.error("Failed to unlock folder");
+          }
+        }
+      }
+    }}
+    onCancel={closeEncryptionModal}
+  />
+{/if}
 
 <style>
   .vc-vault-layout {

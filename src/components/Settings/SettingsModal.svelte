@@ -6,6 +6,8 @@
     settingsStore,
     FONT_SIZE_MIN,
     FONT_SIZE_MAX,
+    AUTO_LOCK_MINUTES_MIN,
+    AUTO_LOCK_MINUTES_MAX,
     type BodyFont,
     type MonoFont,
   } from "../../store/settingsStore";
@@ -17,7 +19,11 @@
     cancelReindex,
     setSemanticEnabled,
     refreshAllEmbeddings,
+    lockAllFolders,
   } from "../../ipc/commands";
+  import { encryptedFolders } from "../../store/encryptedFoldersStore";
+  import { toastStore } from "../../store/toastStore";
+  import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import { reindexStore, isActive as isReindexActive } from "../../store/reindexStore";
   import { formatShortcut } from "../../lib/shortcuts";
   import { commandRegistry, hotkeysEqual, type Command, type HotKey } from "../../lib/commands/registry";
@@ -72,6 +78,7 @@
   let refreshingSnippets = $state<boolean>(false);
   let semanticEnabled = $state<boolean>(false);
   let reindexActive = $state<boolean>(false);
+  let autoLockMinutes = $state<number>(15);
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
   const unsubSettings = settingsStore.subscribe((s) => {
@@ -82,6 +89,7 @@
     dailyFormat = s.dailyNotesDateFormat;
     dailyTemplate = s.dailyNotesTemplate;
     semanticEnabled = s.enableSemanticSearch;
+    autoLockMinutes = s.autoLockMinutes;
   });
   const unsubReindex = reindexStore.subscribe((r) => {
     reindexActive = isReindexActive(r);
@@ -530,6 +538,78 @@
         </p>
       </section>
 
+      <!-- Section — #345 encrypted folders. Copy is English per the
+           decision captured in the 345 design discussion. -->
+      <section class="vc-settings-section" data-testid="settings-security">
+        <h3 class="vc-settings-section-title">SECURITY</h3>
+        <div class="vc-settings-row">
+          <label for="auto-lock-input">Auto-lock after</label>
+          <div class="vc-settings-auto-lock-input">
+            <input
+              id="auto-lock-input"
+              data-testid="settings-auto-lock-input"
+              type="number"
+              min={AUTO_LOCK_MINUTES_MIN}
+              max={AUTO_LOCK_MINUTES_MAX}
+              step={1}
+              value={autoLockMinutes}
+              onchange={(e) => {
+                settingsStore.setAutoLockMinutes(Number((e.target as HTMLInputElement).value));
+              }}
+            />
+            <span>min (0 = never)</span>
+          </div>
+        </div>
+        <p class="vc-settings-hint">
+          Unlocked folders re-lock automatically after this period of
+          inactivity. Set to 0 to disable; folders still re-lock on
+          app quit and on every vault reopen.
+        </p>
+        <div class="vc-settings-row">
+          <span>Encrypted folders</span>
+          <button
+            type="button"
+            class="vc-settings-btn"
+            data-testid="settings-lock-all"
+            onclick={async () => {
+              try {
+                await lockAllFolders();
+                toastStore.info("All encrypted folders locked");
+              } catch (e) {
+                if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
+                else toastStore.error("Failed to lock folders");
+              }
+            }}
+            disabled={!currentVaultPath || $encryptedFolders.length === 0}
+          >Lock all now</button>
+        </div>
+        {#if $encryptedFolders.length === 0}
+          <p class="vc-settings-hint">
+            No encrypted folders in this vault yet. Right-click a folder
+            in the sidebar → <em>Encrypt folder…</em> to seal it. Files
+            inside an encrypted folder are stored as ciphertext on disk;
+            the folder is invisible to search, backlinks and the graph
+            until you unlock it.
+          </p>
+        {:else}
+          <ul class="vc-security-list" data-testid="settings-encrypted-list">
+            {#each $encryptedFolders as folder}
+              <li class="vc-security-row">
+                <span class="vc-security-path">{folder.path}</span>
+                <span class="vc-security-state">
+                  {folder.state === "encrypting" ? "encrypting…" : "encrypted"}
+                </span>
+              </li>
+            {/each}
+          </ul>
+          <p class="vc-settings-hint">
+            Encrypted folders re-lock on app quit and on every vault
+            reopen. There is no password recovery — forgetting the
+            password means the files cannot be read.
+          </p>
+        {/if}
+      </section>
+
       <!-- Section C — Tastaturkürzel (UI-05 / D-11 / #65) -->
       <section class="vc-settings-section" data-testid="settings-shortcuts">
         <h3 class="vc-settings-section-title">TASTATURKÜRZEL</h3>
@@ -826,6 +906,55 @@
     border-color: var(--color-accent);
     color: var(--color-accent);
   }
+  /* #345 — encrypted folders list. */
+  .vc-security-list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .vc-security-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+  }
+  .vc-security-path {
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .vc-security-state {
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+  .vc-settings-auto-lock-input {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+  }
+  .vc-settings-auto-lock-input input {
+    width: 72px;
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 13px;
+  }
+
   .vc-settings-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;

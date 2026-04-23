@@ -92,6 +92,47 @@ fn vault_error_serialize_io() {
     assert!(v["message"].as_str().unwrap().contains("boom"));
 }
 
+#[test]
+fn vault_error_serialize_path_locked() {
+    // #345: gated FS/indexer entry points return PathLocked when a
+    // canonical target sits inside a currently-locked encrypted root.
+    // The IPC `data` field carries the path so the frontend can route
+    // it through the unlock modal.
+    let v = to_json(VaultError::PathLocked {
+        path: "/vault/secret/note.md".into(),
+    });
+    assert_eq!(v["kind"], "PathLocked");
+    assert_eq!(
+        v["message"],
+        "Path is inside a locked encrypted folder: /vault/secret/note.md",
+    );
+    assert_eq!(v["data"], "/vault/secret/note.md");
+}
+
+#[test]
+fn vault_error_serialize_wrong_password() {
+    // #345: returned by `unlock_folder` on AEAD tag failure. Data-less —
+    // the modal pins the error to the active prompt, no path to route.
+    let v = to_json(VaultError::WrongPassword);
+    assert_eq!(v["kind"], "WrongPassword");
+    assert_eq!(v["message"], "Wrong password");
+    assert_eq!(v["data"], Value::Null);
+}
+
+#[test]
+fn vault_error_serialize_crypto_error() {
+    // #345: distinct from WrongPassword so the frontend can differentiate
+    // "your password was wrong" from "the file is truncated/corrupt".
+    // `data` stays Null — the `msg` ships via the `message` field; the
+    // `data` field is reserved for routable paths by convention.
+    let v = to_json(VaultError::CryptoError {
+        msg: "container truncated".into(),
+    });
+    assert_eq!(v["kind"], "CryptoError");
+    assert_eq!(v["message"], "Encryption error: container truncated");
+    assert_eq!(v["data"], Value::Null);
+}
+
 // Reference to silence unused-import lint if json! is dropped in the future.
 #[allow(dead_code)]
 fn _unused_json_reference() -> Value {

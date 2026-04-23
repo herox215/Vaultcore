@@ -179,9 +179,18 @@ pub async fn open_vault(
         let mut guard = state.index_coordinator.lock().map_err(|_| VaultError::LockPoisoned)?;
         *guard = None;
     }
+    // #345: reload the encrypted-folders manifest into the shared
+    // registry BEFORE the indexer's cold-start walk so encrypted
+    // subtrees are pruned from the very first pass. All encrypted
+    // roots start locked — no persistence of unlocked state across
+    // restart.
+    if let Err(e) = crate::commands::encryption::reload_manifest_and_lock_all(&state, &canonical) {
+        log::warn!("encrypted-folders manifest reload failed: {e:?}");
+    }
+
     // #277: hand the coordinator the state-owned FileIndex so user-initiated
     // rename/move updates land in the same map the coordinator reads from.
-    let coordinator = crate::indexer::IndexCoordinator::new_with_file_index(
+    let mut coordinator = crate::indexer::IndexCoordinator::new_with_file_index(
         &canonical,
         std::sync::Arc::clone(&state.file_index),
     )
@@ -190,6 +199,9 @@ pub async fn open_vault(
         log::error!("Failed to create IndexCoordinator: {e:?}");
         e
     })?;
+    // #345: wire the shared registry so index_vault's cold-start walker
+    // prunes locked subtrees.
+    coordinator.set_locked_paths(std::sync::Arc::clone(&state.locked_paths));
 
     let vault_info = coordinator.index_vault(&canonical, &app).await.map_err(|e| {
         log::error!("index_vault failed: {e:?}");
@@ -252,6 +264,7 @@ pub async fn open_vault(
         index_tx,
         #[cfg(feature = "embeddings")]
         embed_tx,
+        state.locked_paths.clone(),
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::LockPoisoned)? = Some(debouncer);
 
@@ -487,6 +500,15 @@ pub(crate) async fn merge_external_change_impl(
 
     if !canonical.starts_with(&vault_path) {
         return Err(crate::error::VaultError::PermissionDenied { path });
+    }
+    // #345: refuse merges that target a locked folder. Plaintext must
+    // not flow through the three-way merge while the vault says the
+    // file is ciphertext.
+    let canon = crate::encryption::CanonicalPath::assume_canonical(canonical.clone());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(crate::error::VaultError::PathLocked {
+            path: canonical.display().to_string(),
+        });
     }
 
     // Read current disk content (the "right" / external version)
