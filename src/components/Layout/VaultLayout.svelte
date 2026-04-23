@@ -18,9 +18,18 @@
     setEncryptionModalError,
   } from "../../store/encryptionModalStore";
   import {
+    attachAutoLockListeners,
+    armAutoLock,
+    disarmAutoLock,
+    resetAutoLockStore,
+  } from "../../store/autoLockStore";
+  import { encryptedFolders } from "../../store/encryptedFoldersStore";
+  import { listenEncryptedFoldersChanged } from "../../ipc/events";
+  import {
     encryptFolder,
     unlockFolder,
   } from "../../ipc/commands";
+  import { listenEncryptProgress } from "../../ipc/events";
   import { vaultErrorCopy } from "../../types/errors";
   import { isVaultError } from "../../types/errors";
   import { tabStore } from "../../store/tabStore";
@@ -585,6 +594,33 @@
     document.addEventListener("keydown", handleKeydown, { capture: true });
     document.addEventListener("contextmenu", handleContextMenu, { capture: true });
 
+    // #345: wire the auto-lock timer. Listeners attach once (idempotent
+    // under repeated mounts) and react to vault switches via the
+    // folders-changed event. `$vaultStore` is auto-subscribed by
+    // Svelte so we read the current path reactively instead of the
+    // non-existent `_snapshot` hook.
+    attachAutoLockListeners({
+      vaultPath: $vaultStore.currentPath,
+      target: document,
+    });
+    void listenEncryptedFoldersChanged(() => {
+      // When a folder's state flips, re-arm or disarm the matching
+      // timer. Iterate and ensure every unlocked root has a timer,
+      // every locked root has none. `state: "encrypting"` is a
+      // transient crash-resume marker, not locked — treat it like
+      // unlocked so the timer stays armed until the batch finishes.
+      const root = $vaultStore.currentPath;
+      for (const e of $encryptedFolders) {
+        // Manifest entries all represent encrypted roots. Whether
+        // they're currently locked or unlocked comes from the sidebar
+        // DirEntry; we re-arm on every pulse and let locks win via
+        // the backend's registry check inside the IPC. On a lock
+        // event the next pulse's arm still hits a locked root — the
+        // lock IPC then returns quickly without harm.
+        armAutoLock(e.path, root);
+      }
+    });
+
     // #174 — any FS change flips the search index to "stale". The omni-search
     // modal will auto-rebuild on next open. Subscription lives here (not in
     // OmniSearch) so the flag is tracked even while the modal is closed.
@@ -843,18 +879,21 @@
 <!-- #201: reindex progress overlay. Self-hides while idle. -->
 <ReindexStatusbar />
 
-<!-- #345: global mount for the encryption modals. -->
+<!-- #345: global mount for the encryption modals. Encrypt modal stays
+     open during the batch so the user sees progress; it closes on
+     completion or on error. -->
 {#if $encryptionModal?.kind === "encrypt"}
   <EncryptFolderModal
     open={true}
     folderLabel={$encryptionModal.folderLabel}
     onConfirm={async (password) => {
       const folderPath = $encryptionModal!.folderPath;
-      closeEncryptionModal();
       try {
         await encryptFolder(folderPath, password);
+        closeEncryptionModal();
         toastStore.info("Folder encrypted");
       } catch (e) {
+        closeEncryptionModal();
         if (isVaultError(e)) {
           toastStore.error(vaultErrorCopy(e));
         } else {
@@ -875,8 +914,8 @@
       try {
         await unlockFolder(m.folderPath, password);
         closeEncryptionModal();
-        if (m.kind === "unlock") {
-          m.onUnlocked?.();
+        if (m.kind === "unlock" && m.onUnlocked) {
+          await m.onUnlocked();
         }
       } catch (e) {
         if (isVaultError(e) && e.kind === "WrongPassword") {

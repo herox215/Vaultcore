@@ -41,11 +41,12 @@ export const encryptedFolders: Readable<EncryptedFolderView[]> = derived(
 );
 
 /**
- * Precomputed set of vault-relative paths whose entry's `state` is
- * tracked in the manifest. Does NOT distinguish locked vs unlocked —
- * that signal lives on `DirEntry.encryption` straight from the
- * backend. Used by components that only need "is this path encrypted
- * at all".
+ * Precomputed set of **vault-relative, forward-slash** paths whose
+ * entry is tracked in the manifest. Does NOT distinguish locked vs
+ * unlocked — that signal lives on `DirEntry.encryption` straight from
+ * the backend. Callers that hold absolute paths must normalize first
+ * (strip the vault prefix) before checking membership — see the
+ * helper in `openFileAsTab.ts`.
  */
 export const encryptedPaths: Readable<Set<string>> = derived(
   internal,

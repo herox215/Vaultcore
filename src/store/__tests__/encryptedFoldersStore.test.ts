@@ -62,12 +62,26 @@ describe("encryptedFoldersStore", () => {
     expect(paths.has("journal")).toBe(true);
   });
 
-  it("subscribes to encrypted_folders_changed exactly once per init", async () => {
+  it("tears down the previous subscription before attaching a new one", async () => {
+    // Regression guard for the lifecycle contract: re-initing the
+    // store must call the unlisten handle returned by the PRIOR
+    // subscribe call, then install a fresh listener. Without the
+    // teardown we would leak subscriptions on every vault switch.
     listEncryptedFoldersMock.mockResolvedValue([]);
+    const unlistenA = vi.fn();
+    const unlistenB = vi.fn();
+    listenEncryptedFoldersChangedMock
+      .mockResolvedValueOnce(unlistenA)
+      .mockResolvedValueOnce(unlistenB);
     await initEncryptedFoldersStore();
+    expect(unlistenA).not.toHaveBeenCalled();
     await initEncryptedFoldersStore();
-    // Two init calls → two subscribe calls (old one torn down, new attached).
-    expect(listenEncryptedFoldersChangedMock).toHaveBeenCalledTimes(2);
+    // The SECOND init must invoke the FIRST unlisten before attaching.
+    expect(unlistenA).toHaveBeenCalledTimes(1);
+    expect(unlistenB).not.toHaveBeenCalled();
+    // And reset() calls the latest unlisten.
+    resetEncryptedFoldersStore();
+    expect(unlistenB).toHaveBeenCalledTimes(1);
   });
 
   it("resetEncryptedFoldersStore clears state", () => {

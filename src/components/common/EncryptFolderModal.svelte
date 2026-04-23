@@ -48,8 +48,11 @@
     }
   });
 
+  let submitting = $state(false);
+
   function submit() {
-    if (!match) return;
+    if (!match || submitting) return;
+    submitting = true;
     onConfirm(pw);
   }
 
@@ -138,9 +141,9 @@
         type="button"
         class="vc-encrypt-modal-ok"
         onclick={submit}
-        disabled={!match}
+        disabled={!match || submitting}
         data-testid="encrypt-folder-confirm-button"
-      >Encrypt</button>
+      >{submitting ? "Encrypting…" : "Encrypt"}</button>
     </div>
   </div>
 {/if}

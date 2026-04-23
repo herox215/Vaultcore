@@ -13,12 +13,20 @@ type EncryptRequest = {
   folderLabel: string;
 };
 
+/**
+ * Signature of the "unlock succeeded" callback. Widened to
+ * `Promise<void> | void` ahead of 345.3 so callers can await further
+ * IPC work (e.g. re-open a file tab, refetch backlinks) without
+ * threading an extra `.then(...)` through the modal plumbing.
+ */
+export type UnlockCallback = () => void | Promise<void>;
+
 type UnlockRequest = {
   kind: "unlock";
   folderPath: string;
   folderLabel: string;
   /** Optional callback after a successful unlock — e.g. openFileAsTab. */
-  onUnlocked?: () => void;
+  onUnlocked?: UnlockCallback;
 };
 
 type ActiveModal =
@@ -35,7 +43,7 @@ export function openEncryptModal(folderPath: string, folderLabel: string): void 
 export function openUnlockModal(
   folderPath: string,
   folderLabel: string,
-  onUnlocked?: () => void,
+  onUnlocked?: UnlockCallback,
 ): void {
   if (onUnlocked) {
     encryptionModal.set({ kind: "unlock", folderPath, folderLabel, onUnlocked });

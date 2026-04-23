@@ -36,13 +36,29 @@
     }
   });
 
+  let submitting = $state(false);
+
   function submit() {
-    if (!value) {
-      onCancel();
-      return;
-    }
+    // Enter on an empty input is a no-op, not a cancel — closing the
+    // modal on accidental Enter would be a foot-gun for users who
+    // haven't finished typing. Explicit cancel is Escape / backdrop.
+    if (!value || submitting) return;
+    submitting = true;
     onConfirm(value);
   }
+
+  // Reset the submitting guard when the modal is re-used (wrong-password
+  // retry or re-open after close).
+  $effect(() => {
+    if (open) {
+      submitting = false;
+    }
+  });
+  $effect(() => {
+    if (error !== null) {
+      submitting = false;
+    }
+  });
 
   function onKey(e: KeyboardEvent) {
     if (e.key === "Enter") {
@@ -110,9 +126,9 @@
         type="button"
         class="vc-password-modal-ok"
         onclick={submit}
-        disabled={!value}
+        disabled={!value || submitting}
         data-testid="password-prompt-confirm"
-      >Unlock</button>
+      >{submitting ? "Unlocking…" : "Unlock"}</button>
     </div>
   </div>
 {/if}
