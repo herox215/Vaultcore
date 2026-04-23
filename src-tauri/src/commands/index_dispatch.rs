@@ -76,9 +76,12 @@ pub(crate) async fn dispatch_tantivy_upsert(tx: &Sender<IndexCmd>, abs_path: &Pa
 pub(crate) async fn dispatch_self_write(state: &VaultState, abs_path: &Path, content: &str) {
     // #345: belt-and-braces against a race where `write_file` gated on
     // the registry at T0 and `lock_folder` flipped the registry at T1
-    // before the dispatch ran. A silent skip here is correct: the file
-    // will not be visible to search/links/tags while locked, and the
-    // lock sweep already evicted prior index state for the subtree.
+    // before the dispatch ran. Skipping here keeps fresh plaintext out
+    // of the Tantivy / link-graph / tag-index while the folder is
+    // locked. Search read-side filtering (see search.rs + links.rs)
+    // covers docs that were indexed BEFORE the lock flipped; the
+    // combined guard is read-time + dispatch-time so no ciphertext
+    // body or fresh plaintext lands in the query surface while locked.
     let canon = crate::encryption::CanonicalPath::assume_canonical(abs_path.to_path_buf());
     if state.locked_paths.is_locked(&canon) {
         return;

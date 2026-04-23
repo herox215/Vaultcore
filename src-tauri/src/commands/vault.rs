@@ -501,6 +501,15 @@ pub(crate) async fn merge_external_change_impl(
     if !canonical.starts_with(&vault_path) {
         return Err(crate::error::VaultError::PermissionDenied { path });
     }
+    // #345: refuse merges that target a locked folder. Plaintext must
+    // not flow through the three-way merge while the vault says the
+    // file is ciphertext.
+    let canon = crate::encryption::CanonicalPath::assume_canonical(canonical.clone());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(crate::error::VaultError::PathLocked {
+            path: canonical.display().to_string(),
+        });
+    }
 
     // Read current disk content (the "right" / external version)
     let disk_content = std::fs::read_to_string(&canonical).map_err(crate::error::VaultError::Io)?;
