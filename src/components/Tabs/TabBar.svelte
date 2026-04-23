@@ -1,6 +1,7 @@
 <script lang="ts">
   import Tab from "./Tab.svelte";
   import { tabStore } from "../../store/tabStore";
+  import { tabLayoutStore } from "../../store/tabLayoutStore";
   import type { Tab as TabType } from "../../store/tabStore";
 
   let {
@@ -58,7 +59,7 @@
       currentIds.splice(insertAt, 0, draggedTabId);
 
       // Apply reorder to store
-      tabStore._reorderPane(paneId, currentIds);
+      tabLayoutStore.reorderPane(paneId, currentIds);
     } else if (fromIdx === -1 && draggedTabId) {
       // Tab from other pane — move it to this pane
       tabStore.activateTab(draggedTabId);
