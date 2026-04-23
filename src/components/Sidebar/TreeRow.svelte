@@ -130,10 +130,21 @@
   function handleClick() {
     onSelect(row.path);
     if (row.isDir) {
-      // #345: clicking a locked folder opens the password modal instead
-      // of toggling expansion — a locked folder cannot be expanded.
+      // #345: clicking a locked folder opens the password modal
+      // instead of toggling expansion. On successful unlock we
+      // schedule the expand via onUnlocked — the tree refresh that
+      // fires from `encrypted_folders_changed` rebuilds this row
+      // with `encryption: "unlocked"`, and the expand we trigger
+      // here then descends into the now-visible children without
+      // requiring a second click.
       if (isLocked) {
-        openUnlockModal(row.path, row.name);
+        openUnlockModal(row.path, row.name, async () => {
+          // The store swap + tree refresh run asynchronously after
+          // the unlock event; yield the microtask queue so the
+          // refreshed row is the one we toggle.
+          await Promise.resolve();
+          await onToggleExpand(row);
+        });
         return;
       }
       void onToggleExpand(row);
