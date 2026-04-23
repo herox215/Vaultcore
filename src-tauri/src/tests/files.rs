@@ -89,6 +89,74 @@ fn read_file_returns_file_not_found_for_missing_path() {
     }
 }
 
+// --- #345: PathLocked gating on FS entry points ---------------------------
+
+fn seed_locked_folder(state: &VaultState, vault_root: &std::path::Path, rel: &str) -> std::path::PathBuf {
+    let abs = vault_root.canonicalize().unwrap().join(rel);
+    std::fs::create_dir_all(&abs).unwrap();
+    // Canonicalize the created directory so is_locked's ancestor lookup
+    // uses the exact path the production gate will probe.
+    let canon = abs.canonicalize().unwrap();
+    state.locked_paths.lock_root(canon.clone()).unwrap();
+    canon
+}
+
+#[test]
+fn read_file_rejects_locked_path() {
+    let dir = tempdir().unwrap();
+    let state = state_with_vault(dir.path());
+    let root = seed_locked_folder(&state, dir.path(), "secret");
+    let file = root.join("note.md");
+    fs::write(&file, "classified").unwrap();
+    let result =
+        tokio_test_block_on(read_file_impl(&state, file.to_string_lossy().into_owned()));
+    match result {
+        Err(VaultError::PathLocked { path }) => assert!(path.contains("secret")),
+        other => panic!("expected PathLocked, got {:?}", other),
+    }
+}
+
+#[test]
+fn read_file_deep_inside_locked_tree_rejected() {
+    let dir = tempdir().unwrap();
+    let state = state_with_vault(dir.path());
+    let root = seed_locked_folder(&state, dir.path(), "secret");
+    let nested = root.join("sub");
+    fs::create_dir_all(&nested).unwrap();
+    let file = nested.join("deep.md");
+    fs::write(&file, "deep").unwrap();
+    let result =
+        tokio_test_block_on(read_file_impl(&state, file.to_string_lossy().into_owned()));
+    assert!(matches!(result, Err(VaultError::PathLocked { .. })));
+}
+
+#[test]
+fn read_file_outside_locked_tree_still_works() {
+    let dir = tempdir().unwrap();
+    let state = state_with_vault(dir.path());
+    seed_locked_folder(&state, dir.path(), "secret");
+    let canonical_vault = dir.path().canonicalize().unwrap();
+    let plain = canonical_vault.join("plain.md");
+    fs::write(&plain, "public").unwrap();
+    let result =
+        tokio_test_block_on(read_file_impl(&state, plain.to_string_lossy().into_owned()));
+    assert_eq!(result.unwrap(), "public");
+}
+
+#[test]
+fn write_file_rejects_into_locked_folder() {
+    let dir = tempdir().unwrap();
+    let state = state_with_vault(dir.path());
+    let root = seed_locked_folder(&state, dir.path(), "secret");
+    let target = root.join("new.md");
+    let result = tokio_test_block_on(write_file_impl(
+        &state,
+        target.to_string_lossy().into_owned(),
+        "plaintext".into(),
+    ));
+    assert!(matches!(result, Err(VaultError::PathLocked { .. })));
+}
+
 // --- write_file -----------------------------------------------------------
 
 #[test]
@@ -295,6 +363,11 @@ async fn read_file_impl(state: &VaultState, path: String) -> Result<String, Vaul
             return Err(VaultError::PermissionDenied { path });
         }
     }
+    // #345: mirror the locked-path gate in commands/files.rs.
+    let canon = crate::encryption::CanonicalPath::assume_canonical(canonical_target.clone());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(VaultError::PathLocked { path: canonical_target.display().to_string() });
+    }
     let bytes = std::fs::read(&canonical_target).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: path.clone() },
         _ => VaultError::Io(e),
@@ -330,6 +403,11 @@ async fn write_file_impl(
         .file_name()
         .ok_or_else(|| VaultError::PermissionDenied { path: path.clone() })?;
     let final_path = canonical_parent.join(file_name);
+    // #345: mirror the locked-leaf gate in commands/files.rs.
+    let canon = crate::encryption::CanonicalPath::assume_canonical(final_path.clone());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(VaultError::PathLocked { path: final_path.display().to_string() });
+    }
     let bytes = content.as_bytes();
     std::fs::write(&final_path, bytes).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path },

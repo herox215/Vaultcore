@@ -22,6 +22,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::time::sleep;
 
 use crate::WriteIgnoreList;
+use crate::encryption::{CanonicalPath, LockedPathRegistry};
 use crate::indexer::IndexCmd;
 #[cfg(feature = "embeddings")]
 use crate::embeddings::EmbedOp;
@@ -98,11 +99,13 @@ pub fn spawn_watcher(
     vault_reachable: Arc<Mutex<bool>>,
     index_tx: Option<tokio::sync::mpsc::Sender<IndexCmd>>,
     #[cfg(feature = "embeddings")] embed_tx: Option<tokio::sync::mpsc::Sender<EmbedOp>>,
+    locked_paths: Arc<LockedPathRegistry>,
 ) -> Debouncer<RecommendedWatcher, RecommendedCache> {
     let vault_path_clone = vault_path.clone();
     let vault_reachable_for_error = vault_reachable.clone();
     let app_for_error = app.clone();
     let app_for_events = app.clone();
+    let locked_paths_for_events = Arc::clone(&locked_paths);
 
     let mut debouncer = new_debouncer(
         DEBOUNCE_DURATION,
@@ -116,6 +119,7 @@ pub fn spawn_watcher(
                     &index_tx,
                     #[cfg(feature = "embeddings")]
                     &embed_tx,
+                    &locked_paths_for_events,
                     events,
                 );
             }
@@ -221,6 +225,7 @@ fn process_events(
     vault_path: &Path,
     index_tx: &Option<tokio::sync::mpsc::Sender<IndexCmd>>,
     #[cfg(feature = "embeddings")] embed_tx: &Option<tokio::sync::mpsc::Sender<EmbedOp>>,
+    locked_paths: &Arc<LockedPathRegistry>,
     events: Vec<DebouncedEvent>,
 ) {
     // Step 1: Filter dot-prefixed paths
@@ -233,6 +238,23 @@ fn process_events(
                 .first()
                 .map(|p| !is_hidden_path(vault_path, p))
                 .unwrap_or(false)
+        })
+        .collect();
+
+    // Step 1b (#345): drop events whose primary OR secondary path sits
+    // inside a currently-locked encrypted root. Both paths[0] and
+    // paths[1] are checked so a rename that spans the locked boundary
+    // cannot leak the secondary path through the indexer dispatchers.
+    let filtered: Vec<DebouncedEvent> = filtered
+        .into_iter()
+        .filter(|ev| {
+            for p in ev.paths.iter().take(2) {
+                let canon = CanonicalPath::assume_canonical(p.clone());
+                if locked_paths.is_locked(&canon) {
+                    return false;
+                }
+            }
+            true
         })
         .collect();
 

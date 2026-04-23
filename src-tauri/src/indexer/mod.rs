@@ -172,6 +172,12 @@ pub struct IndexCoordinator {
     link_graph: Arc<Mutex<LinkGraph>>,
     /// In-memory tag index — shared with tag IPC commands.
     tag_index: Arc<Mutex<TagIndex>>,
+    /// #345: registry of locked encrypted roots. When populated, the
+    /// cold-start walker prunes their subtrees so ciphertext is neither
+    /// tokenized into Tantivy (garbage hits) nor traversed for links /
+    /// tags (leaked structure). Defaults to an empty registry so tests
+    /// and non-encryption callers behave exactly as before.
+    locked_paths: Arc<crate::encryption::LockedPathRegistry>,
 }
 
 impl Drop for IndexCoordinator {
@@ -299,7 +305,16 @@ impl IndexCoordinator {
             index,
             link_graph,
             tag_index,
+            locked_paths: Arc::new(crate::encryption::LockedPathRegistry::new()),
         })
+    }
+
+    /// #345: wire the shared locked-paths registry from `VaultState` into
+    /// this coordinator. Called once by `open_vault` after the manifest
+    /// is populated, before the first `index_vault` pass. Cheap — just
+    /// replaces the default empty registry Arc with the shared one.
+    pub fn set_locked_paths(&mut self, registry: Arc<crate::encryption::LockedPathRegistry>) {
+        self.locked_paths = registry;
     }
 
     pub fn file_index(&self) -> Arc<RwLock<FileIndex>> {
@@ -344,8 +359,15 @@ impl IndexCoordinator {
             log::warn!("ensure_docs_page failed: {e:?}");
         }
 
-        // Collect all .md paths (skip dot-dirs and .vaultcore).
-        let md_paths = collect_md_paths(vault_path);
+        // Collect all .md paths (skip dot-dirs, .vaultcore, and #345
+        // locked encrypted subtrees — ciphertext files must not enter
+        // the Tantivy index or be parsed for links/tags).
+        let locked_paths = Arc::clone(&self.locked_paths);
+        let md_paths: Vec<PathBuf> = walk_md_files_skipping(vault_path, move |p| {
+            let canon = crate::encryption::CanonicalPath::assume_canonical(p.to_path_buf());
+            locked_paths.is_locked(&canon)
+        })
+        .collect();
         let total = md_paths.len();
 
         let mut last_emit = Instant::now() - PROGRESS_THROTTLE;
@@ -699,13 +721,34 @@ async fn acquire_writer_with_retry(index: &Index) -> Result<IndexWriter, VaultEr
 /// that ordering is what prunes the whole dot-subtree rather than walking
 /// into it and surfacing errors per entry.
 pub(crate) fn walk_md_files(vault_path: &Path) -> impl Iterator<Item = PathBuf> {
+    walk_md_files_skipping(vault_path, |_| false)
+}
+
+/// Same as `walk_md_files` but prunes any entry whose path passes the
+/// `skip` predicate — both directories (cutting a whole subtree off) and
+/// files. Used by #345 to keep the walker from descending into locked
+/// encrypted roots (where the contents are ciphertext and indexing them
+/// would produce garbage tokens + leak paths into backlinks and search).
+///
+/// The predicate runs on every directory entry before the dot-prefix
+/// check, so skipped directories short-circuit their subtree.
+pub(crate) fn walk_md_files_skipping<F>(
+    vault_path: &Path,
+    skip: F,
+) -> impl Iterator<Item = PathBuf>
+where
+    F: Fn(&Path) -> bool + Send + Sync + 'static,
+{
     walkdir::WalkDir::new(vault_path)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| {
+        .filter_entry(move |e| {
             // Depth 0 is the vault root itself — always allow.
             if e.depth() == 0 {
                 return true;
+            }
+            if skip(e.path()) {
+                return false;
             }
             let name = e.file_name().to_str().unwrap_or("");
             !name.starts_with('.')

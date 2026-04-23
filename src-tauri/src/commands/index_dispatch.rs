@@ -74,6 +74,15 @@ pub(crate) async fn dispatch_tantivy_upsert(tx: &Sender<IndexCmd>, abs_path: &Pa
 /// means the next cold start or `rebuild_index` will observe the true
 /// on-disk state, which is the same fallback the watcher path relies on.
 pub(crate) async fn dispatch_self_write(state: &VaultState, abs_path: &Path, content: &str) {
+    // #345: belt-and-braces against a race where `write_file` gated on
+    // the registry at T0 and `lock_folder` flipped the registry at T1
+    // before the dispatch ran. A silent skip here is correct: the file
+    // will not be visible to search/links/tags while locked, and the
+    // lock sweep already evicted prior index state for the subtree.
+    let canon = crate::encryption::CanonicalPath::assume_canonical(abs_path.to_path_buf());
+    if state.locked_paths.is_locked(&canon) {
+        return;
+    }
     let vault_root = {
         let Ok(guard) = state.current_vault.lock() else {
             return;

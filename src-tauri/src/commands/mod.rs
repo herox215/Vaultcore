@@ -9,3 +9,4 @@ pub mod bookmarks;
 pub mod snippets;
 pub mod templates;
 pub mod export;
+pub mod encryption;
