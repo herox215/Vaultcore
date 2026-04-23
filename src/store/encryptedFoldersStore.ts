@@ -22,6 +22,7 @@ import { writable, derived, type Readable } from "svelte/store";
 
 import { listEncryptedFolders } from "../ipc/commands";
 import { listenEncryptedFoldersChanged } from "../ipc/events";
+import { treeRefreshStore } from "./treeRefreshStore";
 import type { EncryptedFolderView } from "../types/encryption";
 
 interface StoreState {
@@ -91,6 +92,13 @@ export async function initEncryptedFoldersStore(): Promise<void> {
   try {
     unlisten = await listenEncryptedFoldersChanged(() => {
       void refresh();
+      // #345: the sidebar's `DirEntry.encryption` is cached via the
+      // tree model built from `list_directory`. Encrypt / unlock /
+      // lock mutate that field on the backend but the cached tree
+      // still shows the old state until we force a re-fetch. A
+      // treeRefreshStore pulse here makes the unlock actually
+      // reveal children and the lock actually re-hide them.
+      treeRefreshStore.requestRefresh();
     });
   } catch (e) {
     // eslint-disable-next-line no-console
