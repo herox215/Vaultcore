@@ -24,6 +24,8 @@ export interface DefaultCommandContext {
   insertTemplate: () => void;
   openHome: () => void;
   openDocs: () => void;
+  // #345
+  lockAllEncryptedFolders: () => void;
 }
 
 /** Id constants — consumed by tests and anyone dispatching by id. */
@@ -52,6 +54,8 @@ export const CMD_IDS = {
   EXPORT_PDF: "vault:export-pdf",
   TOGGLE_READING_MODE: "editor:toggle-reading-mode",
   INSERT_TEMPLATE: "editor:insert-template",
+  // #345 — encrypted folders (labels English per decision).
+  LOCK_ALL_FOLDERS: "vault:lock-all-folders",
 } as const;
 
 export interface DefaultCommandSpec {
@@ -83,6 +87,12 @@ export const DEFAULT_COMMAND_SPECS: readonly DefaultCommandSpec[] = [
   { id: CMD_IDS.EXPORT_PDF, name: "Notiz als PDF exportieren" },
   { id: CMD_IDS.TOGGLE_READING_MODE, name: "Lesemodus umschalten", hotkey: { meta: true, key: "e" } },
   { id: CMD_IDS.INSERT_TEMPLATE, name: "Vorlage einfügen", hotkey: { meta: true, shift: true, key: "t" } },
+  // #345 — encrypted folders. Encrypt/Unlock/Lock for a specific
+  // folder live on the sidebar context menu; here we expose the
+  // vault-wide "lock everything" action so keyboard-first users have
+  // an escape hatch. Encrypt/Unlock of a specific folder requires
+  // picking a target; out-of-scope for the palette in this slice.
+  { id: CMD_IDS.LOCK_ALL_FOLDERS, name: "Lock all encrypted folders" },
 ] as const;
 
 /**
@@ -113,6 +123,7 @@ export function registerDefaultCommands(ctx: DefaultCommandContext): void {
     [CMD_IDS.EXPORT_PDF]: ctx.exportActiveNotePdf,
     [CMD_IDS.TOGGLE_READING_MODE]: ctx.toggleReadingMode,
     [CMD_IDS.INSERT_TEMPLATE]: ctx.insertTemplate,
+    [CMD_IDS.LOCK_ALL_FOLDERS]: ctx.lockAllEncryptedFolders,
   };
 
   for (const spec of DEFAULT_COMMAND_SPECS) {

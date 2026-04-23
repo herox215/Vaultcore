@@ -13,12 +13,81 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
 use crate::indexer::link_graph::{self, BacklinkEntry, LinkGraph, ParsedLink, UnresolvedLink};
 use crate::indexer::memory::FileIndex;
 use crate::indexer::tag_index::TagIndex;
 use crate::commands::search::FileMatch;
 use crate::VaultState;
+
+/// #345: check whether a vault-relative forward-slash path resolves
+/// into a currently-locked encrypted root. Returns `true` when the path
+/// is locked (callers then filter/drop it) or when the vault is not
+/// open (fail-closed on an ambiguous state — the alternative would be
+/// to leak a locked-folder reference on a startup race).
+///
+/// Intended for low-cardinality call sites (one path per IPC). Bulk
+/// filters over `FileIndex::all_relative_paths()` should go through
+/// `LockedRelChecker` instead — it precomputes the locked roots as
+/// forward-slash vault-relative prefixes and short-circuits on the
+/// empty-registry case, so the hot path stays well under the per-
+/// keystroke budget at 100k-note scale.
+fn is_rel_path_locked(state: &VaultState, rel: &str) -> bool {
+    LockedRelChecker::new(state).is_locked(rel)
+}
+
+/// Precomputed view of the locked-paths registry for bulk filtering in
+/// link / backlink / graph pipelines.
+///
+/// Holds vault-relative, forward-slash, lowercased-on-case-insensitive
+/// prefixes of every currently-locked encrypted root. `is_locked(rel)`
+/// does one vec-scan per path — O(k) where k = number of encrypted
+/// roots, which in practice is 0-5. The empty-registry case (very
+/// common) short-circuits to `false` without any allocation or syscall.
+struct LockedRelChecker {
+    prefixes: Vec<String>,
+}
+
+impl LockedRelChecker {
+    fn new(state: &VaultState) -> Self {
+        let snapshot = state.locked_paths.snapshot().unwrap_or_default();
+        if snapshot.is_empty() {
+            return Self { prefixes: Vec::new() };
+        }
+        let vault = match state.current_vault.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => None,
+        };
+        let Some(vault_root) = vault else {
+            // Vault closed race: fail closed on every call.
+            return Self {
+                prefixes: vec![String::from("")],
+            };
+        };
+        let prefixes = snapshot
+            .into_iter()
+            .filter_map(|root| {
+                root.strip_prefix(&vault_root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+            })
+            .collect();
+        Self { prefixes }
+    }
+
+    fn is_locked(&self, rel: &str) -> bool {
+        if self.prefixes.is_empty() {
+            return false;
+        }
+        self.prefixes.iter().any(|root| {
+            rel == root
+                || rel
+                    .strip_prefix(root)
+                    .is_some_and(|tail| tail.starts_with('/'))
+        })
+    }
+}
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::Utf32Str;
@@ -100,6 +169,10 @@ pub async fn get_backlinks(
     path: String,
     state: tauri::State<'_, VaultState>,
 ) -> Result<Vec<BacklinkEntry>, VaultError> {
+    // #345: if the target itself is locked, backlinks must not leak.
+    if is_rel_path_locked(&state, &path) {
+        return Ok(Vec::new());
+    }
     let (lg_arc, fi_arc) = {
         let guard = state
             .index_coordinator
@@ -114,7 +187,14 @@ pub async fn get_backlinks(
     let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
-    Ok(lg.get_backlinks(&path, &fi))
+    // #345: drop backlink rows whose source lives inside a locked root.
+    let raw = lg.get_backlinks(&path, &fi);
+    drop(lg);
+    drop(fi);
+    Ok(raw
+        .into_iter()
+        .filter(|b| !is_rel_path_locked(&state, &b.source_path))
+        .collect())
 }
 
 // ── get_outgoing_links ─────────────────────────────────────────────────────────
@@ -125,6 +205,10 @@ pub async fn get_outgoing_links(
     path: String,
     state: tauri::State<'_, VaultState>,
 ) -> Result<Vec<ParsedLink>, VaultError> {
+    // #345: a locked source's outgoing links are opaque.
+    if is_rel_path_locked(&state, &path) {
+        return Ok(Vec::new());
+    }
     let lg_arc = {
         let guard = state
             .index_coordinator
@@ -159,7 +243,14 @@ pub async fn get_unresolved_links(
     };
 
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
-    Ok(lg.get_unresolved())
+    let raw = lg.get_unresolved();
+    drop(lg);
+    // #345: unresolved-link rows whose source lives in a locked folder
+    // would leak the locked filename through the broken-link UI.
+    Ok(raw
+        .into_iter()
+        .filter(|u| !is_rel_path_locked(&state, &u.source_path))
+        .collect())
 }
 
 // ── suggest_links ──────────────────────────────────────────────────────────────
@@ -569,7 +660,19 @@ pub async fn get_resolved_links(
         paths.extend(crate::indexer::collect_canvas_rel_paths(&vp));
     }
 
-    Ok(link_graph::resolved_map_with_aliases(&paths, &file_aliases))
+    // #345: strip locked-folder paths + their aliases before building
+    // the resolver map. Without this, a wiki-link `[[Secret]]` would
+    // resolve to a path inside a locked root and the frontend would
+    // route-click the user straight into a locked file open attempt.
+    // Use LockedRelChecker so the common "no encrypted folders" case
+    // short-circuits cheaply at 100k-note scale.
+    let checker = LockedRelChecker::new(&state);
+    paths.retain(|p| !checker.is_locked(p));
+    let filtered_aliases: Vec<(String, Vec<String>)> = file_aliases
+        .into_iter()
+        .filter(|(p, _)| !checker.is_locked(p))
+        .collect();
+    Ok(link_graph::resolved_map_with_aliases(&paths, &filtered_aliases))
 }
 
 // ── get_resolved_attachments ───────────────────────────────────────────────────
@@ -637,6 +740,12 @@ pub async fn get_resolved_attachments(
             continue;
         }
         if !IMAGE_EXTENSIONS.iter().any(|e| *e == ext_lower) {
+            continue;
+        }
+        // #345: skip attachments inside locked roots so wiki-embed
+        // asset URLs don't leak filenames.
+        let canon = CanonicalPath::assume_canonical(path.to_path_buf());
+        if state.locked_paths.is_locked(&canon) {
             continue;
         }
 
@@ -879,6 +988,14 @@ pub async fn get_local_graph(
     depth: u32,
     state: tauri::State<'_, VaultState>,
 ) -> Result<LocalGraph, VaultError> {
+    // #345: center on a locked path → empty graph. The graph around a
+    // locked file is itself locked state.
+    if is_rel_path_locked(&state, &path) {
+        return Ok(LocalGraph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        });
+    }
     let (lg_arc, fi_arc) = {
         let guard = state
             .index_coordinator
@@ -898,7 +1015,34 @@ pub async fn get_local_graph(
     let fi = fi_arc.read().map_err(|_| VaultError::IndexCorrupt)?;
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
-    Ok(compute_local_graph(&path, depth, &lg, &fi))
+    let raw = compute_local_graph(&path, depth, &lg, &fi);
+    drop(lg);
+    drop(fi);
+    // #345: drop any node/edge whose endpoints live inside a locked
+    // root. Leaking filenames through the graph view is explicitly out
+    // of the acceptance criteria ("locked folder is fully invisible to
+    // … graph").
+    Ok(filter_graph_for_locked(&state, raw))
+}
+
+fn filter_graph_for_locked(state: &VaultState, mut g: LocalGraph) -> LocalGraph {
+    let checker = LockedRelChecker::new(state);
+    if checker.prefixes.is_empty() {
+        return g;
+    }
+    let locked_ids: HashSet<String> = g
+        .nodes
+        .iter()
+        .filter(|n| checker.is_locked(&n.path))
+        .map(|n| n.id.clone())
+        .collect();
+    if locked_ids.is_empty() {
+        return g;
+    }
+    g.nodes.retain(|n| !locked_ids.contains(&n.id));
+    g.edges
+        .retain(|e| !locked_ids.contains(&e.from) && !locked_ids.contains(&e.to));
+    g
 }
 
 // ── get_link_graph ─────────────────────────────────────────────────────────────
@@ -1016,7 +1160,12 @@ pub async fn get_link_graph(
     let lg = lg_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
     let ti = ti_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
 
-    Ok(compute_link_graph(&lg, &fi, &ti))
+    let raw = compute_link_graph(&lg, &fi, &ti);
+    drop(ti);
+    drop(lg);
+    drop(fi);
+    // #345: strip locked endpoints + any edge that touches them.
+    Ok(filter_graph_for_locked(&state, raw))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

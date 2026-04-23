@@ -58,6 +58,15 @@ export interface FlatRow {
   hasRenderedChildren: boolean;
   /** True iff listDirectory has resolved for this folder at least once. */
   childrenLoaded: boolean;
+  /**
+   * #345: encryption state of this row's path. Always `"not-encrypted"`
+   * for files; directories surface the backend's `DirEntry.encryption`
+   * field so the row can render a Lock / LockOpen icon and gate
+   * click/expand behavior. Optional for backwards compat with pre-#345
+   * test fixtures — production rows built by `flattenTree` always
+   * populate this field.
+   */
+  encryption?: import("../types/tree").EncryptionState;
 }
 
 export interface TreeModel {
@@ -113,6 +122,7 @@ function buildRow(
     loading,
     hasRenderedChildren: expanded && childrenLoaded && childCount > 0,
     childrenLoaded,
+    encryption: entry.encryption ?? "not-encrypted",
   };
 }
 
@@ -129,6 +139,11 @@ export function flattenTree(model: TreeModel): FlatRow[] {
     for (const entry of entries) {
       out.push(buildRow(entry, depth, model.vaultPath, model));
       if (!entry.is_dir) continue;
+      // #345: a locked encrypted root never emits children. Descending
+      // into it would render rows whose paths cannot be opened, which
+      // violates the "locked folder is fully invisible" AC. Unlocked
+      // encrypted folders behave like plain folders.
+      if (entry.encryption === "locked") continue;
       const relPath = toRelPath(entry.path, model.vaultPath);
       if (!model.expanded.has(relPath)) continue;
       const fs = model.folders.get(entry.path);

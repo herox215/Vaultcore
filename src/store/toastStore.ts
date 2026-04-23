@@ -4,7 +4,7 @@
 
 import { writable } from "svelte/store";
 
-export type ToastVariant = "error" | "conflict" | "clean-merge";
+export type ToastVariant = "error" | "conflict" | "clean-merge" | "info";
 
 export interface Toast {
   id: number;
@@ -35,23 +35,33 @@ function scheduleDismiss(id: number): void {
   timers.set(id, t);
 }
 
+function pushToast(args: { variant: ToastVariant; message: string }): number {
+  const id = nextId++;
+  const toast: Toast = { id, variant: args.variant, message: args.message };
+  _store.update((toasts) => {
+    const next = [...toasts, toast];
+    while (next.length > MAX_TOASTS) {
+      const dropped = next.shift();
+      if (dropped !== undefined) clearTimer(dropped.id);
+    }
+    return next;
+  });
+  scheduleDismiss(id);
+  return id;
+}
+
 export const toastStore = {
   subscribe: _store.subscribe,
-  push(args: { variant: ToastVariant; message: string }): number {
-    const id = nextId++;
-    const toast: Toast = { id, variant: args.variant, message: args.message };
-    _store.update((toasts) => {
-      const next = [...toasts, toast];
-      while (next.length > MAX_TOASTS) {
-        const dropped = next.shift();
-        if (dropped !== undefined) clearTimer(dropped.id);
-      }
-      return next;
-    });
-    scheduleDismiss(id);
-    return id;
-  },
+  push: pushToast,
   dismiss,
+  /** Convenience: push an error-variant toast. */
+  error(message: string): number {
+    return pushToast({ variant: "error", message });
+  },
+  /** Convenience: push an info-variant toast (used for success notifications). */
+  info(message: string): number {
+    return pushToast({ variant: "info", message });
+  },
   /** Test-only helper — resets in-memory state between Vitest cases. */
   _reset(): void {
     for (const id of Array.from(timers.keys())) clearTimer(id);

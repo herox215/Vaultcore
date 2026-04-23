@@ -19,13 +19,32 @@
 // directly. The two code paths MUST stay logically identical — if you
 // change one, change both.
 
+use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
 use crate::indexer::memory::FileMeta;
-use crate::indexer::walk_md_files;
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// #345: refuse a path that sits inside a currently-locked encrypted
+/// folder. Every FS mutation / read entry point calls this after
+/// canonicalization so one registry check gates the whole surface.
+/// `ensure_inside_vault` already gates the canonical target; write
+/// paths that compute `final_path = canonical_parent.join(name)` must
+/// additionally call this on the final prospective path — otherwise a
+/// plain file could be renamed/moved INTO a locked folder and silently
+/// bypass the gate.
+fn ensure_unlocked(state: &VaultState, canonical: &Path) -> Result<(), VaultError> {
+    let canon = CanonicalPath::assume_canonical(canonical.to_path_buf());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(VaultError::PathLocked {
+            path: canonical.display().to_string(),
+        });
+    }
+    Ok(())
+}
 
 /// T-02 mitigation: canonicalize `target` and confirm it sits inside the
 /// currently-open vault.
@@ -48,6 +67,9 @@ fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, Vau
             path: canonical_target.display().to_string(),
         });
     }
+    drop(guard);
+    // #345: gate reads/writes that target a locked encrypted subtree.
+    ensure_unlocked(state, &canonical_target)?;
     Ok(canonical_target)
 }
 
@@ -63,6 +85,10 @@ pub async fn read_file(
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },
         _ => VaultError::Io(e),
     })?;
+    // #345: transparent decrypt when the file lives in an unlocked
+    // encrypted folder. No-op for plain vault files so the hot path
+    // cost for the common case is one manifest read (cached + small).
+    let bytes = crate::encryption::maybe_decrypt_read(&state, &canonical, bytes)?;
     // D-17: non-UTF-8 bytes never load into the editor.
     String::from_utf8(bytes).map_err(|_| VaultError::InvalidEncoding { path })
 }
@@ -100,6 +126,12 @@ pub async fn write_file(
         .ok_or_else(|| VaultError::PermissionDenied { path: path.clone() })?;
     let final_path = canonical_parent.join(file_name);
 
+    // #345: the parent gate caught locked-folder writes when the parent
+    // itself sits inside a locked root. This second check catches the
+    // edge case where the parent is plain but the target IS a locked
+    // root (e.g. writing straight into /vault/locked as a leaf).
+    ensure_unlocked(&state, &final_path)?;
+
     // D-12 self-filtering: record before the fs call so the watcher ignores
     // the resulting event.
     if let Ok(mut list) = state.write_ignore.lock() {
@@ -107,7 +139,11 @@ pub async fn write_file(
     }
 
     let bytes = content.as_bytes();
-    std::fs::write(&final_path, bytes).map_err(|e| match e.kind() {
+    // #345: if the target sits in an unlocked encrypted root, seal
+    // the bytes before they hit disk. Outside any encrypted folder
+    // this is a zero-cost passthrough.
+    let bytes_on_disk = crate::encryption::maybe_encrypt_write(&state, &final_path, bytes)?;
+    std::fs::write(&final_path, &bytes_on_disk).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },
         // StorageFull is the std name for disk-full on Linux/Windows.
         std::io::ErrorKind::StorageFull => VaultError::DiskFull,
@@ -188,6 +224,11 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
     if !canonical_parent.starts_with(&vault) {
         return Err(VaultError::PermissionDenied { path: canonical_parent.display().to_string() });
     }
+    drop(guard);
+    // #345: parent-inside gate. The final prospective target (parent ++
+    // file_name) is additionally checked by each caller after they
+    // compute it — belt-and-braces against locked-leaf edge cases.
+    ensure_unlocked(state, &canonical_parent)?;
     Ok((canonical_parent, vault))
 }
 
@@ -257,8 +298,15 @@ pub fn create_file_impl(state: &VaultState, parent: String, name: String) -> Res
     let base_name = if name.is_empty() { "Untitled.md" } else { &name };
     let final_path = find_available_name(&canonical_parent, base_name);
 
+    // #345: locked-leaf gate (same rationale as write_file).
+    ensure_unlocked(state, &final_path)?;
+
     record_write(state, final_path.clone());
-    std::fs::write(&final_path, "").map_err(VaultError::Io)?;
+    // #345: encrypt the (empty) payload when the target sits in an
+    // unlocked encrypted root so the brand-new file is consistent
+    // with its siblings on disk.
+    let bytes = crate::encryption::maybe_encrypt_write(state, &final_path, b"")?;
+    std::fs::write(&final_path, &bytes).map_err(VaultError::Io)?;
 
     // #307: write_ignore (D-12) suppresses the watcher's natural create event,
     // which would normally populate FileIndex. Insert directly so `resolve_link`
@@ -375,6 +423,9 @@ pub async fn rename_file_impl(state: &VaultState, old_path: String, new_name: St
     // Validate new path stays inside vault
     let (canonical_new_parent, _vault) = ensure_parent_inside_vault(state, &new_path)?;
     let canonical_new = canonical_new_parent.join(&new_name);
+    // #345: block renames that target (or land inside) a locked root,
+    // even when the source is plain.
+    ensure_unlocked(state, &canonical_new)?;
 
     // Count wiki-links before rename (D-16)
     let old_stem = canonical_old
@@ -388,9 +439,16 @@ pub async fn rename_file_impl(state: &VaultState, old_path: String, new_name: St
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
+    // #345: scan only unlocked .md files. A locked file contains VCE1
+    // ciphertext — reading its bytes through regex would produce junk
+    // matches and leak structure. The walker is given a skip predicate
+    // consulting the shared registry.
+    let skip_registry = Arc::clone(&state.locked_paths);
     let mut link_count: u32 = 0;
-    for md_path in walk_md_files(&vault_root) {
-        // Skip the file being renamed itself
+    for md_path in crate::indexer::walk_md_files_skipping(&vault_root, move |p| {
+        let canon = CanonicalPath::assume_canonical(p.to_path_buf());
+        skip_registry.is_locked(&canon)
+    }) {
         if md_path == canonical_old {
             continue;
         }
@@ -634,6 +692,10 @@ pub async fn move_file_impl(state: &VaultState, from: String, to_folder: String)
         .ok_or_else(|| VaultError::PermissionDenied { path: from.clone() })?;
 
     let dest = canonical_to_folder.join(file_name);
+    // #345: block moves that land inside a locked root. Both source
+    // and destination must be unlocked; the source was already gated
+    // by `ensure_inside_vault` above.
+    ensure_unlocked(state, &dest)?;
 
     if dest.exists() {
         return Err(VaultError::Io(std::io::Error::new(
@@ -727,7 +789,11 @@ pub fn get_file_hash_impl(state: &VaultState, path: String) -> Result<String, Va
         },
         _ => VaultError::Io(e),
     })?;
-    Ok(hash_bytes(&bytes))
+    // #345: hash the plaintext, not the ciphertext, so the frontend
+    // conflict-detection hashes (which are always computed over
+    // plaintext) match.
+    let plaintext = crate::encryption::maybe_decrypt_read(state, &canonical, bytes)?;
+    Ok(hash_bytes(&plaintext))
 }
 
 #[tauri::command]
@@ -774,6 +840,11 @@ pub async fn save_attachment(
             path: canonical_folder.display().to_string(),
         });
     }
+    // #345: attachments into an encrypted folder are refused. We do
+    // not attempt to seal the attachment for the user — the encrypt
+    // flow operates on a whole-folder batch, not per-file. This gate
+    // keeps the contract clean: an encrypted folder stays uniform.
+    ensure_unlocked(&state, &canonical_folder)?;
 
     // Determine final filename with collision avoidance (cap at 1000).
     let (stem, ext) = if let Some(dot) = filename.rfind('.') {
@@ -841,8 +912,14 @@ pub fn count_wiki_links_impl(state: &VaultState, filename: String) -> Result<u32
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
+    // #345: count only unlocked .md files — see rename_file_impl for
+    // rationale. Walker consults the shared registry.
+    let skip_registry = Arc::clone(&state.locked_paths);
     let mut total: u32 = 0;
-    for md_path in walk_md_files(&vault_root) {
+    for md_path in crate::indexer::walk_md_files_skipping(&vault_root, move |p| {
+        let canon = CanonicalPath::assume_canonical(p.to_path_buf());
+        skip_registry.is_locked(&canon)
+    }) {
         if let Ok(contents) = std::fs::read_to_string(&md_path) {
             total += re.find_iter(&contents).count() as u32;
         }

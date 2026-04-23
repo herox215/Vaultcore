@@ -18,6 +18,8 @@
     File,
     MoreHorizontal,
     Star,
+    Lock,
+    LockOpen,
   } from "lucide-svelte";
   import {
     createFile,
@@ -38,6 +40,12 @@
   import { tabStore } from "../../store/tabStore";
   import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
+  import {
+    openEncryptModal,
+    openUnlockModal,
+  } from "../../store/encryptionModalStore";
+  import { disarmAutoLock } from "../../store/autoLockStore";
+  import { lockFolder } from "../../ipc/commands";
   import type { FlatRow } from "../../lib/flattenTree";
 
   interface Props {
@@ -113,9 +121,32 @@
       : absPath;
   }
 
+  // #345 — encryption state helpers. `encryption` defaults to
+  // `"not-encrypted"` for fixtures written before #345 landed.
+  const isLocked = $derived((row.encryption ?? "not-encrypted") === "locked");
+  const isUnlocked = $derived((row.encryption ?? "not-encrypted") === "unlocked");
+  const isEncryptedRoot = $derived(isLocked || isUnlocked);
+
   function handleClick() {
     onSelect(row.path);
     if (row.isDir) {
+      // #345: clicking a locked folder opens the password modal
+      // instead of toggling expansion. On successful unlock we
+      // schedule the expand via onUnlocked — the tree refresh that
+      // fires from `encrypted_folders_changed` rebuilds this row
+      // with `encryption: "unlocked"`, and the expand we trigger
+      // here then descends into the now-visible children without
+      // requiring a second click.
+      if (isLocked) {
+        openUnlockModal(row.path, row.name, async () => {
+          // The store swap + tree refresh run asynchronously after
+          // the unlock event; yield the microtask queue so the
+          // refreshed row is the one we toggle.
+          await Promise.resolve();
+          await onToggleExpand(row);
+        });
+        return;
+      }
       void onToggleExpand(row);
     } else {
       onOpenFile(row.path);
@@ -461,9 +492,19 @@
       <span class="vc-tree-spacer" aria-hidden="true"></span>
     {/if}
 
-    <span class="vc-tree-icon" class:vc-tree-icon--active={isActive} aria-hidden="true">
+    <span
+      class="vc-tree-icon"
+      class:vc-tree-icon--active={isActive}
+      class:vc-tree-icon--locked={isLocked}
+      class:vc-tree-icon--unlocked={isUnlocked}
+      aria-hidden="true"
+    >
       {#if row.isDir}
-        {#if row.expanded}
+        {#if isLocked}
+          <Lock size={16} strokeWidth={1.5} />
+        {:else if isUnlocked}
+          <LockOpen size={16} strokeWidth={1.5} />
+        {:else if row.expanded}
           <FolderOpen size={16} strokeWidth={1.5} />
         {:else}
           <Folder size={16} strokeWidth={1.5} />
@@ -484,7 +525,10 @@
         onCancel={handleRenameCancel}
       />
     {:else}
-      <span class="vc-tree-name">
+      <span
+        class="vc-tree-name"
+        class:vc-tree-name--locked={isLocked}
+      >
         {row.name}
         {#if row.isSymlink}
           <em class="vc-tree-symlink">(link)</em>
@@ -524,6 +568,38 @@
       <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
       <button class="vc-context-item" onclick={handleNewCanvasHere}>New canvas here</button>
       <button class="vc-context-item" onclick={handleNewFolderHere}>New folder here</button>
+      <!-- #345: encryption actions. Three mutually-exclusive states. -->
+      {#if !isEncryptedRoot}
+        <button
+          class="vc-context-item"
+          data-testid="context-encrypt-folder"
+          onclick={() => { closeContextMenu(); openEncryptModal(row.path, row.name); }}
+        >Encrypt folder…</button>
+      {:else if isLocked}
+        <button
+          class="vc-context-item"
+          data-testid="context-unlock-folder"
+          onclick={() => { closeContextMenu(); openUnlockModal(row.path, row.name); }}
+        >Unlock folder…</button>
+      {:else}
+        <button
+          class="vc-context-item"
+          data-testid="context-lock-folder"
+          onclick={async () => {
+            closeContextMenu();
+            try {
+              await lockFolder(row.path);
+              // #345: cancel the pending auto-lock timer for this
+              // root — manual lock wins, no need to fire the IPC
+              // again when the timer expires.
+              disarmAutoLock(row.relPath);
+            } catch (e) {
+              if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
+              else toastStore.error("Failed to lock folder");
+            }
+          }}
+        >Lock folder</button>
+      {/if}
     {/if}
   </ContextMenu>
 
@@ -669,6 +745,15 @@
     color: var(--color-accent);
   }
 
+  /* #345: encryption icon variants. Locked stays muted to signal
+     "currently out of reach"; unlocked takes the accent color. */
+  .vc-tree-icon--locked {
+    color: var(--color-text-muted);
+  }
+  .vc-tree-icon--unlocked {
+    color: var(--color-accent);
+  }
+
   .vc-tree-name {
     flex: 1;
     font-size: 14px;
@@ -677,6 +762,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* #345: muted label for locked folder rows so the collapsed,
+     unexpandable row doesn't visually compete with plain rows. */
+  .vc-tree-name--locked {
+    color: var(--color-text-muted);
   }
 
   .vc-tree-symlink {

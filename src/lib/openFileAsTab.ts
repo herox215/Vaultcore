@@ -8,6 +8,10 @@ import { tabStore } from "../store/tabStore";
 import { readFile } from "../ipc/commands";
 import { isVaultError } from "../types/errors";
 import { getExtension, getTabKind, IMAGE_EXTS, TEXT_EXTS } from "./tabKind";
+import { encryptedFolders } from "../store/encryptedFoldersStore";
+import { vaultStore } from "../store/vaultStore";
+import { openUnlockModal } from "../store/encryptionModalStore";
+import { get } from "svelte/store";
 
 /**
  * Open `absPath` as a tab. Dispatches to the right viewer:
@@ -20,7 +24,72 @@ import { getExtension, getTabKind, IMAGE_EXTS, TEXT_EXTS } from "./tabKind";
  * encoding reason (FileNotFound, PermissionDenied) — in that case the
  * caller's existing toast plumbing handles the user message.
  */
+/**
+ * #345: determine whether `absPath` sits inside a currently-locked
+ * encrypted root. Returns the absolute path of the locking root, or
+ * null if the target is plain / unlocked. Uses the frontend store
+ * (salt-stripped manifest) and the vaultStore's current vault root
+ * to construct the prefix — no IPC call on the hot click path.
+ */
+function findLockingRoot(absPath: string): string | null {
+  const vs = get(vaultStore);
+  const vaultRoot = vs.currentPath;
+  if (!vaultRoot) return null;
+  const entries = get(encryptedFolders);
+  if (entries.length === 0) return null;
+  const normalizedAbs = absPath.replace(/\\/g, "/");
+  // #345: strip trailing separators from the vault root BEFORE we
+  // join with the rel path — otherwise `/vault/` + `secret` produced
+  // `/vault//secret` and the prefix check silently missed every
+  // locked folder on systems where the vault path ends with a slash.
+  const normalizedVault = vaultRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  for (const entry of entries) {
+    const rootAbs = `${normalizedVault}/${entry.path}`;
+    if (normalizedAbs === rootAbs || normalizedAbs.startsWith(rootAbs + "/")) {
+      // Note: the store does NOT carry an is-locked flag — the
+      // backend state is the source of truth via the sidebar's
+      // `DirEntry.encryption`. But any file in the manifest whose
+      // host folder is currently locked will have already been
+      // closed-or-never-opened by the tree; the safe default when a
+      // link points into a manifest-listed folder is to check via
+      // the backend. We use `DirEntry` on the sidebar for the UI;
+      // here we defer to the backend's gate, which returns
+      // PathLocked if the folder is locked — let that error drive
+      // the unlock modal.
+      return rootAbs;
+    }
+  }
+  return null;
+}
+
 export async function openFileAsTab(absPath: string): Promise<string | null> {
+  // #345: if the target sits inside an encrypted root that the user
+  // is holding locked, open the unlock modal instead of routing into
+  // the viewer (which would fail with a cryptic "file is binary" or
+  // "invalid encoding" error on ciphertext). The `findLockingRoot`
+  // check is O(k) against the encryptedFolders store; if no
+  // encrypted folders exist it short-circuits to null at zero cost.
+  //
+  // We only prompt here for paths inside a known encrypted root that
+  // COULD be locked. Paths outside any encrypted root skip this
+  // entirely — no double read_file on the happy path.
+  const lockingRoot = findLockingRoot(absPath);
+  if (lockingRoot) {
+    try {
+      await readFile(absPath);
+    } catch (err) {
+      if (isVaultError(err) && err.kind === "PathLocked") {
+        const label = lockingRoot.split("/").pop() ?? lockingRoot;
+        openUnlockModal(lockingRoot, label, () => {
+          void openFileAsTab(absPath);
+        });
+        return null;
+      }
+      // Any other error (incl. binary ciphertext) falls through; the
+      // classifier below will handle InvalidEncoding → "unsupported".
+    }
+  }
+
   const ext = getExtension(absPath);
   if (ext === "md" || ext === "markdown") {
     return tabStore.openTab(absPath);

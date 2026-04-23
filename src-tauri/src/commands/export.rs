@@ -405,6 +405,16 @@ fn render_note(
 ) -> Result<String, VaultError> {
     let vault_root = get_vault_root(state)?;
     let note_abs = ensure_inside_vault(&vault_root, &PathBuf::from(note_path))?;
+    // #345: refuse to render ciphertext through the export / print
+    // pipeline — pulldown-cmark over binary would either error or leak
+    // garbage, and the "locked folder is fully invisible" contract
+    // means export must refuse locked targets too.
+    let canon = crate::encryption::CanonicalPath::assume_canonical(note_abs.clone());
+    if state.locked_paths.is_locked(&canon) {
+        return Err(VaultError::PathLocked {
+            path: note_abs.display().to_string(),
+        });
+    }
 
     let bytes = std::fs::read(&note_abs).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: note_path.to_string() },

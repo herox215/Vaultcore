@@ -13,7 +13,11 @@ export type VaultErrorKind =
   | "MergeConflict"
   | "InvalidEncoding"
   | "LockPoisoned"
-  | "Io";
+  | "Io"
+  // #345 — encrypted-folder error variants.
+  | "PathLocked"
+  | "WrongPassword"
+  | "CryptoError";
 
 export interface VaultError {
   kind: VaultErrorKind;
@@ -59,6 +63,12 @@ export function vaultErrorCopy(err: VaultError): string {
       return "Internal error — please restart VaultCore.";
     case "MergeConflict":
       return `Conflict in ${err.data ?? "file"} — local version kept.`;
+    case "PathLocked":
+      return "This folder is locked. Unlock it before reading or editing its files.";
+    case "WrongPassword":
+      return "Wrong password.";
+    case "CryptoError":
+      return "Encryption error. This file may be corrupted or from a newer VaultCore version.";
     default: {
       const _exhaustive: never = err.kind;
       return "An unexpected error occurred.";

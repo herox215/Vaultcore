@@ -132,6 +132,13 @@ const K_SEMANTIC = "vaultcore-semantic-search";
 // Legacy key from the brief attachment-folder era (before embeds). Removed
 // during cleanup so stale entries don't linger in localStorage.
 const K_ATTACHMENT_FOLDER_LEGACY = "vaultcore-attachment-folder";
+// #345: auto-lock timer for encrypted folders. Persisted as minutes.
+// 0 means "never auto-lock" (still re-locks on app quit).
+const K_AUTO_LOCK_MINUTES = "vaultcore-auto-lock-minutes";
+
+export const AUTO_LOCK_MINUTES_MIN = 0;
+export const AUTO_LOCK_MINUTES_MAX = 120;
+export const AUTO_LOCK_MINUTES_DEFAULT = 15;
 
 export interface SettingsState {
   fontBody: BodyFont;
@@ -146,6 +153,8 @@ export interface SettingsState {
   /** #201: master toggle for semantic search. Off by default so the
    *  reindex never runs until the user opts in. */
   enableSemanticSearch: boolean;
+  /** #345: auto-lock timeout in minutes. 0 disables auto-lock. */
+  autoLockMinutes: number;
 }
 
 const initial: SettingsState = {
@@ -156,6 +165,7 @@ const initial: SettingsState = {
   dailyNotesDateFormat: DEFAULT_DAILY_DATE_FORMAT,
   dailyNotesTemplate: "",
   enableSemanticSearch: false,
+  autoLockMinutes: AUTO_LOCK_MINUTES_DEFAULT,
 };
 
 function isBodyFont(v: unknown): v is BodyFont {
@@ -186,6 +196,11 @@ function readInitial(): SettingsState {
     const dFormat = localStorage.getItem(K_DAILY_FORMAT);
     const dTemplate = localStorage.getItem(K_DAILY_TEMPLATE);
     const semantic = localStorage.getItem(K_SEMANTIC);
+    // #345: guard against the Number("") = 0 silent-zero trap. A missing
+    // value must fall through to DEFAULT, not to 0 (which would disable
+    // auto-lock on first run for every fresh install).
+    const autoLockRawStr = localStorage.getItem(K_AUTO_LOCK_MINUTES);
+    const autoLockRaw = autoLockRawStr === null ? NaN : Number(autoLockRawStr);
     return {
       fontBody: isBodyFont(b) ? b : initial.fontBody,
       fontMono: isMonoFont(m) ? m : initial.fontMono,
@@ -194,6 +209,10 @@ function readInitial(): SettingsState {
       dailyNotesDateFormat: sanitizeDailyString(dFormat, initial.dailyNotesDateFormat),
       dailyNotesTemplate: sanitizeDailyString(dTemplate, initial.dailyNotesTemplate),
       enableSemanticSearch: semantic === "true",
+      autoLockMinutes:
+        Number.isFinite(autoLockRaw) && autoLockRaw >= AUTO_LOCK_MINUTES_MIN
+          ? Math.min(AUTO_LOCK_MINUTES_MAX, Math.round(autoLockRaw))
+          : AUTO_LOCK_MINUTES_DEFAULT,
     };
   } catch { return { ...initial }; }
 }
@@ -268,6 +287,17 @@ function createSettingsStore() {
     setEnableSemanticSearch(enable: boolean): void {
       _store.update((s) => ({ ...s, enableSemanticSearch: enable }));
       try { localStorage.setItem(K_SEMANTIC, String(enable)); } catch { /* */ }
+    },
+    /** #345: persist the auto-lock timeout. 0 disables the timer. */
+    setAutoLockMinutes(n: number): void {
+      const clamped = Number.isFinite(n)
+        ? Math.max(
+            AUTO_LOCK_MINUTES_MIN,
+            Math.min(AUTO_LOCK_MINUTES_MAX, Math.round(n)),
+          )
+        : AUTO_LOCK_MINUTES_DEFAULT;
+      _store.update((s) => ({ ...s, autoLockMinutes: clamped }));
+      try { localStorage.setItem(K_AUTO_LOCK_MINUTES, String(clamped)); } catch { /* */ }
     },
   };
 }
