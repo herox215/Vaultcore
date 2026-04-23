@@ -43,6 +43,24 @@ pub enum VaultError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    // #345: encrypted-folder errors.
+    /// Path lies inside a currently-locked encrypted folder. Every
+    /// read/write/rename/delete path gates on this before touching disk.
+    #[error("Path is inside a locked encrypted folder: {path}")]
+    PathLocked { path: String },
+
+    /// Returned by `unlock_folder` and by any decrypt that fails its
+    /// Poly1305 tag — the frontend maps this to a modal error row, not a
+    /// toast, so wrong-password typos stay attached to the prompt.
+    #[error("Wrong password")]
+    WrongPassword,
+
+    /// Any other crypto-layer failure (truncated container, wrong magic,
+    /// KDF internal error). Distinct from `WrongPassword` so UX can
+    /// surface "this file looks corrupted" vs "your password was wrong".
+    #[error("Encryption error: {msg}")]
+    CryptoError { msg: String },
 }
 
 impl VaultError {
@@ -58,6 +76,9 @@ impl VaultError {
             Self::InvalidEncoding { .. } => "InvalidEncoding",
             Self::LockPoisoned => "LockPoisoned",
             Self::Io(_) => "Io",
+            Self::PathLocked { .. } => "PathLocked",
+            Self::WrongPassword => "WrongPassword",
+            Self::CryptoError { .. } => "CryptoError",
         }
     }
 
@@ -67,7 +88,9 @@ impl VaultError {
             | Self::PermissionDenied { path }
             | Self::VaultUnavailable { path }
             | Self::MergeConflict { path }
-            | Self::InvalidEncoding { path } => Some(path.clone()),
+            | Self::InvalidEncoding { path }
+            | Self::PathLocked { path } => Some(path.clone()),
+            Self::CryptoError { msg } => Some(msg.clone()),
             _ => None,
         }
     }
