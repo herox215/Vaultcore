@@ -687,6 +687,9 @@
 
         if (diskHash !== null && expected !== null && diskHash !== expected) {
           // MISMATCH: external edit detected — route through three-way merge engine.
+          // Issue #339: on clean, the backend writes the merged bytes to disk
+          // itself and returns `new_hash`. We must NOT call writeFile here —
+          // that would double-write and double-dispatch the index updates.
           const baseContent = currentTab?.lastSavedContent ?? "";
           const result = await mergeExternalChange(filePath, text, baseContent);
 
@@ -698,8 +701,14 @@
             });
           }
 
-          // Write the merged content to disk so hash converges.
-          const newHash = await writeFile(filePath, result.merged_content);
+          // On clean the backend just wrote; new_hash is the authoritative
+          // next-disk-state. On conflict the backend did NOT write — hash
+          // the merged (== local) content so the next autosave doesn't
+          // re-enter merge against a stale expected hash.
+          const newHash =
+            result.outcome === "clean"
+              ? result.new_hash
+              : await sha256Hex(result.merged_content);
           editorStore.setLastSavedHash(newHash);
           tabStore.setLastSavedHash(tabId, newHash);
           tabStore.setLastSavedContent(tabId, result.merged_content);

@@ -22,7 +22,7 @@
 use crate::error::VaultError;
 use crate::hash::hash_bytes;
 use crate::indexer::memory::FileMeta;
-use crate::indexer::{walk_md_files, IndexCmd};
+use crate::indexer::walk_md_files;
 use crate::VaultState;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -114,14 +114,16 @@ pub async fn write_file(
         _ => VaultError::Io(e),
     })?;
 
-    // BUG-05.1 FIX: the watcher would normally dispatch UpdateLinks/UpdateTags
-    // for any modify event, but write_ignore suppresses self-writes to avoid
-    // double-indexing. That leaves the in-memory LinkGraph and TagIndex stale
-    // after every auto-save, so user observes stale tag counts, broken
-    // backlinks, and dangling unresolved-link colors until cold restart.
-    //
-    // Dispatch the updates directly here so the in-memory indexes stay in sync.
-    dispatch_index_updates(&state, &final_path, &content).await;
+    // BUG-05.1 FIX + #339: the watcher would normally dispatch
+    // UpdateLinks/UpdateTags/AddFile for any modify event, but write_ignore
+    // suppresses self-writes to avoid double-indexing. That leaves the
+    // in-memory LinkGraph, TagIndex, and Tantivy index stale after every
+    // auto-save, so users observe stale tag counts, broken backlinks,
+    // dangling unresolved-link colors, and stale fulltext hits until cold
+    // restart. Shared helper in commands/index_dispatch.rs keeps this in
+    // sync across all self-write paths (write_file, merge_external_change,
+    // rename/move, update_links_after_rename).
+    crate::commands::index_dispatch::dispatch_self_write(&state, &final_path, &content).await;
 
     // Embed-on-save (#196): non-blocking enqueue to the EmbedCoordinator.
     // Sync, returns immediately; a `QueueFull` outcome is benign because
@@ -135,7 +137,7 @@ pub async fn write_file(
 }
 
 #[cfg(feature = "embeddings")]
-fn dispatch_embed_update(state: &VaultState, abs_path: PathBuf, content: &str) {
+pub(crate) fn dispatch_embed_update(state: &VaultState, abs_path: PathBuf, content: &str) {
     let coord_handles = {
         let Ok(guard) = state.embed_coordinator.lock() else { return };
         guard.as_ref().map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
@@ -162,49 +164,6 @@ pub(crate) fn dispatch_embed_delete(state: &VaultState, abs_path: PathBuf) {
     if let Err(e) = probe.enqueue_delete(abs_path) {
         log::warn!("embed delete enqueue: {e}");
     }
-}
-
-/// Dispatch IndexCmd::UpdateLinks and IndexCmd::UpdateTags for a path we just
-/// wrote from the backend. Called from write_file because write_ignore
-/// suppresses the natural watcher-driven dispatch.
-///
-/// Best-effort: if the IndexCoordinator is not yet initialized (vault not
-/// open, or during boot) or the channel is full, we silently drop — the
-/// next cold-start rebuild will re-populate correctly.
-async fn dispatch_index_updates(state: &VaultState, abs_path: &Path, content: &str) {
-    // Get vault root so we can compute a vault-relative path.
-    let vault_root = {
-        let Ok(guard) = state.current_vault.lock() else { return };
-        match guard.as_ref() {
-            Some(p) => p.clone(),
-            None => return,
-        }
-    };
-
-    let Ok(rel) = abs_path.strip_prefix(&vault_root) else { return };
-    let rel_path = rel.to_string_lossy().replace('\\', "/");
-
-    // Clone the sender Arc — do NOT hold the coordinator lock across .await.
-    let tx = {
-        let Ok(guard) = state.index_coordinator.lock() else { return };
-        match guard.as_ref() {
-            Some(c) => c.tx.clone(),
-            None => return,
-        }
-    };
-
-    let _ = tx
-        .send(IndexCmd::UpdateLinks {
-            rel_path: rel_path.clone(),
-            content: content.to_string(),
-        })
-        .await;
-    let _ = tx
-        .send(IndexCmd::UpdateTags {
-            rel_path,
-            content: content.to_string(),
-        })
-        .await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -396,7 +355,15 @@ pub struct RenameResult {
 }
 
 /// Testable implementation body for rename_file.
-pub fn rename_file_impl(state: &VaultState, old_path: String, new_name: String) -> Result<RenameResult, VaultError> {
+///
+/// Performs the disk rename, the FileIndex sync, AND the index dispatch
+/// (RemoveLinks/RemoveTags + Tantivy delete for the OLD rel_path;
+/// UpdateLinks/UpdateTags + Tantivy AddFile for the NEW rel_path using
+/// the file's post-rename content). Keeping dispatch in `_impl` means
+/// every caller — production wrapper, unit tests, future callers — runs
+/// the same contract. The tauri wrapper only adds the synthetic
+/// `file_changed` event + embed delete on top.
+pub async fn rename_file_impl(state: &VaultState, old_path: String, new_name: String) -> Result<RenameResult, VaultError> {
     let old = PathBuf::from(&old_path);
     let canonical_old = ensure_inside_vault(state, &old)?;
 
@@ -446,6 +413,13 @@ pub fn rename_file_impl(state: &VaultState, old_path: String, new_name: String) 
     // fallback. Only mutate after `fs::rename` succeeds; on disk failure
     // we intentionally leave the index untouched.
     sync_file_index_rename(state, &canonical_old, &canonical_new, &vault_root);
+
+    // #339: watcher-natural DeleteFile(old) + AddFile(new) on rename is
+    // suppressed by write_ignore. Dispatch both sides ourselves so the
+    // in-memory LinkGraph / TagIndex / Tantivy index stay in sync with
+    // disk without waiting for cold restart.
+    crate::commands::index_dispatch::dispatch_self_delete(state, &canonical_old).await;
+    dispatch_new_side_after_rename(state, &canonical_new, "rename_file").await;
 
     Ok(RenameResult {
         new_path: canonical_new.to_string_lossy().into_owned(),
@@ -515,13 +489,13 @@ pub async fn rename_file(
     // NEW path's vectors get embedded on the next save by the user.
     #[cfg(feature = "embeddings")]
     let old_canonical = std::fs::canonicalize(&old_path).ok();
-    let old_canonical_for_tantivy = std::fs::canonicalize(&old_path).ok();
-    let old_canonical_for_event = old_canonical_for_tantivy
-        .as_ref()
+    let old_canonical_for_event = std::fs::canonicalize(&old_path)
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| old_path.clone());
+        .unwrap_or_else(|_| old_path.clone());
 
-    let result = rename_file_impl(&state, old_path, new_name)?;
+    // rename_file_impl handles the disk rename, FileIndex sync, AND the
+    // index dispatch — see its doc for the contract split.
+    let result = rename_file_impl(&state, old_path, new_name).await?;
 
     // #307: write_ignore (D-12) suppresses the watcher's natural rename
     // event, so emit a synthetic one — same pattern as delete_file (#102).
@@ -534,14 +508,6 @@ pub async fn rename_file(
         },
     );
 
-    // #277: the watcher would normally dispatch DeleteFile(old) + AddFile(new)
-    // on a rename event, but write_ignore suppresses that for self-mutations.
-    // Dispatch a Tantivy delete for the OLD path so fulltext search stops
-    // returning the stale doc; the NEW path is re-indexed on next user save.
-    if let Some(old) = old_canonical_for_tantivy {
-        dispatch_tantivy_delete(&state, old).await;
-    }
-
     #[cfg(feature = "embeddings")]
     if let Some(p) = old_canonical {
         dispatch_embed_delete(&state, p);
@@ -549,24 +515,44 @@ pub async fn rename_file(
     Ok(result)
 }
 
-/// Enqueue a Tantivy delete for `path`. Called from rename/move paths where
-/// write_ignore would otherwise suppress the watcher-driven DeleteFile.
-async fn dispatch_tantivy_delete(state: &VaultState, path: PathBuf) {
-    let tx = {
-        let Ok(guard) = state.index_coordinator.lock() else { return };
-        match guard.as_ref() {
-            Some(c) => c.tx.clone(),
-            None => return,
+/// Dispatch UpdateLinks/UpdateTags/AddFile for the new side of a rename
+/// or move. Called after the disk rename + old-side dispatch succeeds.
+///
+/// `canonical_new` must already be canonicalized — callers
+/// (`rename_file_impl`, `move_file_impl`) hold that path in hand. Doing
+/// the canonicalize here again would be wasted syscalls and silently
+/// absorb an error the caller already handled.
+///
+/// On read failure we log::warn instead of bubbling: the disk operation
+/// already succeeded, so failing the command would be worse than leaving
+/// the index transiently stale until the next rebuild. The warning makes
+/// the degradation observable without being noisy.
+async fn dispatch_new_side_after_rename(state: &VaultState, canonical_new: &Path, op: &str) {
+    match std::fs::read_to_string(canonical_new) {
+        Err(e) => log::warn!(
+            "{op} new-side read failed for {}: {e} — index will trail until rebuild",
+            canonical_new.display(),
+        ),
+        Ok(content) => {
+            crate::commands::index_dispatch::dispatch_self_write(state, canonical_new, &content)
+                .await;
         }
-    };
-    let _ = tx.send(IndexCmd::DeleteFile { path }).await;
-    let _ = tx.send(IndexCmd::Commit).await;
+    }
 }
 
 // ─── delete_file ─────────────────────────────────────────────────────────────
 
-/// Testable implementation body for delete_file.
-pub fn delete_file_impl(state: &VaultState, path: String) -> Result<(), VaultError> {
+/// Testable implementation body for delete_file. Returns the canonical path
+/// of the deleted source so the tauri wrapper can emit the synthetic
+/// `file_changed` event and dispatch the embed tombstone with the same
+/// canonical form the watcher would have used.
+///
+/// The index dispatch (RemoveLinks / RemoveTags / Tantivy DeleteFile +
+/// Commit) is part of the `_impl` contract, not the wrapper. Keeping it
+/// here means every caller — production wrapper AND unit tests — runs the
+/// same delete contract and a future change to the dispatch can't be
+/// forgotten in the wrapper alone.
+pub async fn delete_file_impl(state: &VaultState, path: String) -> Result<PathBuf, VaultError> {
     let target = PathBuf::from(&path);
     let canonical = ensure_inside_vault(state, &target)?;
 
@@ -588,7 +574,12 @@ pub fn delete_file_impl(state: &VaultState, path: String) -> Result<(), VaultErr
 
     std::fs::rename(&canonical, &dest).map_err(VaultError::Io)?;
 
-    Ok(())
+    // #339: write_ignore suppresses the watcher's natural remove event;
+    // dispatch the index cleanup directly so LinkGraph, TagIndex, and
+    // Tantivy all evict entries for the deleted source.
+    crate::commands::index_dispatch::dispatch_self_delete(state, &canonical).await;
+
+    Ok(canonical)
 }
 
 #[tauri::command]
@@ -598,14 +589,12 @@ pub async fn delete_file(
     path: String,
 ) -> Result<(), VaultError> {
     use tauri::Emitter;
-    // Canonicalize before delete so the emitted path matches the form the
-    // watcher would have used (and matches how tabs/sidebar store paths).
-    let canonical = std::fs::canonicalize(&path).ok();
-    let canonical_str = canonical
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.clone());
-    delete_file_impl(&state, path)?;
+    // delete_file_impl returns the canonical source path AFTER a successful
+    // delete + index dispatch, so the synthetic event + embed tombstone use
+    // the same form the watcher would have seen.
+    let canonical = delete_file_impl(&state, path).await?;
+    let canonical_str = canonical.to_string_lossy().into_owned();
+
     // Bug #102: the watcher suppresses this delete via write_ignore (D-12),
     // so emit a synthetic file_changed event so tabs bound to the deleted
     // path close.
@@ -622,16 +611,18 @@ pub async fn delete_file(
     // write_ignore suppresses the watcher's natural Remove event so we
     // dispatch directly here.
     #[cfg(feature = "embeddings")]
-    if let Some(p) = canonical {
-        dispatch_embed_delete(&state, p);
-    }
+    dispatch_embed_delete(&state, canonical);
     Ok(())
 }
 
 // ─── move_file ───────────────────────────────────────────────────────────────
 
 /// Testable implementation body for move_file.
-pub fn move_file_impl(state: &VaultState, from: String, to_folder: String) -> Result<String, VaultError> {
+///
+/// Performs the disk rename, FileIndex sync, AND the index dispatch — same
+/// contract split as `rename_file_impl` (see its doc). Returns the
+/// canonical destination path.
+pub async fn move_file_impl(state: &VaultState, from: String, to_folder: String) -> Result<String, VaultError> {
     let from_path = PathBuf::from(&from);
     let canonical_from = ensure_inside_vault(state, &from_path)?;
 
@@ -662,6 +653,10 @@ pub fn move_file_impl(state: &VaultState, from: String, to_folder: String) -> Re
     let vault_root = get_vault_root(state)?;
     sync_file_index_rename(state, &canonical_from, &dest, &vault_root);
 
+    // #339: same dispatch parity as rename_file_impl.
+    crate::commands::index_dispatch::dispatch_self_delete(state, &canonical_from).await;
+    dispatch_new_side_after_rename(state, &dest, "move_file").await;
+
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -678,13 +673,13 @@ pub async fn move_file(
     // watcher's Remove event.
     #[cfg(feature = "embeddings")]
     let old_canonical = std::fs::canonicalize(&from).ok();
-    let old_canonical_for_tantivy = std::fs::canonicalize(&from).ok();
-    let old_canonical_for_event = old_canonical_for_tantivy
-        .as_ref()
+    let old_canonical_for_event = std::fs::canonicalize(&from)
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| from.clone());
+        .unwrap_or_else(|_| from.clone());
 
-    let result = move_file_impl(&state, from, to_folder)?;
+    // move_file_impl handles the disk rename, FileIndex sync, AND the
+    // index dispatch — see its doc for the contract split.
+    let result = move_file_impl(&state, from, to_folder).await?;
 
     // #307: write_ignore (D-12) suppresses the watcher's natural rename
     // event. A move is reported as a rename with a new parent path.
@@ -696,11 +691,6 @@ pub async fn move_file(
             new_path: Some(result.clone()),
         },
     );
-
-    // #277: same Tantivy parity as rename_file.
-    if let Some(old) = old_canonical_for_tantivy {
-        dispatch_tantivy_delete(&state, old).await;
-    }
 
     #[cfg(feature = "embeddings")]
     if let Some(p) = old_canonical {

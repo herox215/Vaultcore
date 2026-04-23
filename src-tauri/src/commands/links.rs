@@ -464,6 +464,27 @@ pub async fn update_links_after_rename(
         }
     }
 
+    // #339: each rewritten source has new body text (`[[old]]` → `[[new]]`),
+    // so Tantivy fulltext hits for the old stem in these files are stale
+    // until re-indexing. The link graph is already updated inline above
+    // (#250 keeps that direct-mutation path for perf — routing through
+    // dispatch_self_write would regress the StemIndex optimization). Fire
+    // just the Tantivy side here via the shared upsert helper so the
+    // document shape stays in sync with dispatch_self_write. Tags aren't
+    // affected — the rewrite only touches wiki-link text.
+    let tx = {
+        let guard = state.index_coordinator.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        guard.as_ref().map(|c| c.tx.clone())
+    };
+    if let Some(tx) = tx {
+        for (source_rel, new_content) in &rewrites {
+            let abs_path = vault_root.join(source_rel);
+            crate::commands::index_dispatch::dispatch_tantivy_upsert(&tx, &abs_path, new_content)
+                .await;
+        }
+        let _ = tx.send(crate::indexer::IndexCmd::Commit).await;
+    }
+
     let updated_paths: Vec<String> = rewrites.into_iter().map(|(rel, _)| rel).collect();
 
     Ok(RenameResult {
