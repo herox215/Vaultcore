@@ -21,14 +21,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::encryption::batch::{
-    decrypt_file_to_plaintext, encrypt_file_in_place, verify_sentinel, walk_all_under,
-    write_sentinel,
+    encrypt_file_in_place, verify_sentinel, walk_all_under, write_sentinel,
 };
-use crate::encryption::crypto::{derive_key, random_salt, KEY_LEN};
+use crate::encryption::crypto::{derive_key, random_salt};
 use crate::encryption::manifest::{
-    read_manifest, upsert, write_manifest, EncryptedFolderMeta, FolderState,
+    read_manifest, upsert, EncryptedFolderMeta, FolderState,
 };
-use crate::encryption::{CanonicalPath, SENTINEL_FILENAME};
+use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
 use crate::VaultState;
 
@@ -397,23 +396,4 @@ pub fn reload_manifest_and_lock_all(state: &VaultState, vault_root: &Path) -> Re
 
 // Expose types + constants for open_vault & tests without widening
 // the crypto surface in encryption::.
-pub use crate::encryption::manifest::{FolderState as ManifestFolderState};
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn _force_use_of_sentinel() -> &'static str {
-    SENTINEL_FILENAME
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn _force_use_of_decrypt_helper() -> fn(&[u8; KEY_LEN], &Path) -> Result<Vec<u8>, VaultError> {
-    decrypt_file_to_plaintext
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn _force_use_of_write_manifest(
-) -> fn(&Path, &[EncryptedFolderMeta]) -> Result<(), VaultError> {
-    write_manifest
-}
+pub use crate::encryption::manifest::FolderState as ManifestFolderState;

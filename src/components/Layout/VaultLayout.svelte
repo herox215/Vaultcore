@@ -27,8 +27,6 @@
     encryptFolder,
     unlockFolder,
   } from "../../ipc/commands";
-  import { vaultErrorCopy } from "../../types/errors";
-  import { isVaultError } from "../../types/errors";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
