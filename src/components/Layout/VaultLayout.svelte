@@ -10,6 +10,19 @@
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import ReindexStatusbar from "../Statusbar/ReindexStatusbar.svelte";
+  import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
+  import EncryptFolderModal from "../common/EncryptFolderModal.svelte";
+  import {
+    encryptionModal,
+    closeEncryptionModal,
+    setEncryptionModalError,
+  } from "../../store/encryptionModalStore";
+  import {
+    encryptFolder,
+    unlockFolder,
+  } from "../../ipc/commands";
+  import { vaultErrorCopy } from "../../types/errors";
+  import { isVaultError } from "../../types/errors";
   import { tabStore } from "../../store/tabStore";
   import { searchStore } from "../../store/searchStore";
   import { backlinksStore } from "../../store/backlinksStore";
@@ -556,6 +569,17 @@
       exportActiveNotePdf: () => { void exportActiveNotePdf(); },
       toggleReadingMode: () => { toggleActiveReadingMode(); },
       insertTemplate: () => { templatePickerOpen = true; },
+      // #345 — palette-triggered "lock everything".
+      lockAllEncryptedFolders: async () => {
+        try {
+          const { lockAllFolders } = await import("../../ipc/commands");
+          await lockAllFolders();
+          toastStore.info("All encrypted folders locked");
+        } catch (e) {
+          if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
+          else toastStore.error("Failed to lock folders");
+        }
+      },
     });
     initHotkeyOverrides();
     document.addEventListener("keydown", handleKeydown, { capture: true });
@@ -818,6 +842,60 @@
 
 <!-- #201: reindex progress overlay. Self-hides while idle. -->
 <ReindexStatusbar />
+
+<!-- #345: global mount for the encryption modals. -->
+{#if $encryptionModal?.kind === "encrypt"}
+  <EncryptFolderModal
+    open={true}
+    folderLabel={$encryptionModal.folderLabel}
+    onConfirm={async (password) => {
+      const folderPath = $encryptionModal!.folderPath;
+      closeEncryptionModal();
+      try {
+        await encryptFolder(folderPath, password);
+        toastStore.info("Folder encrypted");
+      } catch (e) {
+        if (isVaultError(e)) {
+          toastStore.error(vaultErrorCopy(e));
+        } else {
+          toastStore.error("Failed to encrypt folder");
+        }
+      }
+    }}
+    onCancel={closeEncryptionModal}
+  />
+{/if}
+{#if $encryptionModal?.kind === "unlock"}
+  <PasswordPromptModal
+    open={true}
+    folderLabel={$encryptionModal.folderLabel}
+    error={$encryptionModal.error ?? null}
+    onConfirm={async (password) => {
+      const m = $encryptionModal!;
+      try {
+        await unlockFolder(m.folderPath, password);
+        closeEncryptionModal();
+        if (m.kind === "unlock") {
+          m.onUnlocked?.();
+        }
+      } catch (e) {
+        if (isVaultError(e) && e.kind === "WrongPassword") {
+          setEncryptionModalError("wrong");
+        } else if (isVaultError(e) && e.kind === "CryptoError") {
+          setEncryptionModalError("crypto");
+        } else {
+          closeEncryptionModal();
+          if (isVaultError(e)) {
+            toastStore.error(vaultErrorCopy(e));
+          } else {
+            toastStore.error("Failed to unlock folder");
+          }
+        }
+      }
+    }}
+    onCancel={closeEncryptionModal}
+  />
+{/if}
 
 <style>
   .vc-vault-layout {

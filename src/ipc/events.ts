@@ -110,3 +110,38 @@ export function listenReindexProgress(
     handler(event.payload),
   );
 }
+
+// ── #345 — encrypted folders ────────────────────────────────────────────────
+
+export interface EncryptProgressPayload {
+  current: number;
+  total: number;
+  file: string;
+}
+
+export const ENCRYPT_PROGRESS_EVENT = "vault://encrypt_progress";
+export const ENCRYPTED_FOLDERS_CHANGED_EVENT = "vault://encrypted_folders_changed";
+
+/**
+ * #345: progress stream for the `encrypt_folder` batch. One event per
+ * 50 ms while sealing files. Not emitted for small folders (< 16
+ * files) — the round-trip latency dominates at that scale.
+ */
+export function listenEncryptProgress(
+  handler: (payload: EncryptProgressPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<EncryptProgressPayload>(ENCRYPT_PROGRESS_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+/**
+ * #345: single-pulse event fired after encrypt / unlock / lock /
+ * lock_all_folders mutate the registry or manifest. The frontend
+ * `encryptedFoldersStore` refreshes on every pulse.
+ */
+export function listenEncryptedFoldersChanged(
+  handler: () => void,
+): Promise<UnlistenFn> {
+  return listen(ENCRYPTED_FOLDERS_CHANGED_EVENT, () => handler());
+}

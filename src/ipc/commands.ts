@@ -13,6 +13,7 @@ import type { DirEntry } from "../types/tree";
 import type { SearchResult, FileMatch, SemanticHit, HybridHit } from "../types/search";
 import type { BacklinkEntry, ParsedLink, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
+import type { EncryptedFolderView } from "../types/encryption";
 
 function normalizeError(err: unknown): VaultError {
   if (isVaultError(err)) {
@@ -639,6 +640,68 @@ export async function setSemanticEnabled(enabled: boolean): Promise<void> {
 export async function refreshAllEmbeddings(): Promise<void> {
   try {
     await invoke<void>("refresh_all_embeddings");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+// ── #345 — encrypted folders ────────────────────────────────────────────────
+
+/**
+ * Encrypt `path` (absolute, inside the open vault) with `password`.
+ *
+ * Backend flow: derive Argon2id key → write manifest + sentinel → seal
+ * every file → flip manifest to `encrypted` → register as locked. The
+ * folder is immediately locked after the batch — the user must re-enter
+ * the password to read contents.
+ *
+ * Progress arrives via the `vault://encrypt_progress` event (listen via
+ * `onEncryptProgress`). Returns once the whole folder is sealed.
+ */
+export async function encryptFolder(path: string, password: string): Promise<void> {
+  try {
+    await invoke<void>("encrypt_folder", { path, password });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Probe `password` against the sentinel for `path`. On success the
+ * backend stashes the derived key in its keyring and removes the
+ * folder from the locked registry. On failure returns
+ * `WrongPassword` so the caller can re-prompt.
+ */
+export async function unlockFolder(path: string, password: string): Promise<void> {
+  try {
+    await invoke<void>("unlock_folder", { path, password });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/** Re-lock `path`: drop the key, mark the root locked. */
+export async function lockFolder(path: string): Promise<void> {
+  try {
+    await invoke<void>("lock_folder", { path });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/** Lock every encrypted folder in the vault. */
+export async function lockAllFolders(): Promise<void> {
+  try {
+    await invoke<void>("lock_all_folders");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/** Return every folder recorded in the manifest. Salt is stripped. */
+export async function listEncryptedFolders(): Promise<EncryptedFolderView[]> {
+  try {
+    return await invoke<EncryptedFolderView[]>("list_encrypted_folders");
   } catch (e) {
     throw normalizeError(e);
   }

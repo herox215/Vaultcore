@@ -60,6 +60,14 @@ export const vaultStore = {
       fileCount: args.fileCount,
       errorMessage: null,
     }));
+    // #345: prime the encrypted-folders store + subscribe to change
+    // events. Safe to call on every vault open — the store tears down
+    // any previous subscription before re-initialising. Import errors
+    // (missing mocks in tests, hot-reload partials) are swallowed so
+    // an unrelated vault-open does not fail downstream.
+    void import("./encryptedFoldersStore")
+      .then((mod) => mod.initEncryptedFoldersStore())
+      .catch(() => {});
   },
   setError(errorMessage: string): void {
     _store.update((s) => ({ ...s, status: "error", errorMessage }));
@@ -67,6 +75,14 @@ export const vaultStore = {
   reset(): void {
     _treeCache.clear();
     _store.set({ ...initial });
+    // #345: drop any encrypted-folders state the previous vault owned.
+    // Same tolerant pattern as setReady — swallow import errors so
+    // reset() always completes cleanly.
+    void import("./encryptedFoldersStore")
+      .then((mod) => {
+        mod.resetEncryptedFoldersStore();
+      })
+      .catch(() => {});
   },
   setSidebarWidth(width: number): void {
     _store.update((s) => ({ ...s, sidebarWidth: width }));

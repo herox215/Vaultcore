@@ -42,6 +42,7 @@ function makeCtx(overrides: Partial<DefaultCommandContext> = {}): DefaultCommand
     insertTemplate: noop,
     openHome: noop,
     openDocs: noop,
+    lockAllEncryptedFolders: noop,
     ...overrides,
   };
 }
