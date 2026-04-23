@@ -8,12 +8,14 @@
     error: "✕",
     conflict: "⚠",
     "clean-merge": "✓",
+    info: "ℹ",
   };
 
   const borderColor: Record<ToastVariant, string> = {
     error: "var(--color-error)",
     conflict: "var(--color-warning)",
     "clean-merge": "var(--color-success)",
+    info: "var(--color-accent)",
   };
 </script>
 

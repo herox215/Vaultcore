@@ -34,6 +34,8 @@ let timeoutMs = 0;
 let attached = false;
 let unsubscribeSettings: (() => void) | null = null;
 let unsubscribeFolders: (() => void) | null = null;
+let detachActivity: (() => void) | null = null;
+let detachVisibility: (() => void) | null = null;
 
 /** Rel-path → derived absolute path via vault root. The store keeps
  *  only relative paths so we need the vault root at lock time. */
@@ -152,6 +154,10 @@ export function attachAutoLockListeners(args: {
   };
   args.target.addEventListener("keydown", onActivity, { passive: true });
   args.target.addEventListener("pointerdown", onActivity, { passive: true });
+  detachActivity = () => {
+    args.target.removeEventListener("keydown", onActivity);
+    args.target.removeEventListener("pointerdown", onActivity);
+  };
 
   // visibility-restore backup: if the OS throttled our setTimeout
   // while backgrounded, lock immediately on return if the deadline
@@ -167,6 +173,9 @@ export function attachAutoLockListeners(args: {
     }
   };
   document.addEventListener("visibilitychange", onVisibility);
+  detachVisibility = () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
 }
 
 /** Start a timer for a root that was just unlocked. */
@@ -181,13 +190,18 @@ export function disarmAutoLock(rootRel: string): void {
   clear(rootRel);
 }
 
-/** Tear down every timer and subscription. Called on vault close. */
+/** Tear down every timer, subscription, and DOM listener. Called on
+ *  vault close / app teardown. */
 export function resetAutoLockStore(): void {
   for (const root of [...timers.keys()]) clear(root);
   unsubscribeSettings?.();
   unsubscribeFolders?.();
+  detachActivity?.();
+  detachVisibility?.();
   unsubscribeSettings = null;
   unsubscribeFolders = null;
+  detachActivity = null;
+  detachVisibility = null;
   attached = false;
   vaultAbsoluteRoot = null;
 }
