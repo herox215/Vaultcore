@@ -5,8 +5,11 @@
 //! - Filter self-writes via WriteIgnoreList (D-12)
 //! - Filter dot-prefixed directory components (.obsidian/, .trash/, .git/, etc.)
 //! - Detect bulk-change bursts (>500 events) and switch to progress UI mode (D-13)
+//! - #357: auto-encrypt files dropped into unlocked encrypted folders;
+//!   enqueue drops into locked folders for seal-on-unlock.
 //! - Emit typed Tauri events: vault://file_changed, vault://bulk_change_start,
-//!   vault://bulk_change_end, vault://watcher_error, vault://vault_status
+//!   vault://bulk_change_end, vault://watcher_error, vault://vault_status,
+//!   vault://encrypt_drop_progress.
 
 use notify_debouncer_full::{
     new_debouncer,
@@ -22,7 +25,10 @@ use tauri::{AppHandle, Emitter};
 use tokio::time::sleep;
 
 use crate::WriteIgnoreList;
-use crate::encryption::{CanonicalPath, LockedPathRegistry};
+use crate::encryption::{
+    encrypt_file_in_place_if_needed, CanonicalPath, EncryptDeps, EncryptOutcome, Keyring,
+    LockedPathRegistry, ManifestCache, PendingEncryptionQueue,
+};
 use crate::indexer::IndexCmd;
 #[cfg(feature = "embeddings")]
 use crate::embeddings::EmbedOp;
@@ -67,6 +73,10 @@ const BULK_CHANGE_START_EVENT: &str = "vault://bulk_change_start";
 const BULK_CHANGE_END_EVENT: &str = "vault://bulk_change_end";
 const VAULT_STATUS_EVENT: &str = "vault://vault_status";
 const WATCHER_ERROR_EVENT: &str = "vault://watcher_error";
+/// #357 — same event name the IPC unlock path emits, kept as a
+/// module-local constant so `process_events` does not take a runtime
+/// dependency on `commands::encryption`.
+const ENCRYPT_DROP_PROGRESS_EVENT: &str = "vault://encrypt_drop_progress";
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -92,6 +102,17 @@ const RECONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// (LINK-08). The same write-ignore suppression that applies to Tauri events
 /// applies here — if a path is in write_ignore, both the Tauri event and the
 /// link-graph command are skipped.
+/// #357 — bundle of shared refs the watcher needs beyond the write
+/// ignore list + vault path. A struct keeps `spawn_watcher` at a
+/// manageable arity instead of bolting on another `Arc<...>` parameter
+/// for each new concern.
+pub struct WatcherContext {
+    pub locked_paths: Arc<LockedPathRegistry>,
+    pub keyring: Arc<Keyring>,
+    pub pending_queue: Arc<PendingEncryptionQueue>,
+    pub manifest_cache: Arc<ManifestCache>,
+}
+
 pub fn spawn_watcher(
     app: AppHandle,
     vault_path: PathBuf,
@@ -99,13 +120,16 @@ pub fn spawn_watcher(
     vault_reachable: Arc<Mutex<bool>>,
     index_tx: Option<tokio::sync::mpsc::Sender<IndexCmd>>,
     #[cfg(feature = "embeddings")] embed_tx: Option<tokio::sync::mpsc::Sender<EmbedOp>>,
-    locked_paths: Arc<LockedPathRegistry>,
+    ctx: WatcherContext,
 ) -> Debouncer<RecommendedWatcher, RecommendedCache> {
     let vault_path_clone = vault_path.clone();
     let vault_reachable_for_error = vault_reachable.clone();
     let app_for_error = app.clone();
     let app_for_events = app.clone();
-    let locked_paths_for_events = Arc::clone(&locked_paths);
+    let locked_paths_for_events = Arc::clone(&ctx.locked_paths);
+    let keyring_for_events = Arc::clone(&ctx.keyring);
+    let pending_queue_for_events = Arc::clone(&ctx.pending_queue);
+    let manifest_cache_for_events = Arc::clone(&ctx.manifest_cache);
 
     let mut debouncer = new_debouncer(
         DEBOUNCE_DURATION,
@@ -120,6 +144,9 @@ pub fn spawn_watcher(
                     #[cfg(feature = "embeddings")]
                     &embed_tx,
                     &locked_paths_for_events,
+                    &keyring_for_events,
+                    &pending_queue_for_events,
+                    &manifest_cache_for_events,
                     events,
                 );
             }
@@ -215,10 +242,20 @@ pub(crate) fn is_hidden_path(vault_path: &Path, event_path: &Path) -> bool {
 
 /// Process a batch of debounced events:
 /// 1. Filter dot-prefixed paths (T-02-14 mitigation)
-/// 2. Filter self-writes via write_ignore list (D-12)
+/// 1b. Partition into locked vs unlocked — locked events enqueue their
+///     primary path for seal-on-unlock (#357) and never reach the
+///     indexer dispatchers. Both paths[0] and paths[1] are checked so a
+///     rename that spans the locked boundary can't leak secondaries.
+/// 1c. (#357) For the UNLOCKED partition, run the auto-encrypt
+///     orchestrator on Create / Modify events. Sealed files have their
+///     post-seal write recorded in write_ignore to prevent self-loops.
+/// 2. Filter self-writes via write_ignore list (D-12), matching against
+///    every path in the event (not just primary) so rename events
+///    carrying the sealed target at paths[1] are also suppressed.
 /// 3. Check bulk-change threshold (D-13)
 /// 4. Emit typed Tauri events
 /// 5. Dispatch link-graph commands to IndexCoordinator queue (LINK-08)
+#[allow(clippy::too_many_arguments)]
 fn process_events(
     app: &AppHandle,
     write_ignore: &Arc<Mutex<WriteIgnoreList>>,
@@ -226,6 +263,9 @@ fn process_events(
     index_tx: &Option<tokio::sync::mpsc::Sender<IndexCmd>>,
     #[cfg(feature = "embeddings")] embed_tx: &Option<tokio::sync::mpsc::Sender<EmbedOp>>,
     locked_paths: &Arc<LockedPathRegistry>,
+    keyring: &Arc<Keyring>,
+    pending_queue: &Arc<PendingEncryptionQueue>,
+    manifest_cache: &Arc<ManifestCache>,
     events: Vec<DebouncedEvent>,
 ) {
     // Step 1: Filter dot-prefixed paths
@@ -241,34 +281,95 @@ fn process_events(
         })
         .collect();
 
-    // Step 1b (#345): drop events whose primary OR secondary path sits
-    // inside a currently-locked encrypted root. Both paths[0] and
-    // paths[1] are checked so a rename that spans the locked boundary
-    // cannot leak the secondary path through the indexer dispatchers.
-    let filtered: Vec<DebouncedEvent> = filtered
-        .into_iter()
-        .filter(|ev| {
-            for p in ev.paths.iter().take(2) {
+    // Step 1b (#345 + #357): partition into locked vs unlocked. Locked
+    // events enqueue their path for seal-on-unlock and are DROPPED from
+    // further processing — the indexer must not learn about files it
+    // cannot read. Unlocked events continue down the pipeline.
+    let (locked_events, filtered): (Vec<DebouncedEvent>, Vec<DebouncedEvent>) =
+        filtered.into_iter().partition(|ev| {
+            ev.paths.iter().take(2).any(|p| {
                 let canon = CanonicalPath::assume_canonical(p.clone());
-                if locked_paths.is_locked(&canon) {
-                    return false;
-                }
-            }
-            true
-        })
-        .collect();
+                locked_paths.is_locked(&canon)
+            })
+        });
+    if !locked_events.is_empty() {
+        handle_locked_drops(app, vault_path, manifest_cache, pending_queue, &locked_events);
+    }
 
-    // Step 2: Filter self-writes via write_ignore
+    // Step 1c (#357): on unlocked events, run the auto-encrypt
+    // orchestrator for Create and data-Modify events. This is what
+    // closes the "Finder dropped a binary into my encrypted folder"
+    // hole. Errors surface as progress-event toasts; the event still
+    // propagates to the indexer so Tantivy/link-graph stay in sync.
+    let mut progress = EncryptDropRunState::default();
+    for ev in &filtered {
+        if !should_run_orchestrator(ev) {
+            continue;
+        }
+        let Some(primary) = ev.paths.first() else { continue };
+        let canonical = match std::fs::canonicalize(primary) {
+            Ok(c) => c,
+            Err(_) => continue, // path vanished between event + canonicalize
+        };
+        let deps = EncryptDeps {
+            vault_root: vault_path,
+            locked_paths,
+            keyring,
+            pending_queue,
+            write_ignore,
+            manifest_cache,
+        };
+        match encrypt_file_in_place_if_needed(&deps, &canonical) {
+            Ok(EncryptOutcome::Sealed { .. }) => {
+                progress.total += 1;
+                progress.last_completed = Some(canonical.display().to_string());
+            }
+            Ok(EncryptOutcome::Queued { .. }) | Ok(EncryptOutcome::AlreadySealed) |
+            Ok(EncryptOutcome::NotInEncryptedRoot) | Ok(EncryptOutcome::NotRegularFile) => {}
+            Err(e) => {
+                log::warn!(
+                    "auto-encrypt on drop failed for {}: {e:?}",
+                    canonical.display()
+                );
+                let _ = app.emit(
+                    ENCRYPT_DROP_PROGRESS_EVENT,
+                    serde_json::json!({
+                        "inFlight": 0,
+                        "total": 0,
+                        "lastCompleted": null,
+                        "queued": false,
+                        "error": {
+                            "path": canonical.display().to_string(),
+                            "message": e.to_string(),
+                        }
+                    }),
+                );
+            }
+        }
+    }
+    if progress.total > 0 {
+        let _ = app.emit(
+            ENCRYPT_DROP_PROGRESS_EVENT,
+            serde_json::json!({
+                "inFlight": 0,
+                "total": progress.total,
+                "lastCompleted": progress.last_completed,
+                "queued": false,
+                "error": null
+            }),
+        );
+    }
+
+    // Step 2: Filter self-writes via write_ignore. #357 — check EVERY
+    // path on the event, not just `paths[0]`. A rename event from the
+    // atomic write carries the sealed target at `paths[1]` on Linux
+    // inotify and the sealed target at `paths[0]` on some platforms;
+    // matching against all paths covers every observed backend.
     let filtered: Vec<DebouncedEvent> = {
         let ignore = write_ignore.lock().unwrap_or_else(|e| e.into_inner());
         filtered
             .into_iter()
-            .filter(|ev| {
-                ev.paths
-                    .first()
-                    .map(|p| !ignore.should_ignore(p))
-                    .unwrap_or(false)
-            })
+            .filter(|ev| !ev.paths.iter().any(|p| ignore.should_ignore(p)))
             .collect()
     };
 
@@ -625,6 +726,86 @@ fn dispatch_embed_delete_cmd(
             let _ = tx.try_send(EmbedOp::Delete(primary_path.clone()));
         }
         _ => {}
+    }
+}
+
+/// #357 — running totals for encrypt-on-drop progress emission within
+/// one `process_events` batch. `in_flight` is always 0 at the point the
+/// progress event fires because the orchestrator is synchronous — we
+/// only emit after the batch finishes. Kept as a struct so future
+/// async progress (streaming encrypts) can populate `in_flight`.
+#[derive(Default)]
+struct EncryptDropRunState {
+    total: usize,
+    last_completed: Option<String>,
+}
+
+/// #357 — only Create and data-Modify events can possibly contain a
+/// newly-arrived plaintext file. Remove/Access/Other never do. Rename
+/// events are a special case: the new path (paths[1]) is what needs
+/// sealing, but notify's rename semantics vary enough across platforms
+/// that running the orchestrator on the Create that follows is simpler
+/// and semantically equivalent.
+fn should_run_orchestrator(ev: &DebouncedEvent) -> bool {
+    matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)))
+}
+
+/// #357 — handle the locked partition: for every Create/Modify event
+/// on a regular file inside a currently-locked encrypted root, enqueue
+/// the path for seal-on-unlock and emit a `queued` progress event so
+/// the UI can warn the user.
+fn handle_locked_drops(
+    app: &AppHandle,
+    vault_path: &Path,
+    manifest_cache: &Arc<ManifestCache>,
+    pending_queue: &Arc<PendingEncryptionQueue>,
+    events: &[DebouncedEvent],
+) {
+    for ev in events {
+        if !should_run_orchestrator(ev) {
+            continue;
+        }
+        let Some(primary) = ev.paths.first() else { continue };
+        let canonical = match std::fs::canonicalize(primary) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let meta = match std::fs::metadata(&canonical) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        // Resolve the enclosing encrypted root via the cache.
+        let Ok(Some(root)) = manifest_cache.find_enclosing(&canonical) else {
+            continue;
+        };
+        if let Err(e) = pending_queue.enqueue_for_root(root, canonical.clone()) {
+            log::warn!(
+                "enqueue for seal-on-unlock failed for {}: {e:?}",
+                canonical.display()
+            );
+            continue;
+        }
+        let _ = app.emit(
+            ENCRYPT_DROP_PROGRESS_EVENT,
+            serde_json::json!({
+                "inFlight": 0,
+                "total": 0,
+                "lastCompleted": canonical.display().to_string(),
+                "queued": true,
+                "error": null,
+            }),
+        );
+        // Diagnostic: the file is on disk as plaintext until next unlock.
+        log::info!(
+            "queued for seal-on-unlock: {} — plaintext remains on disk until user unlocks",
+            canonical.display()
+        );
+        // `vault_path` kept in signature for future scoping (e.g. ignore
+        // drops into nested plain subdirectories).
+        let _ = vault_path;
     }
 }
 

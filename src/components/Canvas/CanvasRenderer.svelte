@@ -13,6 +13,8 @@
   //   here because they are pure functions of doc + draft.
 
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { isInsideEncryptedFolder, resolveAttachmentSrc, releaseAttachmentSrc } from "../Editor/attachmentSource";
+  import { onDestroy } from "svelte";
   import type {
     CanvasDoc,
     CanvasEdge,
@@ -36,6 +38,36 @@
   import type { DraftEdge } from "../../lib/canvas/pointerMode";
   import { tokenizeCanvasText } from "../../lib/canvas/textTokens";
   import { resolveTarget } from "../Editor/wikiLink";
+
+  // #357: per-canvas cache of resolved blob: URLs for images inside
+  // encrypted folders. Async-resolved the first time a path is seen;
+  // the `cacheVersion` counter bumps on each new resolution to force
+  // Svelte's template to re-derive its `src` expression. Plain-vault
+  // paths skip this path and use `convertFileSrc` directly.
+  const encryptedUrlCache = new Map<string, string>();
+  let cacheVersion = $state(0);
+  function canvasImageSrc(abs: string): string {
+    if (!isInsideEncryptedFolder(abs)) return convertFileSrc(abs);
+    const cached = encryptedUrlCache.get(abs);
+    if (cached) return cached;
+    const result = resolveAttachmentSrc(abs);
+    if (typeof result === "string") {
+      encryptedUrlCache.set(abs, result);
+      return result;
+    }
+    encryptedUrlCache.set(abs, "");
+    void result.then((resolved) => {
+      if (resolved) {
+        encryptedUrlCache.set(abs, resolved);
+        cacheVersion++;
+      }
+    });
+    return "";
+  }
+  onDestroy(() => {
+    for (const url of encryptedUrlCache.values()) releaseAttachmentSrc(url);
+    encryptedUrlCache.clear();
+  });
 
   // Tiny use:-action to focus + select an input on mount (the inline
   // edits for link URL / group label rely on this rather than the
@@ -325,10 +357,11 @@
                   {/if}
                 {:else if seg.kind === "image"}
                   {@const imgResolved = resolveTarget(seg.target)}
+                  {@const _cacheTick = cacheVersion}
                   {#if imgResolved && vaultPath}
                     <img
                       class="vc-canvas-inline-image"
-                      src={convertFileSrc(resolveVaultAbs(vaultPath, imgResolved))}
+                      src={_cacheTick >= 0 ? canvasImageSrc(resolveVaultAbs(vaultPath, imgResolved)) : ""}
                       alt={seg.target}
                       draggable="false"
                     />
@@ -381,9 +414,10 @@
         tabindex={interactive ? 0 : undefined}
       >
         {#if isImageFile(fileNode.file) && abs}
+          {@const _cacheTick = cacheVersion}
           <img
             class="vc-canvas-node-image"
-            src={convertFileSrc(abs)}
+            src={_cacheTick >= 0 ? canvasImageSrc(abs) : ""}
             alt={fileNode.file}
             draggable="false"
             data-canvas-image="true"

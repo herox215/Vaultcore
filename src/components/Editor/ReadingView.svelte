@@ -12,9 +12,10 @@
    * position independently.
    */
 
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { readFile } from "../../ipc/commands";
   import { renderMarkdownToHtml } from "./reading/markdownRenderer";
+  import { resolveAttachmentSrc, releaseAttachmentSrc } from "./attachmentSource";
   import { toastStore } from "../../store/toastStore";
   import { tabStore } from "../../store/tabStore";
   import type { Tab } from "../../store/tabStore";
@@ -51,6 +52,16 @@
   // at once), coalesce them into a single microtask-scheduled reload.
   let reloadPending = false;
 
+  // #357: track blob URLs we handed to `<img data-vc-encrypted-abs>`
+  // so `onDestroy` / tab-switch revokes them — otherwise every rendered
+  // encrypted-image leaks its decrypted bytes into the browser blob
+  // store for the lifetime of the process.
+  let blobUrls: string[] = [];
+  function releaseAllBlobUrls(): void {
+    for (const url of blobUrls) releaseAttachmentSrc(url);
+    blobUrls = [];
+  }
+
   async function load(): Promise<void> {
     if (!tab) return;
     const token = ++gen;
@@ -58,6 +69,7 @@
     try {
       const content = await readFile(path);
       if (token !== gen) return;
+      releaseAllBlobUrls();
       html = renderMarkdownToHtml(content, titleFromPath(path));
       loadError = null;
     } catch (err) {
@@ -74,6 +86,10 @@
     }
   }
 
+  onDestroy(() => {
+    releaseAllBlobUrls();
+  });
+
   // Re-load whenever the tab id changes or this component becomes active
   // (mode switch from edit → read needs a fresh read so the reader shows
   // the current editor buffer saved to disk).
@@ -82,6 +98,37 @@
     if (id !== loadedForId) {
       loadedForId = id;
       void load();
+    }
+  });
+
+  // #357: after every HTML re-render, hydrate the `data-vc-encrypted-abs`
+  // markers the markdown renderer emitted for attachments inside
+  // encrypted folders. Plain-vault images already have their asset://
+  // src baked in — we only touch the encrypted ones. The blob URLs are
+  // tracked so a tab switch / destroy revokes them.
+  $effect(() => {
+    // React to `html` reassignment so a fresh render triggers hydration.
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    html;
+    if (!containerEl) return;
+    const pending = containerEl.querySelectorAll<HTMLImageElement>(
+      "img[data-vc-encrypted-abs]",
+    );
+    for (const img of Array.from(pending)) {
+      const abs = img.getAttribute("data-vc-encrypted-abs");
+      if (!abs) continue;
+      img.removeAttribute("data-vc-encrypted-abs");
+      const result = resolveAttachmentSrc(abs);
+      if (typeof result === "string") {
+        img.src = result;
+      } else {
+        void result.then((resolved) => {
+          if (resolved) {
+            img.src = resolved;
+            blobUrls.push(resolved);
+          }
+        });
+      }
     }
   });
 

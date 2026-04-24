@@ -264,7 +264,12 @@ pub async fn open_vault(
         index_tx,
         #[cfg(feature = "embeddings")]
         embed_tx,
-        state.locked_paths.clone(),
+        watcher::WatcherContext {
+            locked_paths: state.locked_paths.clone(),
+            keyring: state.keyring.clone(),
+            pending_queue: state.pending_queue.clone(),
+            manifest_cache: state.manifest_cache.clone(),
+        },
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::LockPoisoned)? = Some(debouncer);
 

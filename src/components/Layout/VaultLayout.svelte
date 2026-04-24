@@ -10,6 +10,7 @@
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import ReindexStatusbar from "../Statusbar/ReindexStatusbar.svelte";
+  import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
   import EncryptFolderModal from "../common/EncryptFolderModal.svelte";
   import {
@@ -46,7 +47,8 @@
     writeFile,
   } from "../../ipc/commands";
   import { collectThemeCss, defaultExportFilename } from "../../lib/exportHtml";
-  import { listenFileChange } from "../../ipc/events";
+  import { listenFileChange, listenEncryptDropProgress } from "../../ipc/events";
+  import { encryptionProgressStore } from "../../store/encryptionProgressStore";
   import { initHotkeyOverrides } from "../../lib/commands/hotkeyOverrides";
   import { toastStore } from "../../store/toastStore";
   import { treeRefreshStore } from "../../store/treeRefreshStore";
@@ -615,6 +617,24 @@
     // the flip sees fresh data.
     let cancelledStale = false;
     let unlistenStale: (() => void) | undefined;
+    let unlistenEncryptDrop: (() => void) | undefined;
+    // #357 — live progress stream for auto-encrypt-on-drop. The pill
+    // rendered at the bottom of the layout subscribes to the store; we
+    // also fire an `error`-variant toast per failed file so the user
+    // sees the specific path that couldn't be sealed.
+    void listenEncryptDropProgress((payload) => {
+      if (cancelledStale) return;
+      encryptionProgressStore.apply(payload);
+      if (payload.error) {
+        toastStore.push({
+          variant: "error",
+          message: `Encryption failed for ${payload.error.path.split("/").pop() ?? payload.error.path}: ${payload.error.message}`,
+        });
+      }
+    }).then((fn) => {
+      if (cancelledStale) { fn(); return; }
+      unlistenEncryptDrop = fn;
+    });
     void listenFileChange((payload) => {
       if (cancelledStale) return;
       vaultStore.applyFileChange(payload);
@@ -638,6 +658,7 @@
       document.removeEventListener("contextmenu", handleContextMenu, { capture: true });
       cancelledStale = true;
       unlistenStale?.();
+      unlistenEncryptDrop?.();
     };
   });
 
@@ -862,6 +883,7 @@
 
 <!-- #201: reindex progress overlay. Self-hides while idle. -->
 <ReindexStatusbar />
+<EncryptionStatusbar />
 
 <!-- #345: global mount for the encryption modals. Encrypt modal stays
      open during the batch so the user sees progress; it closes on

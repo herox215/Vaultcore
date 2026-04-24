@@ -441,6 +441,24 @@ export async function saveAttachment(
   }
 }
 
+/**
+ * #357 — read raw attachment bytes, decrypting transparently when the
+ * target sits inside an unlocked encrypted folder. Distinct from
+ * `readFile` because attachments are binary (images, PDFs, video)
+ * while `readFile` is text-only and rejects non-UTF-8 bytes.
+ *
+ * Callers typically wrap the result in a `blob:` URL via
+ * `URL.createObjectURL(new Blob([bytes]))` — see `attachmentSource.ts`.
+ */
+export async function readAttachmentBytes(path: string): Promise<Uint8Array> {
+  try {
+    const result = await invoke<number[]>("read_attachment_bytes", { path });
+    return new Uint8Array(result);
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 // ── Tag commands ───────────────────────────────────────────────────────────────
 
 /** TAG-03: list all tags with usage counts, sorted alphabetically. */

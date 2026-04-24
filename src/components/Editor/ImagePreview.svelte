@@ -1,14 +1,42 @@
 <script lang="ts">
   // #49 — fit-to-viewport image preview tab.
-  // Uses Tauri's asset:// protocol via convertFileSrc(), the same pipeline
-  // the embedPlugin already relies on for inline `![[image.png]]` rendering.
-  // Larger-than-viewport images scroll inside the container; smaller images
-  // sit centered without upscaling.
-  import { convertFileSrc } from "@tauri-apps/api/core";
+  // #357 — routes encrypted-folder attachments through
+  // `resolveAttachmentSrc` so decrypted bytes render via blob: URL
+  // without ever hitting the plaintext asset:// protocol.
+  import { onDestroy } from "svelte";
+
+  import { resolveAttachmentSrc, releaseAttachmentSrc } from "./attachmentSource";
 
   let { abs }: { abs: string } = $props();
 
-  const src = $derived(convertFileSrc(abs));
+  let src = $state<string>("");
+  let revokeCurrent: string | null = null;
+
+  $effect(() => {
+    const result = resolveAttachmentSrc(abs);
+    // Release the previous blob URL (if any) before assigning the new
+    // one so decrypted bytes don't accumulate in the browser's blob
+    // store across successive note switches.
+    if (typeof result === "string") {
+      releaseAttachmentSrc(revokeCurrent);
+      revokeCurrent = null;
+      src = result;
+    } else {
+      // Async (encrypted folder). Assign after the promise resolves;
+      // revoke the previous URL on success OR failure.
+      void result.then((resolved) => {
+        releaseAttachmentSrc(revokeCurrent);
+        revokeCurrent = resolved;
+        src = resolved ?? "";
+      });
+    }
+  });
+
+  onDestroy(() => {
+    releaseAttachmentSrc(revokeCurrent);
+    revokeCurrent = null;
+  });
+
   const filename = $derived(abs.split("/").pop() ?? abs);
 </script>
 

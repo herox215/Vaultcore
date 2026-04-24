@@ -100,6 +100,14 @@ pub struct VaultState {
     // state across restart).
     pub locked_paths: Arc<encryption::LockedPathRegistry>,
     pub keyring: Arc<encryption::Keyring>,
+
+    // #357: auto-encrypt-on-drop. `pending_queue` holds paths dropped
+    // into locked folders (awaiting seal on next unlock). `manifest_cache`
+    // memoizes the encrypted-folders manifest so the watcher hot path
+    // does not re-read + re-parse JSON for every FS event. Both clear on
+    // vault close; the cache is refreshed on every manifest mutation.
+    pub pending_queue: Arc<encryption::PendingEncryptionQueue>,
+    pub manifest_cache: Arc<encryption::ManifestCache>,
 }
 
 impl Default for VaultState {
@@ -119,6 +127,8 @@ impl Default for VaultState {
             query_handles: Arc::new(Mutex::new(None)),
             locked_paths: Arc::new(encryption::LockedPathRegistry::new()),
             keyring: Arc::new(encryption::Keyring::new()),
+            pending_queue: Arc::new(encryption::PendingEncryptionQueue::new()),
+            manifest_cache: Arc::new(encryption::ManifestCache::new()),
         }
     }
 }
@@ -166,6 +176,7 @@ pub fn run() {
             commands::files::count_wiki_links,
             commands::files::get_file_hash,
             commands::files::save_attachment,
+            commands::files::read_attachment_bytes,
             commands::tree::list_directory,
             commands::vault::merge_external_change,
             commands::search::search_fulltext,
