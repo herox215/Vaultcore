@@ -281,6 +281,27 @@ describe("tabLifecycleStore", () => {
       expect(state.activeTabId).toBe(left);
     });
 
+    it("collapses the split when the left pane is fully consumed", () => {
+      // Mirror of the right-pane-consumed case — survivors live in the
+      // right pane, so the collapse must move them into the now-sole
+      // left pane and flip activePane to "left".
+      const l1 = tabLifecycleStore.openTab("/vault/secret/a.md");
+      const l2 = tabLifecycleStore.openTab("/vault/secret/b.md");
+      const right = tabLifecycleStore.openTab("/vault/plain.md");
+      _core.update((s) => ({
+        ...s,
+        splitState: { left: [l1, l2], right: [right], activePane: "left" },
+        activeTabId: l1,
+      }));
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs.map((t) => t.id)).toEqual([right]);
+      expect(state.splitState.left).toEqual([right]);
+      expect(state.splitState.right).toEqual([]);
+      expect(state.splitState.activePane).toBe("left");
+      expect(state.activeTabId).toBe(right);
+    });
+
     it("tolerates Windows-style backslash separators in tab paths", () => {
       // Tauri on Windows returns paths with `\\` separators; the prefix
       // check must compare them in a separator-agnostic way.
