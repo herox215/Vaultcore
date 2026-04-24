@@ -125,6 +125,17 @@ pub fn encrypt_file_in_place_if_needed(
     // 6. Seal. Register the write in write_ignore BEFORE the atomic
     //    rename so the watcher's resulting Modify/Rename event is self-
     //    filtered and we never re-enter for the same file.
+    //
+    //    `write_atomic` creates a temp file named `.vce-tmp-<pid>-<hex>`
+    //    in the SAME parent directory. Its `Create` event is caught by
+    //    the watcher's `is_hidden_path` filter (dot-prefixed basename)
+    //    BEFORE it reaches the orchestrator — so the tempfile path
+    //    cannot trigger a re-entry. The target's post-rename event is
+    //    caught by the `write_ignore.should_ignore` filter (which #357
+    //    extended to match every path on a multi-path rename event,
+    //    not just `paths[0]`). Together these close the self-loop on
+    //    every notify backend (Linux inotify, macOS FSEvents, Windows
+    //    ReadDirectoryChangesW).
     if let Ok(mut ign) = deps.write_ignore.lock() {
         ign.record(canonical_path.to_path_buf());
     }

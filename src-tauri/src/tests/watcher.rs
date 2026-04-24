@@ -75,6 +75,27 @@ fn test_write_ignore_unknown_path_not_ignored() {
 // ─── process_events filtering tests ──────────────────────────────────────────
 
 #[test]
+fn test_dot_prefix_filtering_covers_orchestrator_tempfile() {
+    // #357 — `encrypt_file_in_place` uses `write_atomic`, which creates
+    // a temp file named `.vce-tmp-<pid>-<hex>` in the same directory as
+    // the target. Its Create event would reach the watcher if it were
+    // not filtered, potentially causing the orchestrator to recurse.
+    // This test pins the invariant: `is_hidden_path` filters the temp
+    // file. If a future refactor renames the tmp prefix, the filter
+    // must be updated in lockstep.
+    use crate::watcher::is_hidden_path;
+    let vault = PathBuf::from("/vault");
+    let tmp_in_encrypted =
+        PathBuf::from("/vault/secret/.vce-tmp-12345-abcdef0123456789");
+    assert!(
+        is_hidden_path(&vault, &tmp_in_encrypted),
+        "atomic-write tempfile must be filtered by is_hidden_path"
+    );
+    let tmp_at_root = PathBuf::from("/vault/.vce-tmp-9999-deadbeef");
+    assert!(is_hidden_path(&vault, &tmp_at_root));
+}
+
+#[test]
 fn test_dot_prefix_filtering() {
     // Test 6: paths with dot-prefixed components should be detected as hidden
     // We test the helper function directly since process_events requires AppHandle.

@@ -106,11 +106,18 @@
   // encrypted folders. Plain-vault images already have their asset://
   // src baked in — we only touch the encrypted ones. The blob URLs are
   // tracked so a tab switch / destroy revokes them.
+  //
+  // Stale-promise guard: `gen` is the same generation token `load()`
+  // bumps. An `$effect` firing after a later render must not push its
+  // blob URLs into the fresh `blobUrls` array — otherwise the previous
+  // render's decrypted bytes accumulate with no revoke. Capture `gen`
+  // at effect entry and drop any promise whose generation is stale.
   $effect(() => {
     // React to `html` reassignment so a fresh render triggers hydration.
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     html;
     if (!containerEl) return;
+    const effectGen = gen;
     const pending = containerEl.querySelectorAll<HTMLImageElement>(
       "img[data-vc-encrypted-abs]",
     );
@@ -123,10 +130,15 @@
         img.src = result;
       } else {
         void result.then((resolved) => {
-          if (resolved) {
-            img.src = resolved;
-            blobUrls.push(resolved);
+          if (!resolved) return;
+          if (effectGen !== gen) {
+            // A newer load() cleared blobUrls before we resolved —
+            // revoke immediately so this decrypted copy does not leak.
+            releaseAttachmentSrc(resolved);
+            return;
           }
+          img.src = resolved;
+          blobUrls.push(resolved);
         });
       }
     }

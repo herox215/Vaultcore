@@ -41,12 +41,17 @@
 
   // #357: per-canvas cache of resolved blob: URLs for images inside
   // encrypted folders. Async-resolved the first time a path is seen;
-  // the `cacheVersion` counter bumps on each new resolution to force
-  // Svelte's template to re-derive its `src` expression. Plain-vault
-  // paths skip this path and use `convertFileSrc` directly.
+  // the `cacheVersion` counter bumps on each new resolution and is
+  // passed INTO the function so Svelte's reactive scope cannot
+  // constant-fold the dependency away. Plain-vault paths skip this
+  // path and use `convertFileSrc` directly.
   const encryptedUrlCache = new Map<string, string>();
   let cacheVersion = $state(0);
-  function canvasImageSrc(abs: string): string {
+  // The `_tick` parameter is intentionally unused inside the body —
+  // its only purpose is to make `cacheVersion` a real argument at the
+  // call site, so the template's reactive scope re-derives the src
+  // every time the counter changes. Don't remove it.
+  function canvasImageSrc(abs: string, _tick: number): string {
     if (!isInsideEncryptedFolder(abs)) return convertFileSrc(abs);
     const cached = encryptedUrlCache.get(abs);
     if (cached) return cached;
@@ -357,11 +362,10 @@
                   {/if}
                 {:else if seg.kind === "image"}
                   {@const imgResolved = resolveTarget(seg.target)}
-                  {@const _cacheTick = cacheVersion}
                   {#if imgResolved && vaultPath}
                     <img
                       class="vc-canvas-inline-image"
-                      src={_cacheTick >= 0 ? canvasImageSrc(resolveVaultAbs(vaultPath, imgResolved)) : ""}
+                      src={canvasImageSrc(resolveVaultAbs(vaultPath, imgResolved), cacheVersion)}
                       alt={seg.target}
                       draggable="false"
                     />
@@ -414,10 +418,9 @@
         tabindex={interactive ? 0 : undefined}
       >
         {#if isImageFile(fileNode.file) && abs}
-          {@const _cacheTick = cacheVersion}
           <img
             class="vc-canvas-node-image"
-            src={_cacheTick >= 0 ? canvasImageSrc(abs) : ""}
+            src={canvasImageSrc(abs, cacheVersion)}
             alt={fileNode.file}
             draggable="false"
             data-canvas-image="true"

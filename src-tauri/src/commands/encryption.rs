@@ -394,13 +394,10 @@ pub async fn unlock_folder(
     // Now flip the registry.
     state.locked_paths.unlock_root(&folder_canon)?;
 
-    // #357: refresh the manifest cache so any new encrypted root from
-    // a concurrent encrypt_folder race is visible. The unlock itself
-    // doesn't mutate the manifest, but keeping refresh calls in all
-    // four mutating commands makes the invariant easy to audit.
-    if let Err(e) = state.manifest_cache.refresh_from_disk(&vault_root) {
-        log::warn!("manifest cache refresh after unlock_folder failed: {e:?}");
-    }
+    // Manifest cache refresh intentionally skipped — `unlock_folder`
+    // does not mutate the manifest JSON on disk (unlocked state is
+    // runtime-only and never persisted). Same reasoning as
+    // `lock_folder` / `lock_all_folders`.
 
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
@@ -414,16 +411,17 @@ pub async fn lock_folder(
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<(), VaultError> {
-    let (folder_canon, vault_root) = resolve_folder(&state, &path)?;
+    let (folder_canon, _vault_root) = resolve_folder(&state, &path)?;
     // Register as locked BEFORE dropping the key so any in-flight
     // read-path race is resolved by the fail-closed gate — the reader
     // sees "locked" and returns PathLocked rather than using a stale
     // key snapshot.
     state.locked_paths.lock_root(folder_canon.clone())?;
     state.keyring.remove(&folder_canon)?;
-    if let Err(e) = state.manifest_cache.refresh_from_disk(&vault_root) {
-        log::warn!("manifest cache refresh after lock_folder failed: {e:?}");
-    }
+    // Manifest cache is NOT refreshed here: `lock_folder` only mutates
+    // in-memory registry + keyring state, never the manifest JSON on
+    // disk. The cached list of encrypted roots is unchanged; locked vs
+    // unlocked is answered by `LockedPathRegistry`, not by the cache.
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -447,9 +445,8 @@ pub async fn lock_all_folders(
     // Defensive wipe in case the keyring still carried entries not
     // backed by the manifest (shouldn't happen, but costs nothing).
     state.keyring.clear()?;
-    if let Err(e) = state.manifest_cache.refresh_from_disk(&root) {
-        log::warn!("manifest cache refresh after lock_all_folders failed: {e:?}");
-    }
+    // Cache refresh intentionally skipped — see `lock_folder` for the
+    // reasoning. `lock_all_folders` never mutates the manifest.
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
 }

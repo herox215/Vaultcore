@@ -33,17 +33,42 @@ import { vaultStore } from "../../store/vaultStore";
  * encrypted folder of the currently-open vault. Kept synchronous and
  * non-reactive so callers can use it inside `$derived` without
  * wiring another subscription.
+ *
+ * The snapshot cache: the function is called once per image node on
+ * every canvas / reading-view render; at N nodes the naive `get()`
+ * approach fires 2N store reads per frame. We cache the vault path
+ * and encrypted-folder set per-frame via a microtask-scoped latch so
+ * the same render only pays one pair of store reads regardless of
+ * node count. Writes to the underlying stores are observed via the
+ * next microtask tick — latency bounded at one frame.
  */
+let _cachedVault: string | null = null;
+let _cachedPaths: Set<string> = new Set();
+let _cacheScheduled = false;
+function refreshCachedSnapshots(): void {
+  _cachedVault = get(vaultStore).currentPath;
+  _cachedPaths = get(encryptedPaths);
+}
+function ensureCachedSnapshots(): void {
+  if (_cacheScheduled) return;
+  refreshCachedSnapshots();
+  _cacheScheduled = true;
+  // Invalidate on the next microtask so the next synchronous render
+  // pays the snapshot cost once, not per node.
+  queueMicrotask(() => {
+    _cacheScheduled = false;
+  });
+}
+
 export function isInsideEncryptedFolder(abs: string): boolean {
-  const vault = get(vaultStore).currentPath;
-  if (!vault) return false;
+  ensureCachedSnapshots();
+  if (!_cachedVault) return false;
   // Normalize separators — abs may use backslashes on Windows.
   const normAbs = abs.replace(/\\/g, "/");
-  const normVault = vault.replace(/\\/g, "/");
+  const normVault = _cachedVault.replace(/\\/g, "/");
   if (!normAbs.startsWith(normVault)) return false;
   const rel = normAbs.slice(normVault.length).replace(/^\/+/, "");
-  const paths = get(encryptedPaths);
-  for (const p of paths) {
+  for (const p of _cachedPaths) {
     if (rel === p || rel.startsWith(p + "/")) return true;
   }
   return false;

@@ -16,11 +16,21 @@
 // The bound prevents unbounded memory growth in pathological cases
 // (e.g. an external sync tool stuck in a loop).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::error::VaultError;
+
+/// Per-root queue state. The `VecDeque` is the source of truth for
+/// insertion order + FIFO eviction; the `HashSet` is a companion index
+/// that gives O(1) dedup on the hot path. Both must be kept in sync;
+/// `enqueue_for_root` is the only call site that mutates them.
+#[derive(Default)]
+struct RootQueue {
+    order: VecDeque<PathBuf>,
+    membership: HashSet<PathBuf>,
+}
 
 /// Hard per-root cap. Beyond this we FIFO-evict the oldest entry so the
 /// queue never grows without bound. 10k × ~200 B average PathBuf ≈ 2 MB
@@ -30,7 +40,7 @@ pub(crate) const MAX_PENDING_PER_ROOT: usize = 10_000;
 
 #[derive(Default)]
 pub struct PendingEncryptionQueue {
-    by_root: RwLock<HashMap<PathBuf, VecDeque<PathBuf>>>,
+    by_root: RwLock<HashMap<PathBuf, RootQueue>>,
 }
 
 impl PendingEncryptionQueue {
@@ -38,28 +48,30 @@ impl PendingEncryptionQueue {
         Self::default()
     }
 
-    /// Enqueue `path` under `root`. Dedups exact-match paths (same path
-    /// bounced by two notify events coalesces to one entry). Enforces
-    /// `MAX_PENDING_PER_ROOT` with FIFO eviction and a `log::warn!` so
-    /// overflow is observable.
+    /// Enqueue `path` under `root`. Dedups exact-match paths in O(1)
+    /// via the companion `HashSet`. Enforces `MAX_PENDING_PER_ROOT`
+    /// with FIFO eviction + `log::warn!` so overflow is observable.
     pub fn enqueue_for_root(&self, root: PathBuf, path: PathBuf) -> Result<(), VaultError> {
         let mut g = self.by_root.write().map_err(|_| VaultError::LockPoisoned)?;
         let queue = g.entry(root.clone()).or_default();
-        if queue.contains(&path) {
+        if queue.membership.contains(&path) {
             return Ok(());
         }
-        if queue.len() >= MAX_PENDING_PER_ROOT {
-            let evicted = queue.pop_front();
-            log::warn!(
-                "pending-encryption queue for {} at cap {}; evicting oldest {:?} — \
-                 the evicted file remains plaintext on disk until the user \
-                 re-triggers (e.g. by saving it from inside VaultCore).",
-                root.display(),
-                MAX_PENDING_PER_ROOT,
-                evicted.as_ref().map(|p| p.display().to_string()),
-            );
+        if queue.order.len() >= MAX_PENDING_PER_ROOT {
+            if let Some(evicted) = queue.order.pop_front() {
+                queue.membership.remove(&evicted);
+                log::warn!(
+                    "pending-encryption queue for {} at cap {}; evicting oldest {} — \
+                     the evicted file remains plaintext on disk until the user \
+                     re-triggers (e.g. by saving it from inside VaultCore).",
+                    root.display(),
+                    MAX_PENDING_PER_ROOT,
+                    evicted.display(),
+                );
+            }
         }
-        queue.push_back(path);
+        queue.membership.insert(path.clone());
+        queue.order.push_back(path);
         Ok(())
     }
 
@@ -68,7 +80,10 @@ impl PendingEncryptionQueue {
     /// this unconditionally.
     pub fn drain_root(&self, root: &Path) -> Result<Vec<PathBuf>, VaultError> {
         let mut g = self.by_root.write().map_err(|_| VaultError::LockPoisoned)?;
-        let drained = g.remove(root).map(|q| q.into_iter().collect()).unwrap_or_default();
+        let drained = g
+            .remove(root)
+            .map(|q| q.order.into_iter().collect())
+            .unwrap_or_default();
         Ok(drained)
     }
 
@@ -76,7 +91,7 @@ impl PendingEncryptionQueue {
     /// UI to display "N file(s) pending for this locked folder".
     pub fn len_for_root(&self, root: &Path) -> usize {
         match self.by_root.read() {
-            Ok(g) => g.get(root).map(|q| q.len()).unwrap_or(0),
+            Ok(g) => g.get(root).map(|q| q.order.len()).unwrap_or(0),
             Err(_) => 0,
         }
     }

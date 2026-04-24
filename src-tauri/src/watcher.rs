@@ -293,7 +293,7 @@ fn process_events(
             })
         });
     if !locked_events.is_empty() {
-        handle_locked_drops(app, vault_path, manifest_cache, pending_queue, &locked_events);
+        handle_locked_drops(app, manifest_cache, pending_queue, &locked_events);
     }
 
     // Step 1c (#357): on unlocked events, run the auto-encrypt
@@ -756,7 +756,6 @@ fn should_run_orchestrator(ev: &DebouncedEvent) -> bool {
 /// the UI can warn the user.
 fn handle_locked_drops(
     app: &AppHandle,
-    vault_path: &Path,
     manifest_cache: &Arc<ManifestCache>,
     pending_queue: &Arc<PendingEncryptionQueue>,
     events: &[DebouncedEvent],
@@ -803,9 +802,6 @@ fn handle_locked_drops(
             "queued for seal-on-unlock: {} — plaintext remains on disk until user unlocks",
             canonical.display()
         );
-        // `vault_path` kept in signature for future scoping (e.g. ignore
-        // drops into nested plain subdirectories).
-        let _ = vault_path;
     }
 }
 
