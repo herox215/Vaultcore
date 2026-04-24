@@ -300,6 +300,87 @@ export const tabLifecycleStore = {
   },
 
   /**
+   * #351: close every tab whose filePath sits at or under `folderAbsPath`.
+   * Used by the encrypted-folders lock flow — when a folder transitions
+   * to locked, any open tab inside that subtree must close so the
+   * decrypted plaintext buffer is released along with the EditorPane
+   * tear-down.
+   *
+   * The check normalizes to forward slashes (Windows tolerance) and
+   * requires a separator boundary after the folder path — so
+   * `/vault/secret` does NOT match `/vault/secretplans/note.md`.
+   *
+   * Graph and other non-filesystem tabs (`vault://` sentinels) never
+   * match because their pseudo-paths do not share the folder prefix.
+   *
+   * Atomicity: single `_core.update` — one store emission regardless of
+   * how many tabs are closed. Active-tab fallback prefers the tab
+   * immediately to the left of the first victim; if nothing survives
+   * in either pane, activeTabId becomes null. Splits collapse to the
+   * left pane when one pane is fully consumed, matching `closeTab`.
+   */
+  closeUnderPath(folderAbsPath: string): void {
+    const normSep = (p: string): string => p.replace(/\\/g, "/");
+    const folder = normSep(folderAbsPath).replace(/\/+$/, "");
+    _core.update((state) => {
+      const victims = new Set(
+        state.tabs
+          .filter((t) => {
+            const tp = normSep(t.filePath);
+            return tp === folder || tp.startsWith(folder + "/");
+          })
+          .map((t) => t.id),
+      );
+      if (victims.size === 0) return state;
+
+      const newTabs = state.tabs.filter((t) => !victims.has(t.id));
+      const filterPane = (ids: string[]): string[] => ids.filter((id) => !victims.has(id));
+      const newLeft = filterPane(state.splitState.left);
+      const newRight = filterPane(state.splitState.right);
+
+      // Pick new active: keep current if it survived, else first tab in
+      // the active pane, else first tab anywhere, else null.
+      let newActiveTabId = state.activeTabId;
+      if (newActiveTabId === null || victims.has(newActiveTabId)) {
+        const preferred =
+          state.splitState.activePane === "left" ? newLeft : newRight;
+        newActiveTabId =
+          preferred[0] ?? newLeft[0] ?? newRight[0] ?? null;
+      }
+
+      // Collapse the split when a pane becomes empty, mirroring closeTab.
+      // When every tab dies, reset activePane to "left" to match closeAll
+      // and the generic closeTab's zero-tab fallback — otherwise a stale
+      // "right" activePane pointer would outlive the pane itself.
+      let newSplitState: SplitState;
+      if (newLeft.length === 0 && newRight.length === 0) {
+        newSplitState = { left: [], right: [], activePane: "left" };
+      } else if (newLeft.length === 0 && newRight.length > 0) {
+        newSplitState = { left: newRight, right: [], activePane: "left" };
+      } else if (newRight.length === 0 && newLeft.length > 0) {
+        newSplitState = {
+          left: newLeft,
+          right: [],
+          activePane: "left",
+        };
+      } else {
+        newSplitState = {
+          left: newLeft,
+          right: newRight,
+          activePane: state.splitState.activePane,
+        };
+      }
+
+      return {
+        ...state,
+        tabs: newTabs,
+        activeTabId: newActiveTabId,
+        splitState: newSplitState,
+      };
+    });
+  },
+
+  /**
    * Read the current active tab (snapshot — not reactive).
    * Returns null if no tabs are open.
    */

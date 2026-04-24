@@ -15,7 +15,7 @@ A local, Markdown-first note and knowledge-management desktop app — a modern, 
   - Full-text search < 50 ms, quick switcher < 10 ms
   - Backlinks < 20 ms, link autocomplete < 10 ms
   - Initial indexing < 60 s, incremental update < 5 ms
-  - RAM idle < 100 MB, active < 250 MB (< 500 MB with Semantic Search active)
+  - RAM idle < 100 MB, active < 250 MB
 - **Platforms**: macOS (Intel + Apple Silicon), Windows 10/11, Linux (Ubuntu 22.04+, Fedora 38+). No other targets in MVP.
 - **Security**: zero network calls, zero telemetry, files never leave disk. Non-negotiable.
 - **Compatibility**: must open existing Obsidian vaults without corrupting them. Shortest-path link resolution is spec-prescribed (exact match in same folder → shortest relative path → alphabetical tiebreak).

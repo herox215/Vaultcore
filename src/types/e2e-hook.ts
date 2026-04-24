@@ -20,12 +20,6 @@ export interface E2eHook {
    *  no editor is mounted. Used by #299 regression specs to assert that
    *  chained autocomplete leaves the caret at the end of the inserted text. */
   getActiveSelectionHead: () => Promise<number>;
-  /** #204: trigger `reindex_vault` and resolve once the reindex worker
-   *  emits a terminal `done` progress event. Used by the hybrid-search
-   *  E2E spec to wait for embeddings to be queryable before running a
-   *  semantic-only query. Rejects on `cancelled` or if the coordinator
-   *  isn't available (embeddings feature off / model failed to load). */
-  reindexAndWaitDone: () => Promise<void>;
 }
 
 declare global {

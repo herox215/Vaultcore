@@ -6,9 +6,6 @@ pub mod merge;
 pub mod indexer;
 pub mod encryption;
 
-#[cfg(feature = "embeddings")]
-pub mod embeddings;
-
 #[cfg(test)]
 mod tests;
 
@@ -75,23 +72,6 @@ pub struct VaultState {
     /// receives a clone of this Arc on construction so both sides observe
     /// the same map.
     pub file_index: Arc<RwLock<FileIndex>>,
-    /// Embed-on-save coordinator (#196). `None` when the embeddings
-    /// feature is off, the model isn't bundled, or ORT init failed.
-    /// `write_file` skips the embed dispatch silently in that case.
-    #[cfg(feature = "embeddings")]
-    pub embed_coordinator: Arc<Mutex<Option<embeddings::EmbedCoordinator>>>,
-    /// Running reindex worker (#201 PR-B), if any. The `reindex_vault`
-    /// command cancels the previous handle before spawning a new one,
-    /// and `open_vault` cancels on vault switch so the old worker can't
-    /// write to the freshly-replaced coordinator's checkpoint.
-    #[cfg(feature = "embeddings")]
-    pub reindex_handle: Arc<Mutex<Option<Arc<embeddings::ReindexHandle>>>>,
-    /// Embed service + HNSW sink pair (#202) used by the `semantic_search`
-    /// IPC command. The sink Arc here aliases the one held by
-    /// `embed_coordinator` (upcast as `Arc<dyn VectorSink>`), so queries
-    /// see the same live `VectorIndex` the embed worker writes to.
-    #[cfg(feature = "embeddings")]
-    pub query_handles: Arc<Mutex<Option<Arc<embeddings::QueryHandles>>>>,
 
     // #345: per-folder encryption. `locked_paths` is the authoritative
     // gate checked by every FS / indexer / link-graph / search entry.
@@ -119,12 +99,6 @@ impl Default for VaultState {
             watcher_handle: Arc::new(Mutex::new(None)),
             index_coordinator: Arc::new(Mutex::new(None)),
             file_index: Arc::new(RwLock::new(FileIndex::new())),
-            #[cfg(feature = "embeddings")]
-            embed_coordinator: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "embeddings")]
-            reindex_handle: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "embeddings")]
-            query_handles: Arc::new(Mutex::new(None)),
             locked_paths: Arc::new(encryption::LockedPathRegistry::new()),
             keyring: Arc::new(encryption::Keyring::new()),
             pending_queue: Arc::new(encryption::PendingEncryptionQueue::new()),
@@ -135,23 +109,20 @@ impl Default for VaultState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri::Manager;
+
     env_logger::init();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(VaultState::default())
-        .setup(|_app| {
-            #[cfg(feature = "embeddings")]
-            {
-                // #244: honour the semantic-search toggle on startup. When
-                // off, skip the ORT init entirely — the runtime dylib
-                // mapping itself is deferred until the user flips the
-                // toggle on and `set_semantic_enabled` runs lazy init.
-                if commands::vault::read_semantic_enabled(&_app.handle()) {
-                    if let Err(e) = embeddings::bootstrap(&_app.handle()) {
-                        log::warn!("embeddings bootstrap failed: {e}");
-                    }
-                }
+        .setup(|app| {
+            // #353 one-shot: the removed semantic-search toggle persisted
+            // its state in `<app_data_dir>/semantic-enabled.json`. Purge
+            // that file on boot so upgraded installs leave no traces.
+            // Best-effort — missing file is the common case.
+            if let Ok(dir) = app.path().app_data_dir() {
+                commands::vault::purge_legacy_semantic_toggle_file(&dir);
             }
             Ok(())
         })
@@ -160,12 +131,6 @@ pub fn run() {
             commands::vault::get_recent_vaults,
             commands::vault::get_vault_stats,
             commands::vault::repair_vault_index,
-            #[cfg(feature = "embeddings")]
-            commands::vault::reindex_vault,
-            #[cfg(feature = "embeddings")]
-            commands::vault::cancel_reindex,
-            commands::vault::set_semantic_enabled,
-            commands::vault::refresh_all_embeddings,
             commands::files::read_file,
             commands::files::write_file,
             commands::files::create_file,
@@ -181,8 +146,6 @@ pub fn run() {
             commands::vault::merge_external_change,
             commands::search::search_fulltext,
             commands::search::search_filename,
-            commands::search::semantic_search,
-            commands::search::hybrid_search,
             commands::search::rebuild_index,
             commands::links::get_backlinks,
             commands::links::get_outgoing_links,

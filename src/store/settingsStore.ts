@@ -125,13 +125,12 @@ const K_SIZE = "vaultcore-font-size";
 const K_DAILY_FOLDER = "vaultcore-daily-notes-folder";
 const K_DAILY_FORMAT = "vaultcore-daily-notes-date-format";
 const K_DAILY_TEMPLATE = "vaultcore-daily-notes-template";
-// #201: semantic-search master toggle. When true, the next vault-open
-// triggers an initial reindex; toggling to false cancels any in-flight
-// reindex but does NOT delete prior embeddings.
-const K_SEMANTIC = "vaultcore-semantic-search";
-// Legacy key from the brief attachment-folder era (before embeds). Removed
-// during cleanup so stale entries don't linger in localStorage.
+// Legacy keys purged on init() so stale entries don't linger in
+// localStorage. Keep the constants here so the cleanup stays explicit.
 const K_ATTACHMENT_FOLDER_LEGACY = "vaultcore-attachment-folder";
+// #353: the semantic-search feature was removed; the toggle key is
+// purged one-shot on init() for upgraded installs.
+const K_SEMANTIC_LEGACY = "vaultcore-semantic-search";
 // #345: auto-lock timer for encrypted folders. Persisted as minutes.
 // 0 means "never auto-lock" (still re-locks on app quit).
 const K_AUTO_LOCK_MINUTES = "vaultcore-auto-lock-minutes";
@@ -150,9 +149,6 @@ export interface SettingsState {
   dailyNotesDateFormat: string;
   /** Vault-relative path to a template file. Empty = no template. */
   dailyNotesTemplate: string;
-  /** #201: master toggle for semantic search. Off by default so the
-   *  reindex never runs until the user opts in. */
-  enableSemanticSearch: boolean;
   /** #345: auto-lock timeout in minutes. 0 disables auto-lock. */
   autoLockMinutes: number;
 }
@@ -164,7 +160,6 @@ const initial: SettingsState = {
   dailyNotesFolder: "",
   dailyNotesDateFormat: DEFAULT_DAILY_DATE_FORMAT,
   dailyNotesTemplate: "",
-  enableSemanticSearch: false,
   autoLockMinutes: AUTO_LOCK_MINUTES_DEFAULT,
 };
 
@@ -195,7 +190,6 @@ function readInitial(): SettingsState {
     const dFolder = localStorage.getItem(K_DAILY_FOLDER);
     const dFormat = localStorage.getItem(K_DAILY_FORMAT);
     const dTemplate = localStorage.getItem(K_DAILY_TEMPLATE);
-    const semantic = localStorage.getItem(K_SEMANTIC);
     // #345: guard against the Number("") = 0 silent-zero trap. A missing
     // value must fall through to DEFAULT, not to 0 (which would disable
     // auto-lock on first run for every fresh install).
@@ -208,7 +202,6 @@ function readInitial(): SettingsState {
       dailyNotesFolder: sanitizeDailyString(dFolder, initial.dailyNotesFolder),
       dailyNotesDateFormat: sanitizeDailyString(dFormat, initial.dailyNotesDateFormat),
       dailyNotesTemplate: sanitizeDailyString(dTemplate, initial.dailyNotesTemplate),
-      enableSemanticSearch: semantic === "true",
       autoLockMinutes:
         Number.isFinite(autoLockRaw) && autoLockRaw >= AUTO_LOCK_MINUTES_MIN
           ? Math.min(AUTO_LOCK_MINUTES_MAX, Math.round(autoLockRaw))
@@ -239,10 +232,11 @@ function createSettingsStore() {
       // self-installs its @font-face rules when it lands.
       loadBodyWebfont(s.fontBody);
       loadMonoWebfont(s.fontMono);
-      // One-shot cleanup of the legacy attachment-folder key. Safe to drop
-      // after a few release cycles — kept here for now so upgraded users
-      // don't carry stale state forever.
+      // One-shot cleanup of legacy keys. Safe to drop after a few release
+      // cycles — kept here for now so upgraded users don't carry stale
+      // state forever.
       try { localStorage.removeItem(K_ATTACHMENT_FOLDER_LEGACY); } catch { /* */ }
+      try { localStorage.removeItem(K_SEMANTIC_LEGACY); } catch { /* */ }
     },
     setFontBody(key: BodyFont): void {
       if (!isBodyFont(key)) return;
@@ -280,13 +274,6 @@ function createSettingsStore() {
       const v = sanitizeDailyString(value, "");
       _store.update((s) => ({ ...s, dailyNotesTemplate: v }));
       try { localStorage.setItem(K_DAILY_TEMPLATE, v); } catch { /* */ }
-    },
-    /** #201: persist the semantic-search master toggle. The caller owns
-     *  wiring this to `reindexVault` / `cancelReindex`; this setter is
-     *  storage-only so the flag can be read on next launch. */
-    setEnableSemanticSearch(enable: boolean): void {
-      _store.update((s) => ({ ...s, enableSemanticSearch: enable }));
-      try { localStorage.setItem(K_SEMANTIC, String(enable)); } catch { /* */ }
     },
     /** #345: persist the auto-lock timeout. 0 disables the timer. */
     setAutoLockMinutes(n: number): void {

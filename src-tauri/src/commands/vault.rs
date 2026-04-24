@@ -214,25 +214,10 @@ pub async fn open_vault(
         *guard = Some(coordinator);
     }
 
-    // --- Embed-on-save coordinator (#196) ---
-    // Spawn after the index coordinator so a vault open without bundled
-    // embedding assets still succeeds. Drop the previous coordinator
-    // before spawning the new one so the old worker shuts down cleanly
-    // (mirrors the IndexCoordinator drop-then-replace pattern above).
-    //
-    // #244: only arm the embed stack when the semantic-search toggle is
-    // on. Otherwise the full ~200-400 MB of model weights + ORT session
-    // gets loaded for users who never want semantic search.
-    #[cfg(feature = "embeddings")]
-    {
-        // Always tear down first so the previous vault's coordinator +
-        // query_handles + reindex worker release their handles before we
-        // decide whether to re-arm. Safe to call even on a fresh process.
-        crate::embeddings::teardown_for_disable(&state);
-        if read_semantic_enabled(&app) {
-            spawn_embeddings_for_vault(&app, &state, &canonical, vault_info.file_count)?;
-        }
-    }
+    // #353: purge the legacy `.vaultcore/embeddings/` directory left
+    // behind by the removed semantic-search feature. Best-effort — a
+    // missing directory is the common case on fresh installs.
+    purge_legacy_embeddings_dir(&canonical);
 
     // --- Spawn file watcher (Plan 04) ---
 
@@ -243,27 +228,12 @@ pub async fn open_vault(
         guard.as_ref().map(|c| c.tx.clone())
     };
 
-    // #201 PR-A: snapshot the embed coordinator's Sender so the watcher
-    // can dispatch EmbedOp::Delete for externally-initiated file
-    // removes / renames. None when embeddings are disabled or the
-    // coordinator didn't spawn (no bundled model / ORT init failed).
-    #[cfg(feature = "embeddings")]
-    let embed_tx = {
-        let guard = state
-            .embed_coordinator
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard.as_ref().map(|c| c.tx.clone())
-    };
-
     let debouncer = watcher::spawn_watcher(
         app.clone(),
         canonical.clone(),
         state.write_ignore.clone(),
         state.vault_reachable.clone(),
         index_tx,
-        #[cfg(feature = "embeddings")]
-        embed_tx,
         watcher::WatcherContext {
             locked_paths: state.locked_paths.clone(),
             keyring: state.keyring.clone(),
@@ -556,16 +526,6 @@ pub(crate) async fn merge_external_change_impl(
                 .await;
             }
 
-            // #196 parity: re-embed the merged content (non-blocking).
-            #[cfg(feature = "embeddings")]
-            if is_md {
-                crate::commands::files::dispatch_embed_update(
-                    state,
-                    canonical.clone(),
-                    &merged,
-                );
-            }
-
             let new_hash = crate::hash::hash_bytes(bytes);
 
             Ok(MergeCommandResult::Clean {
@@ -589,395 +549,47 @@ pub(crate) async fn merge_external_change_impl(
     }
 }
 
+// ─── #353 one-shot legacy cleanup ────────────────────────────────────────────
+//
+// The semantic-search feature was removed in #353. Two on-disk artefacts
+// may linger on upgraded installs:
+//   1. `<vault>/.vaultcore/embeddings/` — HNSW dumps + reindex checkpoint.
+//   2. `<app_data_dir>/semantic-enabled.json` — persisted toggle file.
+// Both are purged best-effort on their respective host operations
+// (vault open, app boot). Missing path is the common case; any other I/O
+// error is logged but never fails the host call.
 
-// ─── #201 PR-B: reindex IPC ──────────────────────────────────────────────────
-
-/// Start a resumable initial-embed pass over the currently-open vault.
-///
-/// Cancels any prior running reindex before spawning. Progress is
-/// streamed to the frontend via `embed://reindex_progress` Tauri events
-/// (payload: `ReindexProgress`). The call returns as soon as the worker
-/// has been parked on its thread; the frontend drives the lifecycle
-/// entirely through events + `cancel_reindex`.
-///
-/// No-op (returns `Ok`) when the embeddings feature is on but the
-/// coordinator didn't spawn (no bundled model / ORT init failed).
-#[cfg(feature = "embeddings")]
-#[tauri::command]
-pub async fn reindex_vault(
-    app: AppHandle,
-    state: tauri::State<'_, crate::VaultState>,
-) -> Result<(), VaultError> {
-    use tauri::Emitter;
-
-    let vault_root = {
-        let guard = state
-            .current_vault
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard.clone().ok_or_else(|| VaultError::VaultUnavailable {
-            path: String::new(),
-        })?
-    };
-
-    // Cancel any prior reindex so the new one owns the checkpoint.
-    {
-        let mut guard = state
-            .reindex_handle
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        if let Some(h) = guard.take() {
-            h.cancel();
-        }
-    }
-
-    let coord_parts = {
-        let guard = state
-            .embed_coordinator
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard
-            .as_ref()
-            .map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
-    };
-    let Some((tx, pending)) = coord_parts else {
-        log::warn!("reindex_vault: embedding coordinator unavailable; no-op");
-        return Ok(());
-    };
-
-    let checkpoint_dir = vault_root.join(".vaultcore").join("embeddings");
-    let app_for_progress = app.clone();
-    let pending_for_bp = std::sync::Arc::clone(&pending);
-
-    let handle = crate::embeddings::start_reindex_with_backpressure(
-        vault_root,
-        checkpoint_dir,
-        move |batch| {
-            let probe = crate::embeddings::EmbedCoordinator {
-                tx: tx.clone(),
-                pending: std::sync::Arc::clone(&pending),
-            };
-            // PR-D: a full batch arrives as a single bulk insert so the
-            // embedder drains many files per wake-up instead of one.
-            // Closed → checkpoint not advanced; next reindex retries.
-            match probe.enqueue_bulk(batch) {
-                Ok(_) => true,
-                Err(e) => {
-                    log::warn!("reindex enqueue_bulk: {e}");
-                    false
-                }
-            }
-        },
-        move |progress| {
-            if let Err(e) = app_for_progress.emit("embed://reindex_progress", progress) {
-                log::debug!("reindex_progress emit dropped: {e}");
-            }
-        },
-        move || {
-            pending_for_bp
-                .lock()
-                .map(|g| g.len())
-                .unwrap_or(0)
-        },
-    );
-
-    let mut guard = state
-        .reindex_handle
-        .lock()
-        .map_err(|_| VaultError::LockPoisoned)?;
-    *guard = Some(handle);
-    Ok(())
-}
-
-/// Cooperatively cancel any running reindex. Safe to call when no
-/// reindex is in flight (no-op). The worker flushes its checkpoint
-/// before exiting, so the next `reindex_vault` resumes from there.
-#[cfg(feature = "embeddings")]
-#[tauri::command]
-pub async fn cancel_reindex(
-    state: tauri::State<'_, crate::VaultState>,
-) -> Result<(), VaultError> {
-    let mut guard = state
-        .reindex_handle
-        .lock()
-        .map_err(|_| VaultError::LockPoisoned)?;
-    if let Some(h) = guard.take() {
-        h.cancel();
-    }
-    Ok(())
-}
-
-// ─── #244: semantic-search toggle ────────────────────────────────────────────
-
-const SEMANTIC_ENABLED_FILENAME: &str = "semantic-enabled.json";
-
-#[derive(Serialize, Deserialize, Default)]
-struct SemanticEnabledFile {
-    enabled: bool,
-}
-
-fn semantic_enabled_path(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_data_dir().ok()?;
-    if std::fs::create_dir_all(&dir).is_err() {
-        return None;
-    }
-    Some(dir.join(SEMANTIC_ENABLED_FILENAME))
-}
-
-/// Read the persisted semantic-search toggle. Defaults to `false` on any
-/// I/O or parse failure so a tampered file can't force the expensive
-/// embed-init path on behalf of the user.
-#[cfg_attr(not(feature = "embeddings"), allow(dead_code))]
-pub(crate) fn read_semantic_enabled(app: &AppHandle) -> bool {
-    let Some(file) = semantic_enabled_path(app) else { return false };
-    let Ok(raw) = std::fs::read_to_string(&file) else { return false };
-    serde_json::from_str::<SemanticEnabledFile>(&raw)
-        .map(|f| f.enabled)
-        .unwrap_or(false)
-}
-
-fn write_semantic_enabled(app: &AppHandle, enabled: bool) -> Result<(), VaultError> {
-    let Some(file) = semantic_enabled_path(app) else {
-        return Err(VaultError::Io(std::io::Error::other(
-            "app_data_dir unavailable",
-        )));
-    };
-    let json = serde_json::to_string_pretty(&SemanticEnabledFile { enabled })
-        .map_err(|e| VaultError::Io(std::io::Error::other(e.to_string())))?;
-    std::fs::write(&file, json).map_err(VaultError::Io)
-}
-
-/// Build the embed coordinator + query handles for `vault_root` and park
-/// them in `state`. Assumes the caller already tore down any previous
-/// coordinator via `teardown_for_disable`.
-///
-/// Non-fatal: on `EmbeddingService::load` failure (no dylib, no model,
-/// ORT init failed) the state slots stay `None` and the caller treats
-/// embed-on-save as disabled for this vault. The return is still `Ok`.
-#[cfg(feature = "embeddings")]
-fn spawn_embeddings_for_vault(
-    app: &AppHandle,
-    state: &crate::VaultState,
-    vault_root: &Path,
-    file_count: usize,
-) -> Result<(), VaultError> {
-    let resource_dir = app.path().resource_dir().ok();
-    let svc = crate::embeddings::EmbeddingService::load(resource_dir.as_deref());
-    let chk = crate::embeddings::Chunker::load(resource_dir.as_deref());
-    match (svc, chk) {
-        (Ok(svc), Ok(chk)) => {
-            use std::sync::Arc;
-            // #201 PR-A: HNSW-backed sink under <vault>/.vaultcore/embeddings/.
-            // capacity_hint of 4×file_count assumes the average note
-            // produces ~4 chunks (#195 splits at 254 content tokens
-            // ≈ 800 words). It only sizes initial allocations — real
-            // growth past it is supported.
-            let embed_dir = vault_root.join(".vaultcore").join("embeddings");
-            let cap = file_count.saturating_mul(4).max(64);
-            // #202: keep a concrete `Arc<HnswSink>` alongside the
-            // `Arc<dyn VectorSink>` handed to the coordinator so the
-            // `semantic_search` IPC handler can call `snapshot()`
-            // without widening the trait. Both Arcs share one alloc.
-            let sink_concrete = Arc::new(crate::embeddings::HnswSink::open(embed_dir.clone(), cap));
-            // #286: reconcile the reindex checkpoint against the vectors
-            // actually present in the just-loaded index. Drops phantom
-            // skip claims so the next reindex re-embeds files whose
-            // vectors were lost to a truncated save or a crash — the
-            // self-healing path that makes the pipeline eventually
-            // consistent regardless of teardown races.
-            let live = sink_concrete.live_paths();
-            match crate::embeddings::reconcile_checkpoint_with_live_paths(
-                &embed_dir,
-                vault_root,
-                &live,
-            ) {
-                Ok(0) => {}
-                Ok(n) => log::info!(
-                    "embeddings: reconciled checkpoint on open — dropped {n} phantom entries"
-                ),
-                Err(e) => log::warn!(
-                    "embeddings: checkpoint reconciliation failed: {e}"
-                ),
-            }
-            let sink: Arc<dyn crate::embeddings::VectorSink> =
-                Arc::clone(&sink_concrete) as Arc<dyn crate::embeddings::VectorSink>;
-            let svc_for_query = Arc::clone(&svc);
-            let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
-            {
-                let mut guard = state
-                    .embed_coordinator
-                    .lock()
-                    .map_err(|_| VaultError::LockPoisoned)?;
-                *guard = Some(coord);
-            }
-            let handles = Arc::new(crate::embeddings::QueryHandles {
-                service: svc_for_query,
-                sink: sink_concrete,
-            });
-            let mut guard = state
-                .query_handles
-                .lock()
-                .map_err(|_| VaultError::LockPoisoned)?;
-            *guard = Some(handles);
-        }
-        (Err(e), _) | (_, Err(e)) => {
-            log::warn!("embed-on-save disabled: {e}");
-        }
-    }
-    Ok(())
-}
-
-/// Persist the semantic-search toggle and (re)arm or tear down the
-/// embedding stack for the currently-open vault to match.
-///
-/// Toggle flow:
-/// - `false`: cancel any running reindex, drop `embed_coordinator` and
-///   `query_handles`. The `EmbeddingService` Arc is released so the ONNX
-///   session (model weights + arenas, ~200-400 MB) is freed. The global
-///   ORT env remains mapped for the rest of the process lifetime — that's
-///   an `ort::init_from` design constraint; see #244.
-/// - `true`: if a vault is currently open and the coordinator isn't
-///   already armed, load the service and spawn the coordinator. No-op if
-///   the model isn't bundled.
-#[cfg(feature = "embeddings")]
-#[tauri::command]
-pub async fn set_semantic_enabled(
-    app: AppHandle,
-    state: tauri::State<'_, crate::VaultState>,
-    enabled: bool,
-) -> Result<(), VaultError> {
-    write_semantic_enabled(&app, enabled)?;
-    if !enabled {
-        crate::embeddings::teardown_for_disable(&state);
-        return Ok(());
-    }
-    // enabled == true: arm the stack iff a vault is open and no
-    // coordinator is already there (idempotent — toggling on-on is safe).
-    let already_armed = {
-        let guard = state
-            .embed_coordinator
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard.is_some()
-    };
-    if already_armed {
-        return Ok(());
-    }
-    let vault_root = {
-        let guard = state
-            .current_vault
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard.clone()
-    };
-    if let Some(root) = vault_root {
-        let file_count = count_md_files(&root);
-        spawn_embeddings_for_vault(&app, &state, &root, file_count)?;
-    }
-    Ok(())
-}
-
-/// `embeddings` feature disabled → persist the flag but do nothing
-/// else, so the IPC surface and on-disk layout stay stable across builds.
-#[cfg(not(feature = "embeddings"))]
-#[tauri::command]
-pub async fn set_semantic_enabled(
-    app: AppHandle,
-    _state: tauri::State<'_, crate::VaultState>,
-    enabled: bool,
-) -> Result<(), VaultError> {
-    write_semantic_enabled(&app, enabled)
-}
-
-// ─── #286: wipe + rebuild all embeddings ─────────────────────────────────────
-
-/// Blow away `<vault>/.vaultcore/embeddings/` (checkpoint + mapping +
-/// hnsw dumps), re-arm the embedding stack, and kick off a full reindex
-/// of every `.md` file. User-facing escape hatch for the drift bug in
-/// #286 and the canonical recovery path whenever the index is suspected
-/// to be out of sync with the vault.
-///
-/// Flow:
-/// 1. Tear down the current embedding stack (cancel+join reindex, flush
-///    sink, drop coordinator + query handles). Safe even when semantic
-///    search is toggled off: we're about to delete files on disk.
-/// 2. Remove the entire `.vaultcore/embeddings/` directory, ignoring
-///    "not found" so a missing dir is a no-op.
-/// 3. If semantic search is still enabled, re-spawn the embedding stack
-///    (which rebuilds an empty on-disk state via `HnswSink::open`) and
-///    invoke `reindex_vault` to embed every file from scratch.
-///
-/// No-op with a warning log when no vault is open. When the embeddings
-/// feature is compiled out, the command just clears the directory so the
-/// IPC surface stays stable.
-#[cfg(feature = "embeddings")]
-#[tauri::command]
-pub async fn refresh_all_embeddings(
-    app: AppHandle,
-    state: tauri::State<'_, crate::VaultState>,
-) -> Result<(), VaultError> {
-    let vault_root = {
-        let guard = state
-            .current_vault
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard.clone()
-    };
-    let Some(root) = vault_root else {
-        log::warn!("refresh_all_embeddings: no vault open; ignoring");
-        return Ok(());
-    };
-
-    // 1. Tear down (cancel+join reindex, flush + drop sink).
-    crate::embeddings::teardown_for_disable(&state);
-
-    // 2. Wipe the on-disk embeddings dir. Tolerate "not found" so a
-    //    first-time refresh on a fresh vault still works.
-    let embed_dir = root.join(".vaultcore").join("embeddings");
+/// Purge `<vault>/.vaultcore/embeddings/` if present. Called from
+/// `open_vault` on every open so upgraded installs self-heal without user
+/// action.
+pub(crate) fn purge_legacy_embeddings_dir(vault_root: &Path) {
+    let embed_dir = vault_root.join(".vaultcore").join("embeddings");
     match std::fs::remove_dir_all(&embed_dir) {
         Ok(()) => log::info!(
-            "refresh_all_embeddings: wiped {}",
+            "#353 cleanup: removed legacy embeddings dir at {}",
             embed_dir.display()
         ),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            log::warn!(
-                "refresh_all_embeddings: wiping {} failed: {e}",
-                embed_dir.display()
-            );
-            return Err(VaultError::Io(e));
-        }
+        Err(e) => log::warn!(
+            "#353 cleanup: failed to remove {}: {e}",
+            embed_dir.display()
+        ),
     }
-
-    // 3. Re-arm and reindex iff semantic search is still enabled — the
-    //    user may click Refresh while the toggle is off (unusual but
-    //    harmless; the disk wipe stands).
-    if read_semantic_enabled(&app) {
-        let file_count = count_md_files(&root);
-        spawn_embeddings_for_vault(&app, &state, &root, file_count)?;
-        reindex_vault(app, state).await?;
-    }
-    Ok(())
 }
 
-#[cfg(not(feature = "embeddings"))]
-#[tauri::command]
-pub async fn refresh_all_embeddings(
-    _app: AppHandle,
-    state: tauri::State<'_, crate::VaultState>,
-) -> Result<(), VaultError> {
-    let vault_root = {
-        let guard = state
-            .current_vault
-            .lock()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        guard.clone()
-    };
-    if let Some(root) = vault_root {
-        let embed_dir = root.join(".vaultcore").join("embeddings");
-        match std::fs::remove_dir_all(&embed_dir) {
-            Ok(()) | Err(_) => {}
-        }
+/// Purge `<app_data_dir>/semantic-enabled.json` if present. Called once
+/// from the Tauri `setup` closure on app boot.
+pub(crate) fn purge_legacy_semantic_toggle_file(app_data_dir: &Path) {
+    let toggle = app_data_dir.join("semantic-enabled.json");
+    match std::fs::remove_file(&toggle) {
+        Ok(()) => log::info!(
+            "#353 cleanup: removed legacy toggle file at {}",
+            toggle.display()
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!(
+            "#353 cleanup: failed to remove {}: {e}",
+            toggle.display()
+        ),
     }
-    Ok(())
 }

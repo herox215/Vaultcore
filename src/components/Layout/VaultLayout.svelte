@@ -9,7 +9,6 @@
   import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
-  import ReindexStatusbar from "../Statusbar/ReindexStatusbar.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
   import EncryptFolderModal from "../common/EncryptFolderModal.svelte";
@@ -881,8 +880,7 @@
   {onSwitchVault}
 />
 
-<!-- #201: reindex progress overlay. Self-hides while idle. -->
-<ReindexStatusbar />
+<!-- #357: auto-encrypt-on-drop live progress pill. Self-hides while idle. -->
 <EncryptionStatusbar />
 
 <!-- #345: global mount for the encryption modals. Encrypt modal stays

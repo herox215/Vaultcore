@@ -10,7 +10,7 @@ import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
-import type { SearchResult, FileMatch, SemanticHit, HybridHit } from "../types/search";
+import type { SearchResult, FileMatch } from "../types/search";
 import type { BacklinkEntry, ParsedLink, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
 import type { EncryptedFolderView } from "../types/encryption";
@@ -236,41 +236,6 @@ export async function searchFilename(
 ): Promise<FileMatch[]> {
   try {
     return await invoke<FileMatch[]>("search_filename", { query, limit });
-  } catch (e) {
-    throw normalizeError(e);
-  }
-}
-
-/**
- * Semantic (vector) search over the HNSW index (#202).
- * Returns up to `k` nearest chunks to `query` by cosine similarity.
- * `k` is clamped to [1, 100] on the Rust side. Returns an empty list
- * when embeddings are disabled or the model is not bundled.
- */
-export async function semanticSearch(
-  query: string,
-  k: number = 10,
-): Promise<SemanticHit[]> {
-  try {
-    return await invoke<SemanticHit[]>("semantic_search", { query, k });
-  } catch (e) {
-    throw normalizeError(e);
-  }
-}
-
-/**
- * Hybrid search (#203): fuses BM25 (Tantivy) and HNSW (vector) ranks via
- * Reciprocal Rank Fusion (k=60). Both legs run in parallel on the Rust
- * blocking pool. `k` is clamped to [1, 100]. Falls back to BM25-only when
- * embeddings are disabled / not bundled, and to vec-only when the BM25
- * index is unavailable.
- */
-export async function hybridSearch(
-  query: string,
-  k: number = 10,
-): Promise<HybridHit[]> {
-  try {
-    return await invoke<HybridHit[]>("hybrid_search", { query, k });
   } catch (e) {
     throw normalizeError(e);
   }
@@ -595,69 +560,6 @@ export async function renderNoteHtml(
 ): Promise<string> {
   try {
     return await invoke<string>("render_note_html", { notePath, themeCss });
-  } catch (e) {
-    throw normalizeError(e);
-  }
-}
-
-// ── Semantic search (#201) ───────────────────────────────────────────────────
-
-/**
- * Kick off the resumable initial-embed pass over the currently-open vault.
- * The backend runs a background worker that walks every `.md` file, hashes
- * it, and enqueues stale/new files through the embed pipeline. Progress is
- * emitted via the `embed://reindex_progress` Tauri event — subscribe with
- * {@link listenReindexProgress}.
- *
- * Returns immediately (the command just parks the worker thread). No-op if
- * the backend was built without the embeddings feature or the bundled
- * model is missing.
- */
-export async function reindexVault(): Promise<void> {
-  try {
-    await invoke<void>("reindex_vault");
-  } catch (e) {
-    throw normalizeError(e);
-  }
-}
-
-/** Cancel the in-flight reindex (no-op if none is running). */
-export async function cancelReindex(): Promise<void> {
-  try {
-    await invoke<void>("cancel_reindex");
-  } catch (e) {
-    throw normalizeError(e);
-  }
-}
-
-/**
- * #244 — persist the semantic-search toggle and (re)arm or tear down
- * the embedding stack on the backend to match.
- *
- * Setting this to `false` at runtime drops the `Arc<EmbeddingService>`
- * held by the backend so the ~200-400 MB ONNX session is released.
- * Setting it to `true` lazy-loads the model against the currently open
- * vault (no-op when no vault is open — re-runs on the next `open_vault`).
- */
-export async function setSemanticEnabled(enabled: boolean): Promise<void> {
-  try {
-    await invoke<void>("set_semantic_enabled", { enabled });
-  } catch (e) {
-    throw normalizeError(e);
-  }
-}
-
-/**
- * #286 — wipe `<vault>/.vaultcore/embeddings/` and trigger a full reindex.
- * The user-facing escape hatch from the drift bug where the checkpoint
- * falsely claims files are embedded while the vector index is missing
- * their vectors. Returns once the IPC returns — the reindex itself runs
- * on a background thread and reports progress via the usual
- * `embed://reindex_progress` event stream.
- */
-export async function refreshAllEmbeddings(): Promise<void> {
-  try {
-    await invoke<void>("refresh_all_embeddings");
   } catch (e) {
     throw normalizeError(e);
   }
