@@ -73,7 +73,7 @@ export function readShape(node: CanvasNode): CanvasShape {
   // the `shape` field's presence on a typed text node via the cast.
   if (node.type === "text") {
     const shape = (node as CanvasTextNode).shape;
-    if (shape) return shape;
+    if (shape !== undefined) return shape;
   }
   return DEFAULT_CANVAS_SHAPE;
 }

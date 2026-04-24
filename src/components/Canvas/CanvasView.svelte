@@ -868,6 +868,9 @@
     // operate on saved state, not on a half-typed URL / label.
     editingNodeId = null;
     editingEdgeId = null;
+    // #362: drop any inline-picker state from a previous menu so a fresh
+    // right-click never surfaces a stale auto-expanded picker.
+    shapeSubmenuOpen = null;
   }
 
   function onViewportContextMenu(e: MouseEvent) {
@@ -937,11 +940,12 @@
   function setNodeShape(nodeId: string, shape: CanvasShape) {
     const node = doc.nodes.find((n) => n.id === nodeId);
     if (!node || node.type !== "text") return;
-    if (shape === DEFAULT_CANVAS_SHAPE) {
-      delete (node as CanvasTextNode).shape;
-    } else {
-      (node as CanvasTextNode).shape = shape;
-    }
+    // Reset-to-default stores `undefined` (serializer drops the field)
+    // rather than `delete`ing the key. Assignment reliably trips the
+    // $state proxy's set trap; `delete` goes through deleteProperty
+    // whose reactivity contract is less explicit across Svelte 5 versions.
+    (node as CanvasTextNode).shape =
+      shape === DEFAULT_CANVAS_SHAPE ? undefined : shape;
   }
 
   function addGroupAt(worldX: number, worldY: number) {
@@ -1613,15 +1617,17 @@
 
   /* #362: expandable context-menu rows and the inline shape-picker
      panel they reveal. Kept in CanvasView (not ContextMenu.svelte) so
-     the generic menu stays a presentation-only popover. */
-  :global(.vc-context-item--expandable) {
+     the generic menu stays a presentation-only popover. Scoped under
+     `.vc-context-menu` so the classes can't leak to unrelated elements
+     that happen to reuse the names. */
+  :global(.vc-context-menu .vc-context-item--expandable) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
   }
 
-  :global(.vc-context-item--expandable .vc-context-item-label) {
+  :global(.vc-context-menu .vc-context-item--expandable .vc-context-item-label) {
     flex: 1;
     min-width: 0;
   }
@@ -1629,7 +1635,7 @@
   /* Chevron rendered via CSS ::after so it doesn't pollute the button's
      textContent — the menu-item tests match on textContent equality and
      the label must read as "Add text node" / "Change shape…", nothing more. */
-  :global(.vc-context-item--expandable)::after {
+  :global(.vc-context-menu .vc-context-item--expandable)::after {
     content: "▾";
     flex: 0 0 auto;
     color: var(--color-text-muted);
@@ -1637,11 +1643,11 @@
     line-height: 1;
   }
 
-  :global(.vc-context-item--expandable[aria-expanded="true"])::after {
+  :global(.vc-context-menu .vc-context-item--expandable[aria-expanded="true"])::after {
     content: "▴";
   }
 
-  :global(.vc-context-submenu) {
+  :global(.vc-context-menu .vc-context-submenu) {
     border-top: 1px solid var(--color-border);
     border-bottom: 1px solid var(--color-border);
     margin: 2px 0;

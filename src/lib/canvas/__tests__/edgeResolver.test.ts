@@ -194,4 +194,46 @@ describe("draftPath", () => {
       expect(path).not.toBeNull();
     }
   });
+
+  // #362: when the draft origin is a triangle and a snap target is found,
+  // the origin side must remap against the TARGET's center so the bezier
+  // leaves toward the right endpoint — not against the (possibly far)
+  // cursor position, which would invert the exit side mid-drag.
+  it("remaps a triangle origin's `top` against the snap target's center, not the cursor", () => {
+    const tri: CanvasTextNode = {
+      id: "tri",
+      type: "text",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 40,
+      text: "",
+      shape: "triangle",
+    };
+    const target: CanvasTextNode = {
+      id: "b",
+      type: "text",
+      x: 500, // to the right of the triangle
+      y: 0,
+      width: 100,
+      height: 40,
+      text: "",
+    };
+    const draft: DraftEdge = {
+      fromNodeId: "tri",
+      fromSide: "top",
+      // Cursor far to the LEFT of the triangle — if the remap used the
+      // cursor, fromSide would flip to "left". We want "right" because
+      // the target is to the right.
+      currentX: -500,
+      currentY: 50,
+      targetNodeId: "b",
+      targetSide: "left",
+    };
+    const path = draftPath(doc([tri, target], []), draft);
+    expect(path).not.toBeNull();
+    // The bezier starts at the triangle's right-edge midpoint (x=75, y=20),
+    // not at the left (x=25, y=20). Matching the prefix is sufficient.
+    expect(path).toMatch(/^M 75 20 /);
+  });
 });

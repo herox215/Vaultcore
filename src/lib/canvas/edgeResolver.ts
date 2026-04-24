@@ -97,22 +97,30 @@ export function draftPath(doc: CanvasDoc, draft: DraftEdge | null): string | nul
   if (!draft) return null;
   const from = doc.nodes.find((n) => n.id === draft.fromNodeId);
   if (!from) return null;
-  // Remap the origin side in case the draft is rooted on a triangle — the
-  // renderer never emits `top` for triangles so this is defensive for
-  // unexpected draft state, not a code path the UI normally reaches. #362.
+  // Shape-aware remap for the origin side. The renderer never emits `top`
+  // for triangles so this branch is defensive; it matters when a user
+  // somehow starts a draft from a legacy handle or via keyboard. #362.
+  //
+  // When we have a snap target, remap against the TARGET's center so the
+  // draft curve exits the triangle origin in the direction of the actual
+  // endpoint — remapping against the moving cursor instead would flip
+  // sides mid-drag once the cursor passed the origin's center axis.
   const fc = centerOf(from);
   const cursor = { x: draft.currentX, y: draft.currentY };
-  const fromSide = remapSideForShape(readShape(from), draft.fromSide, fc, cursor);
-  const fromPt = anchorPoint(from, fromSide);
+  const fromShape = readShape(from);
   if (draft.targetNodeId && draft.targetSide) {
     const to = doc.nodes.find((n) => n.id === draft.targetNodeId);
     if (to) {
       const tc = centerOf(to);
+      const fromSide = remapSideForShape(fromShape, draft.fromSide, fc, tc);
       const toSide = remapSideForShape(readShape(to), draft.targetSide, tc, fc);
+      const fromPt = anchorPoint(from, fromSide);
       const toPt = anchorPoint(to, toSide);
       return bezierPath(fromPt, fromSide, toPt, toSide);
     }
   }
+  const fromSide = remapSideForShape(fromShape, draft.fromSide, fc, cursor);
+  const fromPt = anchorPoint(from, fromSide);
   return bezierPath(
     fromPt,
     fromSide,
