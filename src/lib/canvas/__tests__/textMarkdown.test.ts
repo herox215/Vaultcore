@@ -50,6 +50,14 @@ describe("computeCanvasTextHtml (#364)", () => {
     expect(out.t).toBe("");
   });
 
+  it("passes noteTitle through to renderMarkdownToHtml for {{title}} binding", () => {
+    const d = doc([
+      { id: "t", type: "text", text: "{{title}}", x: 0, y: 0, width: 120, height: 40 },
+    ]);
+    const out = computeCanvasTextHtml(d, null, "MyCanvas");
+    expect(out.t).toContain("MyCanvas");
+  });
+
   it("emits data-wiki-target for [[link]] so the renderer can delegate clicks", () => {
     const d = doc([
       { id: "t", type: "text", text: "see [[Welcome]]", x: 0, y: 0, width: 120, height: 40 },

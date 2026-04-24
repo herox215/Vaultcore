@@ -39,6 +39,20 @@ describe("CanvasRenderer markdown text nodes (#364)", () => {
     expect(content!.innerHTML).toContain("<strong>bold</strong>");
   });
 
+  it("falls back to raw text when mdTextNodes does not yet contain the node id", () => {
+    // Defensive: a newly-added node may render for one frame before the
+    // caller's $derived populates its HTML. Silent-blank would be scary;
+    // raw text is fine for a single frame.
+    const doc = docOf([
+      { id: "new", type: "text", text: "brand new", x: 0, y: 0, width: 200, height: 80 },
+    ]);
+    const { container } = render(CanvasRenderer, {
+      props: { doc, interactive: true, mdTextNodes: {} },
+    });
+    const content = container.querySelector(".vc-canvas-node-md-text")!;
+    expect(content.textContent).toContain("brand new");
+  });
+
   it("renders the empty-card fallback when text is empty", () => {
     const doc = docOf([
       { id: "t", type: "text", text: "", x: 0, y: 0, width: 200, height: 80 },

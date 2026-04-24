@@ -46,6 +46,11 @@
   // path and use `convertFileSrc` directly.
   const encryptedUrlCache = new Map<string, string>();
   let cacheVersion = $state(0);
+  // Async resolves for encrypted attachments can land after the
+  // component is torn down. `destroyed` short-circuits the Promise
+  // continuation so the decrypted blob URL it would produce is
+  // revoked immediately instead of orphaned in a cleared cache.
+  let destroyed = false;
   // The `_tick` parameter is intentionally unused inside the body —
   // its only purpose is to make `cacheVersion` a real argument at the
   // call site, so the template's reactive scope re-derives the src
@@ -61,14 +66,18 @@
     }
     encryptedUrlCache.set(abs, "");
     void result.then((resolved) => {
-      if (resolved) {
-        encryptedUrlCache.set(abs, resolved);
-        cacheVersion++;
+      if (!resolved) return;
+      if (destroyed) {
+        releaseAttachmentSrc(resolved);
+        return;
       }
+      encryptedUrlCache.set(abs, resolved);
+      cacheVersion++;
     });
     return "";
   }
   onDestroy(() => {
+    destroyed = true;
     for (const url of encryptedUrlCache.values()) releaseAttachmentSrc(url);
     encryptedUrlCache.clear();
   });
@@ -115,6 +124,10 @@
         encryptedUrlCache.set(abs, "");
         void result.then((resolved) => {
           if (!resolved) return;
+          if (destroyed) {
+            releaseAttachmentSrc(resolved);
+            return;
+          }
           encryptedUrlCache.set(abs, resolved);
           img.src = resolved;
         });
@@ -428,7 +441,7 @@
           ></textarea>
         {:else}
           {@const rawText = (node as CanvasTextNode).text}
-          {@const html = mdTextNodes[node.id] ?? ""}
+          {@const html = mdTextNodes[node.id]}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- Click delegation for wiki-link / embed targets in the
@@ -443,8 +456,14 @@
           >
             {#if rawText.length === 0}
               Empty card
-            {:else}
+            {:else if html !== undefined}
               {@html html}
+            {:else}
+              <!-- Fallback: the mdTextNodes map hasn't populated this id
+                   yet (race between a node added this tick and the
+                   caller's $derived). Show the raw text so the card is
+                   never silently blank; next tick the HTML replaces it. -->
+              {rawText}
             {/if}
           </div>
         {/if}

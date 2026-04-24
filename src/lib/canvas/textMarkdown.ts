@@ -27,17 +27,25 @@ import { renderMarkdownToHtml } from "../../components/Editor/reading/markdownRe
  *   textarea branch does not read `mdTextNodes`, and rendering HTML
  *   for a buffer that's about to change on every keystroke is wasted
  *   work).
+ * @param noteTitle - feeds `{{title}}` inside template expressions.
+ *   For canvas text nodes the canonical binding is the canvas file's
+ *   basename — not the last-focused editor tab. Callers pass the
+ *   result of `titleFromPath(canvasAbs)`. Omitting it falls back to
+ *   the `editorStore.activePath`, which is wrong for canvases (the
+ *   canvas view is not an editor tab) and non-reactive in a
+ *   `$derived` — always pass a concrete string from the caller.
  */
 export function computeCanvasTextHtml(
   doc: CanvasDoc,
   skipId: string | null = null,
+  noteTitle?: string,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const n of doc.nodes) {
     if (n.type !== "text") continue;
     if (n.id === skipId) continue;
     const text = (n as CanvasTextNode).text ?? "";
-    out[n.id] = renderMarkdownToHtml(text);
+    out[n.id] = renderMarkdownToHtml(text, noteTitle);
   }
   return out;
 }

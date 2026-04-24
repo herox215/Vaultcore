@@ -61,6 +61,7 @@
   } from "../../lib/canvas/types";
   import { anchorPoint } from "../../lib/canvas/geometry";
   import { computeCanvasTextHtml } from "../../lib/canvas/textMarkdown";
+  import { titleFromPath } from "../../lib/templateScope";
   import {
     canvasFilePreview,
     isImageFile,
@@ -137,7 +138,9 @@
   // cheap for small card-sized text, so a blanket recompute is
   // fine for MVP. If this ever shows up in a flame graph, swap in
   // a per-node memo keyed on `node.text`.
-  let mdTextNodes = $derived(computeCanvasTextHtml(doc, editingNodeId));
+  let mdTextNodes = $derived(
+    computeCanvasTextHtml(doc, editingNodeId, titleFromPath(abs)),
+  );
 
   let pointerMode = $state<PointerMode | null>(null);
   let longpressTimer: ReturnType<typeof setTimeout> | null = null;
