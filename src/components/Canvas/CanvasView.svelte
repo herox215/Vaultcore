@@ -32,6 +32,7 @@
   import { resolveTarget } from "../Editor/wikiLink";
   import { renderMarkdownToHtml } from "../Editor/reading/markdownRenderer";
   import CanvasRenderer from "./CanvasRenderer.svelte";
+  import CanvasShapePicker from "./CanvasShapePicker.svelte";
   import ContextMenu from "../common/ContextMenu.svelte";
   import ColorPicker from "../common/ColorPicker.svelte";
   import UrlInputModal from "../common/UrlInputModal.svelte";
@@ -48,12 +49,15 @@
     CanvasGroupNode,
     CanvasLinkNode,
     CanvasNode,
+    CanvasShape,
     CanvasSide,
     CanvasTextNode,
   } from "../../lib/canvas/types";
   import {
     DEFAULT_NODE_WIDTH,
     DEFAULT_NODE_HEIGHT,
+    DEFAULT_CANVAS_SHAPE,
+    readShape,
   } from "../../lib/canvas/types";
   import { anchorPoint } from "../../lib/canvas/geometry";
   import {
@@ -220,7 +224,11 @@
     void doc.edges.length;
     for (const n of doc.nodes) {
       void n.x; void n.y; void n.width; void n.height;
-      if (n.type === "text") void (n as CanvasTextNode).text;
+      if (n.type === "text") {
+        void (n as CanvasTextNode).text;
+        // #362: shape mutations (setNodeShape) must schedule a save.
+        void (n as CanvasTextNode).shape;
+      }
       if (n.type === "link") void (n as CanvasLinkNode).url;
       if (n.type === "group") {
         void (n as CanvasGroupNode).label;
@@ -818,6 +826,17 @@
 
   let contextMenu = $state<{ target: ContextTarget; x: number; y: number } | null>(null);
 
+  // #362: which shape-picker submenu is inline-expanded inside the current
+  // context menu. `null` = no picker open (the menu behaves as before);
+  // `"add-text"` = empty-space "Add text node ▾" is expanded; `"change-shape"`
+  // = text-node "Change shape…" is expanded. Resets whenever the menu closes.
+  let shapeSubmenuOpen = $state<"add-text" | "change-shape" | null>(null);
+  // Trigger row refs so we can refocus the parent item when the picker
+  // collapses via ArrowLeft — without this the keyboard focus falls back
+  // to document.body and the menu arrow-nav chain breaks.
+  let addTextTriggerEl = $state<HTMLButtonElement | null>(null);
+  let changeShapeTriggerEl = $state<HTMLButtonElement | null>(null);
+
   // Snapshot of the node / edge under the menu so the template can branch on
   // type without re-scanning the doc on every render.
   const contextNode = $derived.by((): CanvasNode | null => {
@@ -834,6 +853,9 @@
 
   function closeContextMenu() {
     contextMenu = null;
+    // Always collapse any expanded inline picker so the next menu opens
+    // clean. Ref cleanup happens automatically via the bind: on unmount.
+    shapeSubmenuOpen = null;
   }
 
   function cancelGestureForContextMenu() {
@@ -846,6 +868,9 @@
     // operate on saved state, not on a half-typed URL / label.
     editingNodeId = null;
     editingEdgeId = null;
+    // #362: drop any inline-picker state from a previous menu so a fresh
+    // right-click never surfaces a stale auto-expanded picker.
+    shapeSubmenuOpen = null;
   }
 
   function onViewportContextMenu(e: MouseEvent) {
@@ -890,7 +915,7 @@
 
   // ─── Menu actions ──────────────────────────────────────────────────────
 
-  function addTextNodeAt(worldX: number, worldY: number) {
+  function addTextNodeAt(worldX: number, worldY: number, shape?: CanvasShape) {
     const node: CanvasTextNode = {
       id: crypto.randomUUID(),
       type: "text",
@@ -899,11 +924,28 @@
       width: DEFAULT_NODE_WIDTH,
       height: DEFAULT_NODE_HEIGHT,
       text: "",
+      // #362: record a non-default shape so it serialises. Default shape
+      // is never written — keeps existing canvases byte-identical.
+      ...(shape && shape !== DEFAULT_CANVAS_SHAPE ? { shape } : {}),
     };
     doc.nodes = [...doc.nodes, node];
     selectedNodeId = node.id;
     selectedEdgeId = null;
     editingNodeId = node.id;
+  }
+
+  // #362: change a text node's shape. Default shape is stored as
+  // `undefined` so on-disk JSON omits the field and matches the pre-#362
+  // format — minimising diff noise in vaults that never use other shapes.
+  function setNodeShape(nodeId: string, shape: CanvasShape) {
+    const node = doc.nodes.find((n) => n.id === nodeId);
+    if (!node || node.type !== "text") return;
+    // Reset-to-default stores `undefined` (serializer drops the field)
+    // rather than `delete`ing the key. Assignment reliably trips the
+    // $state proxy's set trap; `delete` goes through deleteProperty
+    // whose reactivity contract is less explicit across Svelte 5 versions.
+    (node as CanvasTextNode).shape =
+      shape === DEFAULT_CANVAS_SHAPE ? undefined : shape;
   }
 
   function addGroupAt(worldX: number, worldY: number) {
@@ -1265,10 +1307,50 @@
   {#if contextMenu?.target.kind === "empty"}
     {@const worldX = contextMenu.target.worldX}
     {@const worldY = contextMenu.target.worldY}
+    <!-- #362: "Add text node ▾" — click expands the shape picker inline
+         inside the same menu panel. Picking a shape creates the node at
+         the right-clicked world coords with that shape. Double-click on
+         empty canvas remains the fast path that always creates a
+         rounded-rectangle without going through the picker. -->
     <button
-      class="vc-context-item"
-      onclick={() => { addTextNodeAt(worldX, worldY); closeContextMenu(); }}
-    >Add text node</button>
+      bind:this={addTextTriggerEl}
+      class="vc-context-item vc-context-item--expandable"
+      aria-haspopup="true"
+      aria-expanded={shapeSubmenuOpen === "add-text"}
+      onclick={() => {
+        shapeSubmenuOpen =
+          shapeSubmenuOpen === "add-text" ? null : "add-text";
+      }}
+      onkeydown={(e) => {
+        if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          shapeSubmenuOpen = "add-text";
+        } else if (e.key === "ArrowLeft" && shapeSubmenuOpen === "add-text") {
+          e.preventDefault();
+          e.stopPropagation();
+          shapeSubmenuOpen = null;
+        }
+      }}
+    >
+      <span class="vc-context-item-label">Add text node</span>
+    </button>
+    {#if shapeSubmenuOpen === "add-text"}
+      <div class="vc-context-submenu">
+        <CanvasShapePicker
+          value={DEFAULT_CANVAS_SHAPE}
+          autoFocus={true}
+          onPick={(s) => {
+            addTextNodeAt(worldX, worldY, s);
+            closeContextMenu();
+          }}
+          onCancel={() => {
+            shapeSubmenuOpen = null;
+            addTextTriggerEl?.focus();
+          }}
+        />
+      </div>
+    {/if}
     <button
       class="vc-context-item"
       onclick={() => { openAddFileNode(worldX, worldY); closeContextMenu(); }}
@@ -1297,6 +1379,48 @@
         class="vc-context-item"
         onclick={() => { copyTextToClipboard((node as CanvasTextNode).text); closeContextMenu(); }}
       >Copy text</button>
+      <!-- #362: "Change shape…" — inline-expand picker with the node's
+           current shape pre-selected. Picking a shape rewrites
+           node.shape and closes the menu. -->
+      <button
+        bind:this={changeShapeTriggerEl}
+        class="vc-context-item vc-context-item--expandable"
+        aria-haspopup="true"
+        aria-expanded={shapeSubmenuOpen === "change-shape"}
+        onclick={() => {
+          shapeSubmenuOpen =
+            shapeSubmenuOpen === "change-shape" ? null : "change-shape";
+        }}
+        onkeydown={(e) => {
+          if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            shapeSubmenuOpen = "change-shape";
+          } else if (e.key === "ArrowLeft" && shapeSubmenuOpen === "change-shape") {
+            e.preventDefault();
+            e.stopPropagation();
+            shapeSubmenuOpen = null;
+          }
+        }}
+      >
+        <span class="vc-context-item-label">Change shape…</span>
+      </button>
+      {#if shapeSubmenuOpen === "change-shape"}
+        <div class="vc-context-submenu">
+          <CanvasShapePicker
+            value={readShape(node)}
+            autoFocus={true}
+            onPick={(s) => {
+              setNodeShape(nodeId, s);
+              closeContextMenu();
+            }}
+            onCancel={() => {
+              shapeSubmenuOpen = null;
+              changeShapeTriggerEl?.focus();
+            }}
+          />
+        </div>
+      {/if}
       <button
         class="vc-context-item"
         onclick={() => { bringNodeToFront(nodeId); closeContextMenu(); }}
@@ -1489,5 +1613,44 @@
 
   .vc-canvas-error {
     color: var(--color-error);
+  }
+
+  /* #362: expandable context-menu rows and the inline shape-picker
+     panel they reveal. Kept in CanvasView (not ContextMenu.svelte) so
+     the generic menu stays a presentation-only popover. Scoped under
+     `.vc-context-menu` so the classes can't leak to unrelated elements
+     that happen to reuse the names. */
+  :global(.vc-context-menu .vc-context-item--expandable) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  :global(.vc-context-menu .vc-context-item--expandable .vc-context-item-label) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Chevron rendered via CSS ::after so it doesn't pollute the button's
+     textContent — the menu-item tests match on textContent equality and
+     the label must read as "Add text node" / "Change shape…", nothing more. */
+  :global(.vc-context-menu .vc-context-item--expandable)::after {
+    content: "▾";
+    flex: 0 0 auto;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  :global(.vc-context-menu .vc-context-item--expandable[aria-expanded="true"])::after {
+    content: "▴";
+  }
+
+  :global(.vc-context-menu .vc-context-submenu) {
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    margin: 2px 0;
+    background: var(--color-bg, var(--color-surface));
   }
 </style>

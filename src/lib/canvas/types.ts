@@ -9,6 +9,41 @@
 /** Side a connector can dock to on a node's bounding rect. */
 export type CanvasSide = "top" | "right" | "bottom" | "left";
 
+/**
+ * Visual shape of a text node (#362). VaultCore extension — Obsidian
+ * ignores the field on load and round-trips through our canonical
+ * serializer unchanged. `rounded-rectangle` is the default and matches
+ * the pre-#362 visual (border-radius: 6px); nodes without a `shape` field
+ * on disk render as `rounded-rectangle` for zero visual regression.
+ */
+export type CanvasShape =
+  | "rounded-rectangle"
+  | "rectangle"
+  | "ellipse"
+  | "diamond"
+  | "triangle";
+
+/** Ordered list driving the shape-picker UI. */
+export const CANVAS_SHAPES: readonly CanvasShape[] = [
+  "rounded-rectangle",
+  "rectangle",
+  "ellipse",
+  "diamond",
+  "triangle",
+];
+
+export const DEFAULT_CANVAS_SHAPE: CanvasShape = "rounded-rectangle";
+
+export function isCanvasShape(v: unknown): v is CanvasShape {
+  return (
+    v === "rounded-rectangle" ||
+    v === "rectangle" ||
+    v === "ellipse" ||
+    v === "diamond" ||
+    v === "triangle"
+  );
+}
+
 export interface CanvasNodeBase {
   id: string;
   x: number;
@@ -23,6 +58,24 @@ export interface CanvasNodeBase {
 export interface CanvasTextNode extends CanvasNodeBase {
   type: "text";
   text: string;
+  /** #362: visual shape. `undefined` renders as {@link DEFAULT_CANVAS_SHAPE}. */
+  shape?: CanvasShape;
+}
+
+/**
+ * Resolve a node's effective visual shape. Only text nodes carry a shape;
+ * every other node type returns the default. Called by the renderer per
+ * frame and by geometry helpers — keep O(1) pure.
+ */
+export function readShape(node: CanvasNode): CanvasShape {
+  // CanvasUnknownNode's `type` field is `string`, so TS can't narrow
+  // away the unknown branch on the discriminator alone — we check for
+  // the `shape` field's presence on a typed text node via the cast.
+  if (node.type === "text") {
+    const shape = (node as CanvasTextNode).shape;
+    if (shape !== undefined) return shape;
+  }
+  return DEFAULT_CANVAS_SHAPE;
 }
 
 export interface CanvasFileNode extends CanvasNodeBase {
