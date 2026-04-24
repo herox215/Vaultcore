@@ -48,20 +48,18 @@
   // Focus the initially selected row on mount so keyboard nav starts
   // from the shape the user currently has. Done via `tick` so the bind:
   // refs have populated before we try to focus.
+  //
+  // `value` and `autoFocus` are read *before* awaiting `tick()`; reads
+  // after an await are outside the effect's reactive scope and wouldn't
+  // re-run the effect when the props change.
   $effect(() => {
     if (!autoFocus) return;
+    const idx = CANVAS_SHAPES.indexOf(value);
     void (async () => {
       await tick();
-      const idx = CANVAS_SHAPES.indexOf(value);
       focusRow(idx >= 0 ? idx : 0);
     })();
   });
-
-  function currentIndex(): number {
-    const active = document.activeElement;
-    if (!(active instanceof HTMLButtonElement)) return -1;
-    return rowEls.indexOf(active);
-  }
 
   function onKey(e: KeyboardEvent, index: number): void {
     if (e.key === "ArrowDown") {
