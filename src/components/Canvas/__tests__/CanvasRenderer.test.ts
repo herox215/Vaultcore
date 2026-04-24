@@ -39,13 +39,22 @@ describe("CanvasRenderer (#156)", () => {
   });
 
   it("text node content is visible inside the DOM (no 40-char truncation any more)", () => {
-    const longText = "Line 1\nLine 2 that is long enough that the old SVG label would have cut it at forty characters.";
+    const longText = "Line 1 that is long enough that the old SVG label would have cut it at forty characters.";
     const doc = docOf([
       { id: "t", type: "text", text: longText, x: 0, y: 0, width: 300, height: 120 },
     ]);
-    const { container } = render(CanvasRenderer, { props: { doc, interactive: false } });
+    // #364 — text nodes now render Markdown via the `mdTextNodes` prop; the
+    // raw-text tokenizer path is gone. Feed a pre-rendered <p> so the card
+    // shows the full line (sanity: textContent still contains the string).
+    const { container } = render(CanvasRenderer, {
+      props: {
+        doc,
+        interactive: false,
+        mdTextNodes: { t: `<p>${longText}</p>` },
+      },
+    });
     const content = container.querySelector(".vc-canvas-node-content")!;
-    expect(content.textContent).toBe(longText);
+    expect(content.textContent).toContain(longText);
   });
 
   it("read-only mode (interactive=false) omits resize + edge handles", () => {

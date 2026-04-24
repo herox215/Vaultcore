@@ -32,6 +32,7 @@ import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
 } from "../../lib/templateExprRanges";
+import { computeCanvasTextHtml } from "../../lib/canvas/textMarkdown";
 import { vaultStore } from "../../store/vaultStore";
 import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";
@@ -457,6 +458,11 @@ function renderCanvasEmbedBody(
   body.style.height = `${cam.heightPx}px`;
 
   const vaultPath = get(vaultStore).currentPath ?? null;
+  // #364: pre-render text-node Markdown to HTML once at mount —
+  // embed canvases are read-only, so the set of text nodes is
+  // static for the lifetime of this widget and a re-render only
+  // happens when the host editor replaces the entire widget.
+  const mdTextNodes = computeCanvasTextHtml(doc, null);
   const component = mount(CanvasRenderer, {
     target: body,
     props: {
@@ -465,6 +471,7 @@ function renderCanvasEmbedBody(
       camY: cam.camY,
       zoom: cam.zoom,
       vaultPath,
+      mdTextNodes,
       interactive: false,
     },
   });

@@ -37,8 +37,6 @@
     draftPath as draftPathPure,
   } from "../../lib/canvas/edgeResolver";
   import type { DraftEdge } from "../../lib/canvas/pointerMode";
-  import { tokenizeCanvasText } from "../../lib/canvas/textTokens";
-  import { resolveTarget } from "../Editor/wikiLink";
 
   // #357: per-canvas cache of resolved blob: URLs for images inside
   // encrypted folders. Async-resolved the first time a path is seen;
@@ -75,6 +73,86 @@
     encryptedUrlCache.clear();
   });
 
+  // #364: host element for the world container so we can scan the
+  // {@html}-injected markdown for `data-vc-encrypted-abs` markers and
+  // hydrate them to blob URLs — same pattern as ReadingView (#357).
+  // Re-uses the existing `encryptedUrlCache` so a vault with many
+  // references to the same encrypted image resolves it once per
+  // session and all `<img>` tags share the blob URL.
+  //
+  // Boy Scout: hydrates both the new `.vc-canvas-node-md-text` text
+  // nodes AND the existing `.vc-canvas-node-md` file-node previews.
+  // Before #364 the file-preview branch never ran a hydration pass,
+  // so encrypted images inside markdown file nodes were silently
+  // broken — the effect below closes that gap as a side benefit.
+  let worldEl: HTMLDivElement | null = $state(null);
+  $effect(() => {
+    // Read mdTextNodes + mdPreviews + cacheVersion so the effect fires
+    // after every HTML injection. The dependency tracking is reactive
+    // on the field identities, not their contents — that is fine,
+    // since CanvasView reassigns the whole map on any change.
+    mdTextNodes;
+    mdPreviews;
+    cacheVersion;
+    if (!worldEl) return;
+    const pending = worldEl.querySelectorAll<HTMLImageElement>(
+      "img[data-vc-encrypted-abs]",
+    );
+    for (const img of Array.from(pending)) {
+      const abs = img.getAttribute("data-vc-encrypted-abs");
+      if (!abs) continue;
+      img.removeAttribute("data-vc-encrypted-abs");
+      const cached = encryptedUrlCache.get(abs);
+      if (cached) {
+        img.src = cached;
+        continue;
+      }
+      const result = resolveAttachmentSrc(abs);
+      if (typeof result === "string") {
+        encryptedUrlCache.set(abs, result);
+        img.src = result;
+      } else {
+        encryptedUrlCache.set(abs, "");
+        void result.then((resolved) => {
+          if (!resolved) return;
+          encryptedUrlCache.set(abs, resolved);
+          img.src = resolved;
+        });
+      }
+    }
+  });
+
+  // #364: click delegation for wiki-link / embed targets emitted by
+  // `renderMarkdownToHtml` inside text-node HTML. We listen on the
+  // card body rather than attaching a handler per link, so the
+  // `{@html}`-injected DOM doesn't need Svelte event bindings.
+  // pointerdown-stop keeps the drag handler on the card from
+  // starting a pan when the user is just trying to follow a link.
+  function onTextContentPointerDown(e: PointerEvent) {
+    if (!interactive) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest("[data-wiki-target], [data-embed-target]")) {
+      e.stopPropagation();
+    }
+  }
+  function onTextContentClick(e: MouseEvent) {
+    if (!interactive) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const hit =
+      target.closest<HTMLElement>("[data-wiki-target]") ??
+      target.closest<HTMLElement>("[data-embed-target]");
+    if (!hit) return;
+    const wiki = hit.getAttribute("data-wiki-target");
+    const embed = hit.getAttribute("data-embed-target");
+    const name = wiki ?? embed;
+    if (!name) return;
+    e.stopPropagation();
+    e.preventDefault();
+    onOpenWikiTarget?.(name);
+  }
+
   // Tiny use:-action to focus + select an input on mount (the inline
   // edits for link URL / group label rely on this rather than the
   // `autofocus` attribute, which Svelte lints against for a11y).
@@ -90,6 +168,11 @@
     zoom?: number;
     vaultPath?: string | null;
     mdPreviews?: Record<string, string>;
+    /** #364: pre-rendered Markdown HTML for text nodes, keyed by
+     *  node.id. Populated by CanvasView (interactive) and
+     *  embedPlugin (read-only). Omit or pass `{}` for empty/stale
+     *  nodes — the renderer falls back to the empty-card message. */
+    mdTextNodes?: Record<string, string>;
 
     interactive?: boolean;
 
@@ -145,6 +228,7 @@
     zoom = 1,
     vaultPath = null,
     mdPreviews = {},
+    mdTextNodes = {},
     interactive = false,
     selectedNodeId = null,
     selectedEdgeId = null,
@@ -193,6 +277,7 @@
 </script>
 
 <div
+  bind:this={worldEl}
   class="vc-canvas-world"
   class:vc-canvas-readonly={!interactive}
   style:transform={`translate(${camX}px, ${camY}px) scale(${zoom})`}
@@ -318,7 +403,9 @@
         onpointerdown={interactive ? (e) => onNodePointerDown?.(e, node) : undefined}
         ondblclick={interactive ? (e) => onNodeDblClick?.(e, node) : undefined}
         oncontextmenu={interactive ? (e) => onNodeContextMenu?.(e, node) : undefined}
-        onkeydown={interactive ? (e) => onCardKey?.(e, () => onStartEditText?.(node as CanvasTextNode)) : undefined}
+        onkeydown={interactive && editingNodeId !== node.id
+          ? (e) => onCardKey?.(e, () => onStartEditText?.(node as CanvasTextNode))
+          : undefined}
         onpointerenter={interactive ? () => onNodeHoverEnter?.(node) : undefined}
         onpointerleave={interactive ? () => onNodeHoverLeave?.(node) : undefined}
         role={interactive ? "button" : undefined}
@@ -341,46 +428,23 @@
           ></textarea>
         {:else}
           {@const rawText = (node as CanvasTextNode).text}
-          {@const segments = tokenizeCanvasText(rawText)}
-          <div class="vc-canvas-node-content">
+          {@const html = mdTextNodes[node.id] ?? ""}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- Click delegation for wiki-link / embed targets in the
+               rendered Markdown HTML. The card-level key handler
+               above (onStartEditText) is the keyboard equivalent — a
+               dedicated per-link keyboard binding is unnecessary
+               because focus moves into the textarea on edit. -->
+          <div
+            class="vc-canvas-node-content vc-canvas-node-md-text markdown-body"
+            onpointerdown={interactive ? onTextContentPointerDown : undefined}
+            onclick={interactive ? onTextContentClick : undefined}
+          >
             {#if rawText.length === 0}
               Empty card
             {:else}
-              {#each segments as seg, i (i)}
-                {#if seg.kind === "text"}{seg.text}{:else if seg.kind === "link"}
-                  {@const resolved = resolveTarget(seg.target)}
-                  {#if interactive}
-                    <button
-                      type="button"
-                      class="vc-canvas-link"
-                      class:vc-canvas-link-resolved={resolved !== null}
-                      class:vc-canvas-link-unresolved={resolved === null}
-                      data-wiki-target={seg.target}
-                      onpointerdown={(e) => e.stopPropagation()}
-                      onclick={(e) => { e.stopPropagation(); onOpenWikiTarget?.(seg.target); }}
-                    >{seg.display}</button>
-                  {:else}
-                    <span
-                      class="vc-canvas-link"
-                      class:vc-canvas-link-resolved={resolved !== null}
-                      class:vc-canvas-link-unresolved={resolved === null}
-                      data-wiki-target={seg.target}
-                    >{seg.display}</span>
-                  {/if}
-                {:else if seg.kind === "image"}
-                  {@const imgResolved = resolveTarget(seg.target)}
-                  {#if imgResolved && vaultPath}
-                    <img
-                      class="vc-canvas-inline-image"
-                      src={canvasImageSrc(resolveVaultAbs(vaultPath, imgResolved), cacheVersion)}
-                      alt={seg.target}
-                      draggable="false"
-                    />
-                  {:else}
-                    <span class="vc-canvas-link vc-canvas-link-unresolved">![[{seg.target}]]</span>
-                  {/if}
-                {/if}
-              {/each}
+              {@html html}
             {/if}
           </div>
         {/if}
@@ -891,6 +955,99 @@
     word-break: break-word;
     flex: 1;
     overflow: auto;
+  }
+
+  /* #364: text-node Markdown rendering. `.vc-canvas-node-md-text`
+     overrides the default `pre-wrap` whitespace rule so block-level
+     HTML (<p>, <ul>, <h1>) doesn't inherit extra blank lines from
+     its own source whitespace. Typography is scaled down from the
+     reading view because a 200×120 card cannot host 1.9em H1s. */
+  .vc-canvas-node-md-text {
+    white-space: normal;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  :global(.vc-canvas-node-md-text > *:first-child) {
+    margin-top: 0;
+  }
+  :global(.vc-canvas-node-md-text > *:last-child) {
+    margin-bottom: 0;
+  }
+  :global(.vc-canvas-node-md-text p) {
+    margin: 0.4em 0;
+  }
+  :global(.vc-canvas-node-md-text h1),
+  :global(.vc-canvas-node-md-text h2),
+  :global(.vc-canvas-node-md-text h3),
+  :global(.vc-canvas-node-md-text h4),
+  :global(.vc-canvas-node-md-text h5),
+  :global(.vc-canvas-node-md-text h6) {
+    margin: 0.5em 0 0.3em;
+    font-weight: 600;
+    line-height: 1.25;
+    border: none;
+  }
+  :global(.vc-canvas-node-md-text h1) { font-size: 1.4em; }
+  :global(.vc-canvas-node-md-text h2) { font-size: 1.2em; }
+  :global(.vc-canvas-node-md-text h3) { font-size: 1.05em; }
+  :global(.vc-canvas-node-md-text h4),
+  :global(.vc-canvas-node-md-text h5),
+  :global(.vc-canvas-node-md-text h6) { font-size: 1em; }
+  :global(.vc-canvas-node-md-text ul),
+  :global(.vc-canvas-node-md-text ol) {
+    margin: 0.3em 0;
+    padding-left: 1.2em;
+  }
+  :global(.vc-canvas-node-md-text li) {
+    margin: 0.15em 0;
+  }
+  :global(.vc-canvas-node-md-text blockquote) {
+    margin: 0.4em 0;
+    padding: 0.15em 0.6em;
+    border-left: 3px solid var(--color-accent, #4078c0);
+    color: var(--color-text-muted);
+  }
+  :global(.vc-canvas-node-md-text code) {
+    font-family: var(--vc-font-mono, monospace);
+    font-size: 0.88em;
+    background: var(--color-code-bg, rgba(0, 0, 0, 0.06));
+    padding: 0.05em 0.3em;
+    border-radius: 3px;
+  }
+  :global(.vc-canvas-node-md-text pre) {
+    margin: 0.4em 0;
+    padding: 6px 8px;
+    background: var(--color-code-bg, rgba(0, 0, 0, 0.06));
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.85em;
+  }
+  :global(.vc-canvas-node-md-text pre code) {
+    background: none;
+    padding: 0;
+  }
+  :global(.vc-canvas-node-md-text a) {
+    color: var(--color-accent, #4078c0);
+    text-decoration: underline;
+  }
+  :global(.vc-canvas-node-md-text [data-wiki-target]),
+  :global(.vc-canvas-node-md-text [data-embed-target]) {
+    cursor: pointer;
+  }
+  :global(.vc-canvas-readonly .vc-canvas-node-md-text [data-wiki-target]),
+  :global(.vc-canvas-readonly .vc-canvas-node-md-text [data-embed-target]) {
+    cursor: default;
+    pointer-events: none;
+  }
+  :global(.vc-canvas-node-md-text img) {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 4px auto;
+  }
+  :global(.vc-canvas-node-md-text input[type="checkbox"]) {
+    margin-right: 0.3em;
+    vertical-align: middle;
   }
 
   .vc-canvas-node-placeholder .vc-canvas-node-content {
