@@ -22,4 +22,5 @@ mod rename_link_resolution;
 mod home_canvas;
 mod docs_page;
 mod encryption_gating;
+mod export_decrypted;
 mod legacy_semantic_cleanup;

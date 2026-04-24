@@ -424,6 +424,26 @@ export async function readAttachmentBytes(path: string): Promise<Uint8Array> {
   }
 }
 
+/**
+ * #360 — write a decrypted plaintext copy of an encrypted file to a
+ * user-chosen destination outside the vault's encrypted folders.
+ *
+ * Source must live inside an unlocked encrypted folder of the open
+ * vault. Destination may be anywhere on the filesystem the user has
+ * write permission for, EXCEPT inside another encrypted folder (that
+ * would smuggle plaintext past the "folder is private" contract).
+ */
+export async function exportDecryptedFile(
+  source: string,
+  dest: string,
+): Promise<void> {
+  try {
+    await invoke<void>("export_decrypted_file", { source, dest });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 // ── Tag commands ───────────────────────────────────────────────────────────────
 
 /** TAG-03: list all tags with usage counts, sorted alphabetically. */

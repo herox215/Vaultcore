@@ -9,6 +9,7 @@
     conflict: "⚠",
     "clean-merge": "✓",
     info: "ℹ",
+    warning: "⚠",
   };
 
   const borderColor: Record<ToastVariant, string> = {
@@ -16,6 +17,7 @@
     conflict: "var(--color-warning)",
     "clean-merge": "var(--color-success)",
     info: "var(--color-accent)",
+    warning: "var(--color-warning)",
   };
 </script>
 

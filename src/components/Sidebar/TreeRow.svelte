@@ -29,7 +29,10 @@
     updateLinksAfterRename,
     getBacklinks,
     writeFile,
+    exportDecryptedFile,
+    pickSavePath,
   } from "../../ipc/commands";
+  import { isInsideUnlockedEncryptedFolder } from "../Editor/attachmentSource";
   import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
   import { toastStore } from "../../store/toastStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
@@ -137,6 +140,13 @@
   const isLocked = $derived((row.encryption ?? "not-encrypted") === "locked");
   const isUnlocked = $derived((row.encryption ?? "not-encrypted") === "unlocked");
   const isEncryptedRoot = $derived(isLocked || isUnlocked);
+  // #360 — only files (not folders, not plain-vault files) inside an
+  // unlocked encrypted folder can be exported. The derivation is
+  // microtask-cached inside `isInsideUnlockedEncryptedFolder` so the
+  // per-row cost stays O(1) amortized across a virtualized render pass.
+  const canExportDecrypted = $derived(
+    !row.isDir && isInsideUnlockedEncryptedFolder(row.path),
+  );
 
   function handleClick() {
     onSelect(row.path);
@@ -346,6 +356,33 @@
       await createFolder(row.path, "");
       await onRefreshFolder(row.path);
       await onEnsureExpanded(row);
+    } catch (e) {
+      const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
+  // #360 — export a decrypted plaintext copy of this file to a user-
+  // chosen destination. Menu entry is only rendered when the row sits
+  // inside an UNLOCKED encrypted folder (see `canExportDecrypted`), so
+  // the default copy assumes the backend will succeed. A locked → lock
+  // race still produces a `PathLocked` error which surfaces via the
+  // usual `vaultErrorCopy` path so the user can unlock and retry.
+  async function handleExportDecrypted() {
+    closeContextMenu();
+    const picked = await pickSavePath(row.name);
+    if (!picked) return; // user cancelled — silent, matches other save flows
+    try {
+      await exportDecryptedFile(row.path, picked);
+      const filename = picked.split(/[/\\]/).pop() ?? picked;
+      // #360 — `warning` variant (not `info`) matches the security
+      // consequence: the user just produced a plaintext file readable
+      // by any app on their system. The copy spells that out so the
+      // audit is end-to-end — variant color + explicit wording.
+      toastStore.push({
+        variant: "warning",
+        message: `Saved unencrypted copy to ${filename}. This file is now readable by other apps.`,
+      });
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -583,6 +620,13 @@
       <button class="vc-context-item" onclick={() => void toggleBookmark()}>
         {isBookmarked ? "Remove bookmark" : "Bookmark"}
       </button>
+    {/if}
+    {#if canExportDecrypted}
+      <button
+        class="vc-context-item"
+        data-testid="context-export-decrypted"
+        onclick={() => void handleExportDecrypted()}
+      >Export decrypted copy…</button>
     {/if}
     <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
     {#if row.isDir}

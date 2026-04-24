@@ -95,6 +95,19 @@ export const encryptedPaths: Readable<Set<string>> = derived(
   ($s) => new Set($s.entries.map((e) => e.path)),
 );
 
+/**
+ * #360 — vault-relative paths whose encrypted folder is currently
+ * UNLOCKED. Parallel to `encryptedPaths` but filtered by `locked ===
+ * false`, so the "Export decrypted copy…" menu entry and any future
+ * action that needs the locked/unlocked distinction can consume a
+ * purpose-built `Set<string>` for O(1) membership checks instead of
+ * re-scanning the full `EncryptedFolderView[]`.
+ */
+export const unlockedPaths: Readable<Set<string>> = derived(
+  internal,
+  ($s) => new Set($s.entries.filter((e) => !e.locked).map((e) => e.path)),
+);
+
 /** `true` once the store has completed its first fetch. */
 export const encryptedFoldersReady: Readable<boolean> = derived(
   internal,

@@ -49,8 +49,16 @@ fn ensure_unlocked(state: &VaultState, canonical: &Path) -> Result<(), VaultErro
 }
 
 /// T-02 mitigation: canonicalize `target` and confirm it sits inside the
-/// currently-open vault.
-fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
+/// currently-open vault. Also runs the `ensure_unlocked` gate so a
+/// read/write targeting a locked encrypted subtree errors with
+/// `PathLocked`.
+///
+/// `pub(crate)` so other command modules (e.g. `commands::encryption`
+/// for #360) can reuse the exact same guard instead of re-implementing
+/// the canonicalize + starts_with + `ensure_unlocked` pipeline. Any
+/// new command that takes a user-supplied file path MUST go through
+/// this helper — the T-02 audit depends on it.
+pub(crate) fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
         path: target.display().to_string(),

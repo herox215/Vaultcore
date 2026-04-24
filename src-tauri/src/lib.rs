@@ -171,6 +171,7 @@ pub fn run() {
             commands::encryption::lock_folder,
             commands::encryption::lock_all_folders,
             commands::encryption::list_encrypted_folders,
+            commands::encryption::export_decrypted_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

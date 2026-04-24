@@ -447,6 +447,240 @@ pub async fn lock_all_folders(
     Ok(())
 }
 
+// ── export_decrypted_file (#360) ─────────────────────────────────────────────
+
+/// Test-accessible body for `export_decrypted_file`. Splits the Tauri
+/// `State` extraction from the logic so unit tests can hit the same
+/// contract without spinning up a runtime.
+///
+/// Contract:
+/// - `source` must sit inside the current vault AND inside an encrypted
+///   folder AND that folder must currently be UNLOCKED. Else: the
+///   corresponding `VaultError` without ever reading bytes.
+/// - `dest`'s parent must exist and canonicalize, and the prospective
+///   final path must NOT sit inside any encrypted root (exporting into
+///   another encrypted root would write unframed plaintext adjacent to
+///   ciphertext, silently breaking that folder's contract).
+/// - `dest` MAY live outside the vault — that is the whole point.
+///
+/// No atomic-write helper here. `write_atomic` places its `.vce-tmp-*`
+/// file next to the *destination*, which for this command is usually
+/// outside the vault (e.g. `~/Desktop/`). That tempfile would leak
+/// plaintext bytes outside the vault for the duration of the rename,
+/// violating the "plaintext never leaves unless explicit export"
+/// contract. The export is user-initiated and one-shot: a crash in the
+/// middle is a retry, not a corruption scenario for any vault state.
+/// Plain `fs::write` is correct here.
+///
+/// Size cap intentionally not re-checked: every sealed file under an
+/// encrypted root was already bounded by `MAX_INLINE_ENCRYPT_BYTES` at
+/// encrypt time. A ciphertext exceeding that cap + HEADER/TAG overhead
+/// means the file was tampered with — `decrypt_bytes` will fail the
+/// Poly1305 tag and surface `WrongPassword` / `CryptoError`, which is
+/// the correct defense.
+pub fn export_decrypted_file_impl(
+    state: &VaultState,
+    source: String,
+    dest: String,
+) -> Result<(), VaultError> {
+    // 1. Snapshot `vault_root` ONCE under a single `current_vault`
+    //    lock acquisition. Every subsequent check — scope, enclosing
+    //    root, dest-in-encrypted, rel-path-for-logging — uses THIS
+    //    snapshot, so a concurrent `open_vault` that swaps the vault
+    //    mid-export produces a single coherent error (the source no
+    //    longer appears under the snapshotted vault, and the locked
+    //    path / encrypted-root checks all operate on consistent
+    //    state). Splitting the snapshot across `ensure_inside_vault`
+    //    + a second `current_vault.lock()` would reintroduce the
+    //    TOCTOU window Aristotle flagged on iter-1.
+    let vault_root = {
+        let guard = state
+            .current_vault
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| VaultError::VaultUnavailable {
+                path: source.clone(),
+            })?
+    };
+
+    // 2. Canonicalize source + enforce vault scope against the single
+    //    snapshot above. Inline rather than `ensure_inside_vault`
+    //    because that helper re-locks `current_vault` internally —
+    //    doing so here would be the race this function is designed
+    //    to avoid. The `ensure_unlocked` check is inlined for the
+    //    same reason; it needs the canonical source path but not the
+    //    vault lock.
+    let source_path = PathBuf::from(&source);
+    let source_canonical = std::fs::canonicalize(&source_path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: source.clone() },
+        std::io::ErrorKind::PermissionDenied => {
+            VaultError::PermissionDenied { path: source.clone() }
+        }
+        _ => VaultError::Io(e),
+    })?;
+    if !source_canonical.starts_with(&vault_root) {
+        return Err(VaultError::PermissionDenied {
+            path: source_canonical.display().to_string(),
+        });
+    }
+    {
+        let canon =
+            crate::encryption::CanonicalPath::assume_canonical(source_canonical.clone());
+        if state.locked_paths.is_locked(&canon) {
+            return Err(VaultError::PathLocked {
+                path: source_canonical.display().to_string(),
+            });
+        }
+    }
+
+    // 3. Source must be inside an encrypted root. This is distinct
+    //    from "inside any vault folder" — a plain vault file has
+    //    nothing to decrypt, so exporting it would be a misleading
+    //    copy. We surface that as `PermissionDenied` with a clear
+    //    message; the frontend only exposes the menu entry for files
+    //    under an unlocked encrypted root, so in normal use the error
+    //    is a locked/locked race we already handle below.
+    let src_enc_root = crate::encryption::find_enclosing_encrypted_root_cached(
+        &state.manifest_cache,
+        &vault_root,
+        &source_canonical,
+    )?
+    .ok_or_else(|| VaultError::PermissionDenied {
+        path: format!(
+            "{} is not inside an encrypted folder; nothing to decrypt",
+            source_canonical.display()
+        ),
+    })?;
+
+    // 4. Root must be unlocked. `ensure_inside_vault` already returns
+    //    `PathLocked` for locked roots; we still check the keyring
+    //    explicitly because `ensure_unlocked` is fail-closed on
+    //    poisoned state and this path requires a key to actually
+    //    decrypt. A race between menu-open and click where the folder
+    //    is locked mid-flight also surfaces here.
+    if state.keyring.key_clone(&src_enc_root)?.is_none() {
+        return Err(VaultError::PathLocked {
+            path: source_canonical.display().to_string(),
+        });
+    }
+
+    // 5. Source bytes must actually be sealed. `maybe_decrypt_read`
+    //    tolerates unframed bytes (see its doc — it passes through
+    //    plaintext stragglers so a half-finished encrypt batch can
+    //    still be recovered), but THIS command's contract is "export
+    //    a DECRYPTED copy". Silently passing through plaintext as if
+    //    it had been decrypted would let a user export a
+    //    partially-encrypted vault's stragglers under the
+    //    "decrypted" label and never notice the encrypt batch is
+    //    stuck. Reject explicitly so the error is observable.
+    let ciphertext = std::fs::read(&source_canonical).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: source.clone() },
+        std::io::ErrorKind::PermissionDenied => {
+            VaultError::PermissionDenied { path: source.clone() }
+        }
+        _ => VaultError::Io(e),
+    })?;
+    if !ciphertext.starts_with(crate::encryption::file_format::MAGIC) {
+        return Err(VaultError::CryptoError {
+            msg: format!(
+                "{} is inside an encrypted folder but is not sealed (missing VCE1 header) — \
+                 it may be a partially-completed encrypt batch; try re-running encrypt",
+                source_canonical.display()
+            ),
+        });
+    }
+
+    // 6. Resolve the destination. The file itself does not exist yet,
+    //    so canonicalize the PARENT and rebuild the final path.
+    let dest_path = PathBuf::from(&dest);
+    let dest_parent = dest_path
+        .parent()
+        .ok_or_else(|| VaultError::PermissionDenied { path: dest.clone() })?;
+    let dest_file_name = dest_path
+        .file_name()
+        .ok_or_else(|| VaultError::PermissionDenied { path: dest.clone() })?
+        .to_owned();
+    let dest_parent_canonical = std::fs::canonicalize(dest_parent).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound {
+            path: dest_parent.display().to_string(),
+        },
+        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied {
+            path: dest_parent.display().to_string(),
+        },
+        _ => VaultError::Io(e),
+    })?;
+    let dest_final = dest_parent_canonical.join(&dest_file_name);
+
+    // 7. Dest MUST NOT land inside any encrypted root. An export target
+    //    inside another encrypted folder would drop unframed plaintext
+    //    next to sealed files, silently breaking that folder's contract.
+    //    We check the canonical parent — because `..` traversals in the
+    //    caller-supplied `dest_path` are collapsed by `canonicalize`,
+    //    the parent reflects the real on-disk location a child would
+    //    end up at.
+    if crate::encryption::find_enclosing_encrypted_root_cached(
+        &state.manifest_cache,
+        &vault_root,
+        &dest_parent_canonical,
+    )?
+    .is_some()
+    {
+        return Err(VaultError::PermissionDenied {
+            path: format!(
+                "destination {} is inside an encrypted folder; pick a plain folder instead",
+                dest_final.display()
+            ),
+        });
+    }
+
+    // 8. Decrypt. `maybe_decrypt_read` returns plaintext for the bytes
+    //    we already verified start with VCE1 magic (Step 5).
+    let plaintext =
+        crate::encryption::maybe_decrypt_read(state, &source_canonical, ciphertext)?;
+
+    // 9. Write plaintext to dest. Non-atomic by design — `write_atomic`
+    //    would place a `.vce-tmp-*` file next to the destination (often
+    //    outside the vault), leaking plaintext outside the vault
+    //    boundary for the duration of the rename. Export is user-
+    //    initiated and retry-safe, so plain `fs::write` is correct.
+    std::fs::write(&dest_final, &plaintext).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            VaultError::PermissionDenied { path: dest_final.display().to_string() }
+        }
+        std::io::ErrorKind::StorageFull => VaultError::DiskFull,
+        _ => VaultError::Io(e),
+    })?;
+
+    // 10. Audit log: the export is the highest-risk encryption op the
+    //     user can perform. Log the source rel-path; omit the full dest
+    //     (the user's filesystem layout is not ours to mirror into logs).
+    let rel = source_canonical
+        .strip_prefix(&vault_root)
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unresolved>".into());
+    log::info!(
+        "export_decrypted_file: {} -> {} ({} bytes plaintext)",
+        rel,
+        dest_parent_canonical.display(),
+        plaintext.len(),
+    );
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn export_decrypted_file(
+    state: tauri::State<'_, VaultState>,
+    source: String,
+    dest: String,
+) -> Result<(), VaultError> {
+    export_decrypted_file_impl(&state, source, dest)
+}
+
 // ── list_encrypted_folders ───────────────────────────────────────────────────
 
 #[tauri::command]
