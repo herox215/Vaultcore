@@ -215,132 +215,6 @@ fn write_file_round_trip_with_read_file() {
     assert_eq!(contents, "roundtrip");
 }
 
-// --- #196 embed-on-save: save-RTT regression -----------------------------
-
-/// Regression guard for #196 AC: "Save-RTT unverändert". The embed hook is
-/// sync, non-blocking, and must add far less than the 16 ms keystroke
-/// budget to a single save. We assert the median of 100 saves with a
-/// no-op-sink coordinator stays within 1 ms of the median without one.
-/// 1 ms is generous on purpose so CI noise doesn't flake; if this trips,
-/// profile the hook — something is doing unexpected work.
-#[cfg(feature = "embeddings")]
-#[test]
-fn embed_hook_does_not_regress_save_rtt() {
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
-
-    tokio_test_block_on(async {
-        async fn run(state: &VaultState, dir: &std::path::Path, label: &str) -> Duration {
-            const N: usize = 100;
-            let mut samples = Vec::with_capacity(N);
-            for i in 0..N {
-                let path = dir.join(format!("{label}-{i}.md"));
-                let t0 = Instant::now();
-                write_file_impl(
-                    state,
-                    path.to_string_lossy().into_owned(),
-                    format!("rtt sample {i}\n").repeat(20),
-                )
-                .await
-                .unwrap();
-                samples.push(t0.elapsed());
-            }
-            samples.sort();
-            samples[N / 2]
-        }
-
-        // Baseline: no embed coordinator registered.
-        let dir_baseline = tempdir().unwrap();
-        let state_baseline = state_with_vault(dir_baseline.path());
-        let median_no_hook = run(&state_baseline, dir_baseline.path(), "noop").await;
-
-        // With hook: register a coordinator backed by a NoopSink. Skip
-        // cleanly if the model isn't bundled (CI without resources).
-        let Some(svc) = crate::embeddings::EmbeddingService::load(None).ok() else {
-            eprintln!("SKIP: embeddings not bundled");
-            return;
-        };
-        let Some(chk) = crate::embeddings::Chunker::load(None).ok() else {
-            eprintln!("SKIP: tokenizer not bundled");
-            return;
-        };
-        let dir_hook = tempdir().unwrap();
-        let state_hook = state_with_vault(dir_hook.path());
-        {
-            let sink: Arc<dyn crate::embeddings::VectorSink> =
-                Arc::new(crate::embeddings::NoopSink);
-            let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
-            *state_hook.embed_coordinator.lock().unwrap() = Some(coord);
-        }
-        let median_with_hook = run(&state_hook, dir_hook.path(), "hook").await;
-
-        let delta = median_with_hook.saturating_sub(median_no_hook);
-        assert!(
-            delta < Duration::from_millis(1),
-            "embed hook regressed save RTT: median delta = {delta:?} (baseline {median_no_hook:?}, hook {median_with_hook:?})"
-        );
-    });
-}
-
-/// AC for #197 ("Bulk-Write-Stresstest, 100 Saves in 10 s, no p99
-/// keystroke-latency regression"). Spreads 100 saves over ~10 s with a
-/// **real** EmbeddingService so the ORT thread-pool cap (`intra=2,
-/// inter=1`) is genuinely exercised under sustained inference load. The
-/// assertion is a comfortable absolute p99 bound rather than a delta —
-/// 50 ms is well below the spec's 100 ms "open note" budget and gives
-/// CI noise plenty of headroom while still tripping on a real
-/// regression (e.g. fastembed defaulting back to per-session unbounded
-/// threads).
-///
-/// `#[ignore]` because real ML inference is slow and CPU-heavy — opt
-/// into it explicitly with `cargo test -- --ignored`.
-#[cfg(feature = "embeddings")]
-#[test]
-#[ignore]
-fn save_rtt_p99_under_bulk_embed_pressure() {
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
-
-    tokio_test_block_on(async {
-        let Some(svc) = crate::embeddings::EmbeddingService::load(None).ok() else {
-            eprintln!("SKIP: embeddings not bundled");
-            return;
-        };
-        let Some(chk) = crate::embeddings::Chunker::load(None).ok() else {
-            eprintln!("SKIP: tokenizer not bundled");
-            return;
-        };
-        let dir = tempdir().unwrap();
-        let state = state_with_vault(dir.path());
-        {
-            let sink: Arc<dyn crate::embeddings::VectorSink> =
-                Arc::new(crate::embeddings::NoopSink);
-            let coord = crate::embeddings::EmbedCoordinator::spawn(svc, chk, sink);
-            *state.embed_coordinator.lock().unwrap() = Some(coord);
-        }
-
-        const N: usize = 100;
-        const TOTAL: Duration = Duration::from_secs(10);
-        let inter_save = TOTAL / N as u32;
-        let mut samples = Vec::with_capacity(N);
-        for i in 0..N {
-            let path = dir.path().join(format!("bulk-{i}.md"));
-            let body = format!("bulk save {i}\n").repeat(40);
-            let t0 = Instant::now();
-            write_file_impl(&state, path.to_string_lossy().into_owned(), body)
-                .await
-                .unwrap();
-            samples.push(t0.elapsed());
-            tokio::time::sleep(inter_save).await;
-        }
-        samples.sort();
-        let p99 = samples[(N as f64 * 0.99) as usize - 1];
-        assert!(
-            p99 < Duration::from_millis(50),
-            "save RTT p99 = {p99:?} exceeded 50 ms budget under sustained embed pressure",
-        );
-    });
-}
 
 // --- _impl helpers: mirror the tauri::command bodies ---------------------
 //
@@ -419,12 +293,10 @@ async fn write_file_impl(
         _ => VaultError::Io(e),
     })?;
 
-    // Mirror commands/files.rs::write_file: dispatch index + embed updates
-    // after the disk write succeeds. Both are best-effort and silently
-    // skip when the relevant coordinator isn't registered in state.
+    // Mirror commands/files.rs::write_file: dispatch index updates
+    // after the disk write succeeds. Best-effort — silently skips when
+    // no coordinator is registered in state.
     dispatch_index_updates_test(state, &final_path, &content).await;
-    #[cfg(feature = "embeddings")]
-    dispatch_embed_update_test(state, final_path.clone(), &content);
 
     Ok(crate::hash::hash_bytes(bytes))
 }
@@ -457,19 +329,4 @@ async fn dispatch_index_updates_test(
     let _ = tx
         .send(IndexCmd::UpdateTags { rel_path, content: content.to_string() })
         .await;
-}
-
-#[cfg(feature = "embeddings")]
-fn dispatch_embed_update_test(
-    state: &VaultState,
-    abs_path: std::path::PathBuf,
-    content: &str,
-) {
-    let handles = {
-        let Ok(guard) = state.embed_coordinator.lock() else { return };
-        guard.as_ref().map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
-    };
-    let Some((tx, pending)) = handles else { return };
-    let probe = crate::embeddings::EmbedCoordinator { tx, pending };
-    let _ = probe.enqueue(abs_path, content.to_string());
 }

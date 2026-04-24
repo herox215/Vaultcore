@@ -12,14 +12,14 @@
 //   - activeTab:    sidebar tab — "files" (file browser) | "tags"
 
 import { writable } from "svelte/store";
-import type { HybridHit } from "../types/search";
-import { hybridSearch } from "../ipc/commands";
+import type { SearchResult } from "../types/search";
+import { searchFulltext } from "../ipc/commands";
 import { isVaultError } from "../types/errors";
 import { vaultStore } from "./vaultStore";
 
 export interface SearchStoreState {
   query: string;
-  results: HybridHit[];
+  results: SearchResult[];
   /** Total results returned (capped at limit, typically 100). */
   totalMatches: number;
   /** Number of unique file paths in results. */
@@ -62,7 +62,7 @@ function createSearchStore() {
      * Store search results returned by search_fulltext.
      * Also clears isSearching and computes unique file count.
      */
-    setResults: (results: HybridHit[], totalFiles: number) =>
+    setResults: (results: SearchResult[], totalFiles: number) =>
       update((s) => ({
         ...s,
         results,
@@ -101,11 +101,9 @@ function createSearchStore() {
      * Re-execute the current query against the freshly-built index.
      *
      * Called after a successful rebuild (#148). If the query is empty there
-     * is nothing to fetch; otherwise we re-issue `hybrid_search` and replace
+     * is nothing to fetch; otherwise we re-issue `search_fulltext` and replace
      * the results so the panel reflects newly-indexed content without the
-     * user having to edit the query. #204 switched the rebuild refetch from
-     * BM25-only to the RRF-fused hybrid result so the statusbar rebuild path
-     * stays consistent with the live search dispatch in OmniSearch.
+     * user having to edit the query.
      */
     refetchIfQueryNonEmpty: async (): Promise<void> => {
       let query = "";
@@ -116,7 +114,7 @@ function createSearchStore() {
       if (!query.trim()) return;
       update((s) => ({ ...s, isSearching: true }));
       try {
-        const results = await hybridSearch(query, 100);
+        const results = await searchFulltext(query, 100);
         const uniqueFileCount = new Set(results.map((r) => r.path)).size;
         update((s) => ({
           ...s,

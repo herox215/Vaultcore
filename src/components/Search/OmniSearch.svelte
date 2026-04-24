@@ -22,10 +22,10 @@
   import { scrollStore } from "../../store/scrollStore";
   import {
     searchFilename,
-    hybridSearch,
+    searchFulltext,
     rebuildIndex,
   } from "../../ipc/commands";
-  import type { FileMatch, HybridHit } from "../../types/search";
+  import type { FileMatch, SearchResult } from "../../types/search";
   import { isVaultError } from "../../types/errors";
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import QuickSwitcherRow from "./QuickSwitcherRow.svelte";
@@ -90,7 +90,7 @@
   let recentFiles = $state<RecentEntry[]>([]);
   let recentFilesSig = "";
 
-  // Current k cap for content-mode hybrid_search. Grows monotonically as
+  // Current k cap for content-mode search_fulltext. Grows monotonically as
   // the user clicks "Mehr laden"; resets to the small default whenever the
   // query or mode changes (a new query is a new intent).
   let contentK = $state(CONTENT_SEARCH_INITIAL_K);
@@ -128,7 +128,7 @@
   // Content-mode results + counts flow through searchStore so the
   // cross-vault reset + indexStale event subscription keep working.
   let storeState = $state({
-    results: [] as HybridHit[],
+    results: [] as SearchResult[],
     totalFiles: 0,
     isRebuilding: false,
   });
@@ -225,13 +225,10 @@
     }
     searchStore.setSearching(true);
     try {
-      // #204 — hybrid_search fuses BM25 + HNSW via RRF. Falls back to
-      // BM25-only transparently when embeddings aren't ready, so the UX
-      // stays identical while embeddings bootstrap.
       // #261 — k starts at CONTENT_SEARCH_INITIAL_K (viewport-sized) and
       // grows only when the user clicks "Mehr laden". Previously fixed at
       // k=100 which wasted IPC + backend scoring budget on every keystroke.
-      const results = await hybridSearch(trimmed, k);
+      const results = await searchFulltext(trimmed, k);
       if (myGen !== contentSearchGen) return;
       const uniqueFiles = new Set(results.map((r) => r.path)).size;
       searchStore.setResults(results, uniqueFiles);
@@ -319,7 +316,7 @@
     onClose();
   }
 
-  function openContentResult(r: HybridHit) {
+  function openContentResult(r: SearchResult) {
     onOpenFile(r.path);
     const searchText =
       extractSnippetMatch(r.snippet) ?? query.split(" ")[0] ?? "";
@@ -335,7 +332,7 @@
       const hit = activeList[idx] as FileMatch | undefined;
       if (hit) openFileResult(hit);
     } else {
-      const hit = activeList[idx] as HybridHit | undefined;
+      const hit = activeList[idx] as SearchResult | undefined;
       if (hit) openContentResult(hit);
     }
   }
@@ -482,10 +479,10 @@
             <p class="vc-search-results-counter">
               {storeState.results.length} Treffer in {storeState.totalFiles} Dateien
             </p>
-            {#each activeList as result, i (`${(result as HybridHit).path}|${i}`)}
+            {#each activeList as result, i (`${(result as SearchResult).path}|${i}`)}
               <SearchResultRow
-                result={result as HybridHit}
-                onclick={() => openContentResult(result as HybridHit)}
+                result={result as SearchResult}
+                onclick={() => openContentResult(result as SearchResult)}
               />
             {/each}
             {#if storeState.results.length >= contentK}
