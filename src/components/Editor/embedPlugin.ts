@@ -32,6 +32,8 @@ import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
 } from "../../lib/templateExprRanges";
+import { computeCanvasTextHtml } from "../../lib/canvas/textMarkdown";
+import { titleFromPath } from "../../lib/templateScope";
 import { vaultStore } from "../../store/vaultStore";
 import { tabStore } from "../../store/tabStore";
 import { readFile } from "../../ipc/commands";
@@ -352,7 +354,7 @@ class CanvasEmbedWidget extends WidgetType {
     if (this.content === null) {
       body.textContent = "…";
     } else {
-      renderCanvasEmbedBody(body, this.content, widthPx, wrap);
+      renderCanvasEmbedBody(body, this.content, widthPx, wrap, this.relPath);
     }
 
     const abs = absFromRel(this.relPath);
@@ -435,6 +437,7 @@ function renderCanvasEmbedBody(
   rawJson: string,
   widthPx: number,
   wrap: HTMLElement,
+  relPath: string,
 ): void {
   let doc;
   try {
@@ -457,6 +460,14 @@ function renderCanvasEmbedBody(
   body.style.height = `${cam.heightPx}px`;
 
   const vaultPath = get(vaultStore).currentPath ?? null;
+  // #364: pre-render text-node Markdown to HTML once at mount —
+  // embed canvases are read-only, so the set of text nodes is
+  // static for the lifetime of this widget and a re-render only
+  // happens when the host editor replaces the entire widget.
+  // `{{title}}` inside templated text nodes binds to the embedded
+  // canvas's basename, not the host note's title — the canvas is
+  // the document being rendered here.
+  const mdTextNodes = computeCanvasTextHtml(doc, null, titleFromPath(relPath));
   const component = mount(CanvasRenderer, {
     target: body,
     props: {
@@ -465,6 +476,7 @@ function renderCanvasEmbedBody(
       camY: cam.camY,
       zoom: cam.zoom,
       vaultPath,
+      mdTextNodes,
       interactive: false,
     },
   });
