@@ -1,13 +1,15 @@
-// Regression: clicking a locked folder opens the password modal, and on
-// successful unlock the folder must open *immediately* — a second click
-// must not be required.
+// Regression for #355: clicking a locked folder opens the password
+// modal, and on successful unlock the folder must open *immediately* —
+// a second click must not be required.
 //
-// The bug: `handleClick` used to call `onToggleExpand(row)` from the unlock
-// callback. Because locking does not prune `treeState.expanded`, a folder
-// that was expanded before being locked stayed in the expanded set while
-// locked; toggling after unlock therefore *collapsed* the folder. The fix
-// routes the unlock-success path through `onEnsureExpanded`, an idempotent
-// guaranteed-expand that the Sidebar maps to `setExpanded(..., true)`.
+// Original bug: `handleClick` called `onToggleExpand(row)` from the
+// unlock callback. Locking does not prune `treeState.expanded`, so a
+// folder that was expanded before being locked still had its relPath
+// in the set while locked; toggling after unlock therefore *collapsed*
+// it. The fix routes through `onEnsureExpanded` (idempotent
+// guaranteed-expand) and refreshes the parent listing first so the
+// flat row's cached `encryption` flag is fresh before flattenTree
+// decides whether to descend.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
@@ -78,7 +80,7 @@ function makeProps(row: FlatRow) {
   };
 }
 
-describe("TreeRow locked-folder unlock flow (#354 follow-up)", () => {
+describe("TreeRow locked-folder unlock flow (#355)", () => {
   beforeEach(() => {
     vaultStore.reset();
     bookmarksStore.reset();
@@ -99,7 +101,7 @@ describe("TreeRow locked-folder unlock flow (#354 follow-up)", () => {
     expect(props.onToggleExpand).not.toHaveBeenCalled();
   });
 
-  it("calls onEnsureExpanded (not onToggleExpand) on successful unlock", async () => {
+  it("refreshes the parent, then ensures-expand, on successful unlock", async () => {
     const props = makeProps(lockedFolderRow());
     const { container } = render(TreeRow, { props });
     await tick();
@@ -107,10 +109,25 @@ describe("TreeRow locked-folder unlock flow (#354 follow-up)", () => {
     row.click();
     await tick();
 
+    // Track ordering: the parent refresh must complete before the
+    // ensure-expand fires, otherwise the flat row's cached
+    // `encryption: "locked"` flag is still in effect when flattenTree
+    // decides whether to descend into children, producing a brief
+    // "expanded but empty" flash.
+    const order: string[] = [];
+    props.onRefreshFolder.mockImplementation(async () => {
+      order.push("refresh");
+    });
+    props.onEnsureExpanded.mockImplementation(async () => {
+      order.push("ensure");
+    });
+
     const unlockCallback = openUnlockModal.mock.calls[0][2];
     expect(unlockCallback).toBeTypeOf("function");
     await unlockCallback!();
 
+    expect(order).toEqual(["refresh", "ensure"]);
+    expect(props.onRefreshFolder).toHaveBeenCalledWith(VAULT);
     expect(props.onEnsureExpanded).toHaveBeenCalledTimes(1);
     expect(props.onEnsureExpanded.mock.calls[0][0]).toMatchObject({
       path: `${VAULT}/secret`,
@@ -120,5 +137,24 @@ describe("TreeRow locked-folder unlock flow (#354 follow-up)", () => {
     // if its relPath happened to be in `treeState.expanded` from before
     // the lock, which is exactly the regression we're guarding against.
     expect(props.onToggleExpand).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the nested parent (not vault root) for a deeper locked folder", async () => {
+    const nested = lockedFolderRow({
+      path: `${VAULT}/outer/secret`,
+      relPath: "outer/secret",
+      depth: 1,
+    });
+    const props = makeProps(nested);
+    const { container } = render(TreeRow, { props });
+    await tick();
+    const row = container.querySelector(".vc-tree-row") as HTMLElement;
+    row.click();
+    await tick();
+
+    const unlockCallback = openUnlockModal.mock.calls[0][2];
+    await unlockCallback!();
+
+    expect(props.onRefreshFolder).toHaveBeenCalledWith(`${VAULT}/outer`);
   });
 });

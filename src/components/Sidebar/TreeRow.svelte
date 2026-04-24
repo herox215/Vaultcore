@@ -56,9 +56,12 @@
     onToggleExpand: (row: FlatRow) => void | Promise<void>;
     /**
      * Guaranteed-expand (idempotent). Use when the caller needs the
-     * folder open regardless of its current expanded state — e.g. after
-     * unlock, or after creating a child, where a plain toggle would
-     * collapse an already-expanded folder.
+     * folder open regardless of its current expanded state. A plain
+     * `onToggleExpand` reads `treeState.expanded` and flips it, so
+     * calling it on an already-expanded folder collapses it — wrong
+     * for any flow whose intent is "make sure this folder is open"
+     * (unlock success; "New file/folder here" context menu entries
+     * that should leave the containing folder expanded).
      */
     onEnsureExpanded: (row: FlatRow) => void | Promise<void>;
     /** Tell the Sidebar the child list for this folder needs re-fetching. */
@@ -138,14 +141,24 @@
   function handleClick() {
     onSelect(row.path);
     if (row.isDir) {
-      // #345: clicking a locked folder opens the password modal
-      // instead of toggling expansion. On successful unlock we
-      // ensure-expand — a plain toggle would *collapse* the folder
-      // if it happened to be in `treeState.expanded` from before it
-      // was locked (locking doesn't prune the expanded set), forcing
-      // a second click to re-open it.
+      // #355: clicking a locked folder opens the password modal
+      // instead of toggling expansion. On successful unlock we:
+      //   1. Re-fetch the parent listing so the cached DirEntry for
+      //      this folder flips from `encryption: "locked"` to
+      //      `"unlocked"`. Without this step, flattenTree's
+      //      `if (entry.encryption === "locked") continue` would
+      //      skip children of an otherwise-expanded folder until
+      //      the async `encrypted_folders_changed` pulse lands —
+      //      yielding a brief "expanded but empty" flash.
+      //   2. Ensure-expand (idempotent). A plain toggle would
+      //      *collapse* a folder whose relPath is still in
+      //      `treeState.expanded` from before it was locked
+      //      (locking does not prune the expanded set), forcing
+      //      a second click to re-open it.
       if (isLocked) {
         openUnlockModal(row.path, row.name, async () => {
+          const parent = parentOf(row.path) ?? getVaultRoot();
+          if (parent) await onRefreshFolder(parent);
           await onEnsureExpanded(row);
         });
         return;
@@ -299,7 +312,7 @@
     closeContextMenu();
     try {
       const newPath = await createFile(row.path, "");
-      await onToggleExpand({ ...row, expanded: false });
+      await onEnsureExpanded(row);
       await onRefreshFolder(row.path);
       tabStore.openTab(newPath);
     } catch (e) {
@@ -313,7 +326,7 @@
     try {
       const newPath = await createFile(row.path, "Untitled.canvas");
       await writeFile(newPath, serializeCanvas(emptyCanvas()));
-      await onToggleExpand({ ...row, expanded: false });
+      await onEnsureExpanded(row);
       await onRefreshFolder(row.path);
       tabStore.openFileTab(newPath, "canvas");
     } catch (e) {
@@ -326,7 +339,7 @@
     closeContextMenu();
     try {
       await createFolder(row.path, "");
-      await onToggleExpand({ ...row, expanded: false });
+      await onEnsureExpanded(row);
       await onRefreshFolder(row.path);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
