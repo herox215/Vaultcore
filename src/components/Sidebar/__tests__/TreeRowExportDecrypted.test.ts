@@ -94,8 +94,7 @@ describe("TreeRow export-decrypted menu entry (#360)", () => {
     vaultStore.setReady({ currentPath: VAULT, fileList: [], fileCount: 0 });
     pickSavePath.mockReset();
     exportDecryptedFile.mockReset();
-    // Clear toasts
-    toastStore.dismissAll?.();
+    toastStore._reset();
   });
 
   it("hides the entry when the file is NOT inside any encrypted folder", async () => {
@@ -211,5 +210,45 @@ describe("TreeRow export-decrypted menu entry (#360)", () => {
 
     expect(pickSavePath).toHaveBeenCalledTimes(1);
     expect(exportDecryptedFile).not.toHaveBeenCalled();
+  });
+
+  it("toasts an error when the backend rejects (e.g. locked race)", async () => {
+    _setEncryptedFoldersForTest([
+      { path: "secret", createdAt: "t", state: "encrypted", locked: false },
+    ]);
+    pickSavePath.mockResolvedValueOnce("/home/user/Desktop/photo.png");
+    // Reject with a shaped VaultError so `vaultErrorCopy` picks up the
+    // right copy (mirrors a locked-between-menu-and-click race).
+    exportDecryptedFile.mockRejectedValueOnce({
+      kind: "PathLocked",
+      message: "Path is inside a locked encrypted folder",
+      data: "/vault/secret/photo.png",
+    });
+
+    const errors: string[] = [];
+    const unsub = toastStore.subscribe((items) => {
+      for (const item of items) {
+        if (item.variant === "error") errors.push(item.message);
+      }
+    });
+
+    const { container } = render(TreeRow, { props: makeProps(fileRow()) });
+    await tick();
+    await openContextMenu(container);
+    const entry = container.querySelector(
+      '[data-testid="context-export-decrypted"]',
+    ) as HTMLButtonElement;
+    await fireEvent.click(entry);
+    await Promise.resolve();
+    await tick();
+    await Promise.resolve();
+    await tick();
+    unsub();
+
+    expect(exportDecryptedFile).toHaveBeenCalledTimes(1);
+    expect(
+      errors.some((m) => m.toLowerCase().includes("locked")),
+      `expected an error toast mentioning "locked"; got ${JSON.stringify(errors)}`,
+    ).toBe(true);
   });
 });

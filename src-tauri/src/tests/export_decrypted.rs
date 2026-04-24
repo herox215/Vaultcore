@@ -22,9 +22,14 @@ use crate::error::VaultError;
 use crate::VaultState;
 
 /// Build a vault with one encrypted folder (`secret/`) containing a
-/// sealed file. Returns the vault root, the encrypted root, and the
-/// canonical path of the sealed file. The encrypted folder is UNLOCKED
-/// by default (key in keyring, not in the locked registry).
+/// sealed file. Returns the vault root and the canonical path of the
+/// sealed file. The encrypted folder is UNLOCKED by default (key in
+/// keyring, not in the locked registry).
+///
+/// `_tmp` must be kept alive for the duration of the test — dropping
+/// the `TempDir` wipes the on-disk state, so the field is deliberately
+/// held via the underscore-prefixed name to signal "owned for its
+/// Drop, not its value".
 struct SealedVault {
     _tmp: TempDir,
     vault: PathBuf,
@@ -68,7 +73,6 @@ fn setup(unlocked: bool, plaintext: &[u8]) -> SealedVault {
         state.locked_paths.lock_root(enc_root_canon.clone()).unwrap();
     }
 
-    let _ = enc_root_canon; // enc_root_canon is kept as a debug aid
     SealedVault {
         _tmp: tmp,
         vault,

@@ -375,9 +375,12 @@
     try {
       await exportDecryptedFile(row.path, picked);
       const filename = picked.split(/[/\\]/).pop() ?? picked;
+      // #360 — toast copy deliberately names the file as UNENCRYPTED
+      // because that is what the user just produced. "Decrypted copy"
+      // softens a security-relevant action; make it explicit.
       toastStore.push({
         variant: "info",
-        message: `Exported decrypted copy to ${filename}`,
+        message: `Saved unencrypted copy to ${filename}. This file is now readable by other apps.`,
       });
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
