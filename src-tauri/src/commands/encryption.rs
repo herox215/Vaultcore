@@ -40,22 +40,18 @@ const PROGRESS_EMIT_THRESHOLD: usize = 16;
 /// so the frontend never handles KDF material. Used by
 /// `list_encrypted_folders` and the `vault://encrypted_folders_changed`
 /// event payload.
+///
+/// #351: `locked` reflects the in-memory registry state at list time
+/// (NOT persisted in the manifest). The frontend diffs this field
+/// across refreshes to detect unlocked → locked transitions and close
+/// any open tabs that sit inside a now-locked root.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedFolderView {
     pub path: String,
     pub created_at: String,
     pub state: FolderState,
-}
-
-impl From<&EncryptedFolderMeta> for EncryptedFolderView {
-    fn from(m: &EncryptedFolderMeta) -> Self {
-        Self {
-            path: m.path.clone(),
-            created_at: m.created_at.clone(),
-            state: m.state,
-        }
-    }
+    pub locked: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -361,7 +357,29 @@ pub async fn list_encrypted_folders(
 ) -> Result<Vec<EncryptedFolderView>, VaultError> {
     let root = vault_root(&state)?;
     let metas = read_manifest(&root)?;
-    Ok(metas.iter().map(EncryptedFolderView::from).collect())
+    Ok(metas
+        .iter()
+        .map(|m| {
+            // #351: derive `locked` from the in-memory registry. A
+            // manifest entry whose folder cannot be canonicalized
+            // (renamed outside the app, orphaned entry) is reported
+            // as locked — the conservative default matches
+            // `reload_manifest_and_lock_all` which also skips-as-locked
+            // rather than opening a plaintext read window.
+            let locked = match std::fs::canonicalize(root.join(&m.path)) {
+                Ok(canon) => state
+                    .locked_paths
+                    .is_locked(&CanonicalPath::assume_canonical(canon)),
+                Err(_) => true,
+            };
+            EncryptedFolderView {
+                path: m.path.clone(),
+                created_at: m.created_at.clone(),
+                state: m.state,
+                locked,
+            }
+        })
+        .collect())
 }
 
 // ── integration hook used by open_vault ──────────────────────────────────────

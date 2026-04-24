@@ -178,6 +178,121 @@ describe("tabLifecycleStore", () => {
     });
   });
 
+  // #351 — when an encrypted folder is locked, every open tab whose file
+  // lives under that folder must close. Plaintext buffers are released as
+  // the tab's EditorPane unmounts, which satisfies the acceptance criterion
+  // of not leaving decrypted content visible or editable.
+  describe("closeUnderPath", () => {
+    it("closes a tab whose filePath exactly matches the folder path", () => {
+      // Edge case: a file tab whose path happens to equal the folder arg.
+      // Shouldn't happen in practice (a locked folder is a directory), but
+      // the prefix check must not silently miss it.
+      const id = tabLifecycleStore.openTab("/vault/secret");
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      expect(get(tabLifecycleStore).tabs.find((t) => t.id === id)).toBeUndefined();
+    });
+
+    it("closes child-file tabs under the folder", () => {
+      const id1 = tabLifecycleStore.openTab("/vault/secret/a.md");
+      const id2 = tabLifecycleStore.openTab("/vault/secret/sub/b.md");
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs.find((t) => t.id === id1)).toBeUndefined();
+      expect(state.tabs.find((t) => t.id === id2)).toBeUndefined();
+      expect(state.tabs).toHaveLength(0);
+    });
+
+    it("does NOT close siblings with a shared string prefix", () => {
+      // `/vault/secret` is locked; `/vault/secretplans/*` must stay open.
+      // String-startsWith alone would incorrectly match this — the check
+      // must insist on a path separator boundary.
+      tabLifecycleStore.openTab("/vault/secret/a.md");
+      const keep = tabLifecycleStore.openTab("/vault/secretplans/note.md");
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs).toHaveLength(1);
+      expect(state.tabs[0]!.id).toBe(keep);
+    });
+
+    it("leaves unrelated tabs alone", () => {
+      tabLifecycleStore.openTab("/vault/secret/a.md");
+      const keep = tabLifecycleStore.openTab("/vault/other/b.md");
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs).toHaveLength(1);
+      expect(state.tabs[0]!.id).toBe(keep);
+    });
+
+    it("does not touch the graph tab", () => {
+      tabLifecycleStore.openTab("/vault/secret/a.md");
+      const graphId = tabLifecycleStore.openGraphTab();
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs).toHaveLength(1);
+      expect(state.tabs[0]!.id).toBe(graphId);
+      expect(state.tabs[0]!.type).toBe("graph");
+    });
+
+    it("is a no-op when no tab falls under the path", () => {
+      const id = tabLifecycleStore.openTab("/vault/other/a.md");
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs).toHaveLength(1);
+      expect(state.tabs[0]!.id).toBe(id);
+    });
+
+    it("reassigns activeTabId to a surviving tab when the active tab is closed", () => {
+      const keep = tabLifecycleStore.openTab("/vault/other/a.md");
+      const active = tabLifecycleStore.openTab("/vault/secret/x.md");
+      tabLifecycleStore.activateTab(active);
+      expect(get(tabLifecycleStore).activeTabId).toBe(active);
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs.map((t) => t.id)).toEqual([keep]);
+      expect(state.activeTabId).toBe(keep);
+    });
+
+    it("sets activeTabId to null when every surviving tab is closed", () => {
+      const a = tabLifecycleStore.openTab("/vault/secret/a.md");
+      tabLifecycleStore.openTab("/vault/secret/b.md");
+      tabLifecycleStore.activateTab(a);
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs).toHaveLength(0);
+      expect(state.activeTabId).toBeNull();
+    });
+
+    it("collapses the split when the right pane is fully consumed", () => {
+      const left = tabLifecycleStore.openTab("/vault/plain.md");
+      const r1 = tabLifecycleStore.openTab("/vault/secret/a.md");
+      const r2 = tabLifecycleStore.openTab("/vault/secret/b.md");
+      // Manually stage a split — both victims live in the right pane.
+      _core.update((s) => ({
+        ...s,
+        splitState: { left: [left], right: [r1, r2], activePane: "right" },
+        activeTabId: r1,
+      }));
+      tabLifecycleStore.closeUnderPath("/vault/secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs.map((t) => t.id)).toEqual([left]);
+      expect(state.splitState.left).toEqual([left]);
+      expect(state.splitState.right).toEqual([]);
+      expect(state.splitState.activePane).toBe("left");
+      expect(state.activeTabId).toBe(left);
+    });
+
+    it("tolerates Windows-style backslash separators in tab paths", () => {
+      // Tauri on Windows returns paths with `\\` separators; the prefix
+      // check must compare them in a separator-agnostic way.
+      tabLifecycleStore.openTab("C:\\vault\\secret\\a.md");
+      const keep = tabLifecycleStore.openTab("C:\\vault\\other\\b.md");
+      tabLifecycleStore.closeUnderPath("C:\\vault\\secret");
+      const state = get(tabLifecycleStore);
+      expect(state.tabs).toHaveLength(1);
+      expect(state.tabs[0]!.id).toBe(keep);
+    });
+  });
+
   describe("openGraphTab", () => {
     it("creates a singleton graph tab and activates it", () => {
       const id = tabLifecycleStore.openGraphTab();

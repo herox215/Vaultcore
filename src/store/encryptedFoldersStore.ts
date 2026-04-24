@@ -17,12 +17,23 @@
 //   convenience `lockedPaths: Set<string>` of vault-relative paths
 //   that the sidebar and command palette can consult without doing
 //   their own filtering.
+//
+// #351: the store also owns the "close tabs on lock" side effect.
+// Each refresh tracks which roots were locked last time; when a root
+// transitions unlocked → locked (or appears freshly locked after an
+// `encrypt_folder`), every open tab whose absolute path sits under
+// that root is closed via `tabLifecycleStore.closeUnderPath`. The
+// initial populate seeds the previous-locked snapshot without closing
+// anything so that tabs restored from a persisted session are not
+// retroactively evicted on vault open.
 
-import { writable, derived, type Readable } from "svelte/store";
+import { writable, derived, get, type Readable } from "svelte/store";
 
 import { listEncryptedFolders } from "../ipc/commands";
 import { listenEncryptedFoldersChanged } from "../ipc/events";
 import { treeRefreshStore } from "./treeRefreshStore";
+import { tabLifecycleStore } from "./tabLifecycleStore";
+import { vaultStore } from "./vaultStore";
 import type { EncryptedFolderView } from "../types/encryption";
 
 interface StoreState {
@@ -35,6 +46,36 @@ const internal = writable<StoreState>({ entries: [], ready: false });
 
 let unlisten: (() => void) | null = null;
 
+/**
+ * #351: vault-relative paths that were reported as `locked: true` in
+ * the most recent successful refresh. Drives the unlocked → locked
+ * diff that triggers `tabLifecycleStore.closeUnderPath`. Lives at
+ * module scope alongside `unlisten` — same lifecycle, cleared by
+ * `resetEncryptedFoldersStore`.
+ */
+let previousLockedRelPaths = new Set<string>();
+
+/**
+ * #351: skip the close-tabs side effect on the very first refresh
+ * after `initEncryptedFoldersStore`. A persisted-session scenario
+ * (vault closed with tabs open inside an encrypted root; re-opened
+ * later — the manifest always reports locked=true on cold start)
+ * would otherwise close those tabs on every vault open. Seeding
+ * once at init means the diff only fires on real transitions.
+ */
+let seeded = false;
+
+/**
+ * #351: serialize overlapping refreshes so the locked-path diff is
+ * well-defined. Two `encrypted_folders_changed` events can arrive in
+ * quick succession (e.g., auto-lock timers for two folders firing
+ * within a few ms); without a chain guard the two async refreshes
+ * both read-then-write `previousLockedRelPaths` against different
+ * snapshots and one transition can be lost. The chain ensures each
+ * refresh runs to completion before the next starts.
+ */
+let refreshChain: Promise<void> = Promise.resolve();
+
 /** Read-only view of the raw manifest entries (salt stripped). */
 export const encryptedFolders: Readable<EncryptedFolderView[]> = derived(
   internal,
@@ -44,10 +85,10 @@ export const encryptedFolders: Readable<EncryptedFolderView[]> = derived(
 /**
  * Precomputed set of **vault-relative, forward-slash** paths whose
  * entry is tracked in the manifest. Does NOT distinguish locked vs
- * unlocked — that signal lives on `DirEntry.encryption` straight from
- * the backend. Callers that hold absolute paths must normalize first
- * (strip the vault prefix) before checking membership — see the
- * helper in `openFileAsTab.ts`.
+ * unlocked — use `EncryptedFolderView.locked` or consult
+ * `DirEntry.encryption` for that signal. Callers that hold absolute
+ * paths must normalize first (strip the vault prefix) before checking
+ * membership — see the helper in `openFileAsTab.ts`.
  */
 export const encryptedPaths: Readable<Set<string>> = derived(
   internal,
@@ -60,17 +101,64 @@ export const encryptedFoldersReady: Readable<boolean> = derived(
   ($s) => $s.ready,
 );
 
+/**
+ * Compare `entries` against the previous locked-paths snapshot and
+ * close tabs for every root that has newly transitioned into the
+ * locked state. The first call after init only seeds the snapshot;
+ * subsequent calls emit close events.
+ *
+ * Absolute path reconstruction mirrors `openFileAsTab.ts::findLockingRoot`:
+ * take the vault root from `vaultStore.currentPath`, strip any trailing
+ * separators, and join with the manifest's vault-relative path using
+ * a forward slash. This is the same code path the tab originally used
+ * when it was opened, so prefix matching against `tab.filePath` works
+ * without an extra canonicalization round-trip.
+ */
+function reconcileLockedTabs(entries: EncryptedFolderView[]): void {
+  const currentLocked = new Set(
+    entries.filter((e) => e.locked).map((e) => e.path),
+  );
+  if (!seeded) {
+    previousLockedRelPaths = currentLocked;
+    seeded = true;
+    return;
+  }
+  const newlyLocked: string[] = [];
+  for (const rel of currentLocked) {
+    if (!previousLockedRelPaths.has(rel)) newlyLocked.push(rel);
+  }
+  previousLockedRelPaths = currentLocked;
+  if (newlyLocked.length === 0) return;
+
+  const vaultRoot = get(vaultStore).currentPath;
+  if (!vaultRoot) return;
+  const normalizedVault = vaultRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  for (const rel of newlyLocked) {
+    const abs = `${normalizedVault}/${rel}`;
+    tabLifecycleStore.closeUnderPath(abs);
+  }
+}
+
 async function refresh(): Promise<void> {
   try {
     const entries = await listEncryptedFolders();
     internal.set({ entries, ready: true });
+    reconcileLockedTabs(entries);
   } catch (e) {
     // Don't throw on refresh — transient IPC failure keeps the last
     // known state; the next `encrypted_folders_changed` event will
-    // re-try. Log so bugs are observable in dev.
+    // re-try. `previousLockedRelPaths` is intentionally NOT mutated
+    // so the next successful refresh still observes the pending
+    // unlocked → locked deltas. Log so bugs are observable in dev.
     // eslint-disable-next-line no-console
     console.warn("encryptedFoldersStore refresh failed", e);
   }
+}
+
+/** Chain a refresh onto the in-flight one so concurrent events serialize. */
+function scheduleRefresh(): Promise<void> {
+  refreshChain = refreshChain.then(refresh, refresh);
+  return refreshChain;
 }
 
 /**
@@ -88,17 +176,22 @@ export async function initEncryptedFoldersStore(): Promise<void> {
     } catch { /* swallow */ }
     unlisten = null;
   }
-  await refresh();
+  // Reset the lock-diff state on every init so a vault switch does not
+  // leak the previous vault's locked-paths snapshot into the new vault.
+  previousLockedRelPaths = new Set();
+  seeded = false;
+  await scheduleRefresh();
   try {
     unlisten = await listenEncryptedFoldersChanged(() => {
-      void refresh();
-      // #345: the sidebar's `DirEntry.encryption` is cached via the
-      // tree model built from `list_directory`. Encrypt / unlock /
-      // lock mutate that field on the backend but the cached tree
-      // still shows the old state until we force a re-fetch. A
-      // treeRefreshStore pulse here makes the unlock actually
-      // reveal children and the lock actually re-hide them.
-      treeRefreshStore.requestRefresh();
+      void scheduleRefresh().then(() => {
+        // #345: the sidebar's `DirEntry.encryption` is cached via the
+        // tree model built from `list_directory`. Encrypt / unlock /
+        // lock mutate that field on the backend but the cached tree
+        // still shows the old state until we force a re-fetch. A
+        // treeRefreshStore pulse here makes the unlock actually
+        // reveal children and the lock actually re-hide them.
+        treeRefreshStore.requestRefresh();
+      });
     });
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -114,6 +207,8 @@ export function resetEncryptedFoldersStore(): void {
     unlisten = null;
   }
   internal.set({ entries: [], ready: false });
+  previousLockedRelPaths = new Set();
+  seeded = false;
 }
 
 /** Test-only: manually push state. Do not use in production code. */

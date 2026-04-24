@@ -16,6 +16,14 @@ export interface EncryptedFolderView {
    * lets the user recover it.
    */
   state: EncryptedFolderState;
+  /**
+   * #351 — whether this root is currently locked in the running
+   * session. Derived from the in-memory `locked_paths` registry at
+   * list time; not persisted in the manifest. The frontend diffs
+   * this across refreshes to detect unlocked → locked transitions
+   * and close any open tabs that sit inside a now-locked root.
+   */
+  locked: boolean;
 }
 
 /** Progress payload for the `vault://encrypt_progress` event. */
