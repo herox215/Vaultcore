@@ -25,7 +25,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { get } from "svelte/store";
 
 import { readAttachmentBytes } from "../../ipc/commands";
-import { encryptedPaths } from "../../store/encryptedFoldersStore";
+import { encryptedPaths, unlockedPaths } from "../../store/encryptedFoldersStore";
 import { vaultStore } from "../../store/vaultStore";
 
 /**
@@ -44,10 +44,12 @@ import { vaultStore } from "../../store/vaultStore";
  */
 let _cachedVault: string | null = null;
 let _cachedPaths: Set<string> = new Set();
+let _cachedUnlockedPaths: Set<string> = new Set();
 let _cacheScheduled = false;
 function refreshCachedSnapshots(): void {
   _cachedVault = get(vaultStore).currentPath;
   _cachedPaths = get(encryptedPaths);
+  _cachedUnlockedPaths = get(unlockedPaths);
 }
 function ensureCachedSnapshots(): void {
   if (_cacheScheduled) return;
@@ -60,15 +62,43 @@ function ensureCachedSnapshots(): void {
   });
 }
 
-export function isInsideEncryptedFolder(abs: string): boolean {
-  ensureCachedSnapshots();
-  if (!_cachedVault) return false;
-  // Normalize separators — abs may use backslashes on Windows.
+/**
+ * Compute the vault-relative form of `abs`, or `null` when `abs` is
+ * outside the currently-open vault. Shared by both
+ * `isInsideEncryptedFolder` and `isInsideUnlockedEncryptedFolder`.
+ */
+function relativeToVault(abs: string): string | null {
+  if (!_cachedVault) return null;
   const normAbs = abs.replace(/\\/g, "/");
   const normVault = _cachedVault.replace(/\\/g, "/");
-  if (!normAbs.startsWith(normVault)) return false;
-  const rel = normAbs.slice(normVault.length).replace(/^\/+/, "");
+  if (!normAbs.startsWith(normVault)) return null;
+  return normAbs.slice(normVault.length).replace(/^\/+/, "");
+}
+
+export function isInsideEncryptedFolder(abs: string): boolean {
+  ensureCachedSnapshots();
+  const rel = relativeToVault(abs);
+  if (rel === null) return false;
   for (const p of _cachedPaths) {
+    if (rel === p || rel.startsWith(p + "/")) return true;
+  }
+  return false;
+}
+
+/**
+ * #360 — same shape as `isInsideEncryptedFolder` but restricted to
+ * encrypted folders that are currently UNLOCKED. Used by the "Export
+ * decrypted copy…" context-menu entry and any other action that can
+ * only proceed when a key is available.
+ *
+ * Shares the microtask-scoped snapshot cache so per-row checks in the
+ * sidebar tree stay cheap even at hundreds of rendered rows.
+ */
+export function isInsideUnlockedEncryptedFolder(abs: string): boolean {
+  ensureCachedSnapshots();
+  const rel = relativeToVault(abs);
+  if (rel === null) return false;
+  for (const p of _cachedUnlockedPaths) {
     if (rel === p || rel.startsWith(p + "/")) return true;
   }
   return false;
