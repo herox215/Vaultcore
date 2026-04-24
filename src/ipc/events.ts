@@ -116,3 +116,39 @@ export function listenEncryptedFoldersChanged(
 ): Promise<UnlistenFn> {
   return listen(ENCRYPTED_FOLDERS_CHANGED_EVENT, () => handler());
 }
+
+// ── #357 — auto-encrypt-on-drop live progress ──────────────────────────────
+
+export interface EncryptDropProgressPayload {
+  /** Files still being sealed in the current batch. Synchronous
+   *  backend → always 0 today; reserved for streaming follow-up. */
+  inFlight: number;
+  /** Files sealed in this event's batch. Feeds the pill counter. */
+  total: number;
+  /** Last sealed (or queued) path — null for pure error payloads. */
+  lastCompleted: string | null;
+  /** `true` when the drop landed in a locked folder and was queued
+   *  for seal-on-unlock. Distinct UI copy: the file is plaintext on
+   *  disk until the user unlocks. */
+  queued: boolean;
+  /** Per-file error — persists the pill in error state until the user
+   *  acts. A toast fires alongside for actionable detail. */
+  error: { path: string; message: string } | null;
+}
+
+export const ENCRYPT_DROP_PROGRESS_EVENT = "vault://encrypt_drop_progress";
+
+/**
+ * #357 — subscribe to the auto-encrypt-on-drop live progress stream.
+ * Fires per debounced watcher batch (Sealed) and per unlock drain
+ * (Sealed / Queued) and per failure. Frontend routes payloads through
+ * `encryptionProgressStore.apply`; errors also surface as a separate
+ * `toastStore.error` so the user sees the failed filename.
+ */
+export function listenEncryptDropProgress(
+  handler: (payload: EncryptDropProgressPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<EncryptDropProgressPayload>(ENCRYPT_DROP_PROGRESS_EVENT, (event) =>
+    handler(event.payload),
+  );
+}

@@ -8,10 +8,12 @@
 //   frontend is rejected with `PermissionDenied` even though plugin-fs
 //   might otherwise allow it — the Rust-side guard is the authoritative
 //   boundary.
-// - T-03 (binary corruption via auto-save loop): `read_file` uses
-//   `String::from_utf8` and rejects non-UTF-8 bytes with `InvalidEncoding`
-//   (D-17). A binary file therefore NEVER enters the editor, so auto-save
-//   cannot truncate/corrupt it.
+// - T-03 (binary corruption via auto-save loop): `read_file` is text-only:
+//   decrypts when the target lives in an unlocked encrypted folder, then
+//   rejects non-UTF-8 bytes with `InvalidEncoding` (D-17). Binaries never
+//   enter the editor via this path. Attachments and other binary content
+//   go through `read_attachment_bytes` (#357) which returns raw `Vec<u8>`
+//   and also flows through the decrypt gate.
 //
 // Note on test-side duplication: because `tauri::State` cannot be constructed
 // outside a running Tauri app, the unit tests in `tests/files.rs` duplicate
@@ -778,11 +780,17 @@ pub async fn save_attachment(
             path: canonical_folder.display().to_string(),
         });
     }
-    // #345: attachments into an encrypted folder are refused. We do
-    // not attempt to seal the attachment for the user — the encrypt
-    // flow operates on a whole-folder batch, not per-file. This gate
-    // keeps the contract clean: an encrypted folder stays uniform.
-    ensure_unlocked(&state, &canonical_folder)?;
+    // #357: attachments into an UNLOCKED encrypted folder are sealed
+    // on the way to disk (same contract as `write_file`). Dropping into
+    // a locked folder still errors via `maybe_encrypt_write`'s
+    // `key_clone` → `PathLocked` fast path — in-app paste during lock
+    // is a user error, distinct from the external-drop case handled by
+    // the watcher's pending-queue.
+    //
+    // Size cap is enforced here too so a compromised frontend cannot
+    // bypass the drop-path cap by calling `save_attachment` with a
+    // multi-GB payload.
+    crate::encryption::ensure_size_cap(&canonical_folder, bytes.len() as u64)?;
 
     // Determine final filename with collision avoidance (cap at 1000).
     let (stem, ext) = if let Some(dot) = filename.rfind('.') {
@@ -815,7 +823,14 @@ pub async fn save_attachment(
         list.record(final_path.clone());
     }
 
-    std::fs::write(&final_path, &bytes).map_err(|e| match e.kind() {
+    // #357: seal the attachment bytes when the target sits inside an
+    // unlocked encrypted root. Outside any encrypted folder this is a
+    // zero-cost pass-through; inside a locked root this returns
+    // `PathLocked` because the keyring has no entry — which is the
+    // correct behaviour for an in-app paste into a locked folder.
+    let bytes_on_disk = crate::encryption::maybe_encrypt_write(&state, &final_path, &bytes)?;
+
+    std::fs::write(&final_path, &bytes_on_disk).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied {
             path: final_path.display().to_string(),
         },
@@ -830,6 +845,41 @@ pub async fn save_attachment(
         }
     })?;
     Ok(rel.to_string_lossy().replace('\\', "/"))
+}
+
+// ─── read_attachment_bytes ───────────────────────────────────────────────────
+
+/// #357 — read raw bytes for an attachment, decrypting transparently
+/// when the target lives in an unlocked encrypted folder.
+///
+/// Distinct from `read_file` because `read_file` is text-only (D-17):
+/// it enforces `String::from_utf8` so a binary never enters the editor's
+/// auto-save loop. Attachments (images, PDFs, video, audio) need raw
+/// bytes, so the frontend uses this command for the four image/embed
+/// render paths. Returns a `Vec<u8>` that the frontend wraps in a
+/// `blob:` URL via `URL.createObjectURL`.
+///
+/// Security:
+/// - T-02: `ensure_inside_vault` canonicalizes + enforces vault scope.
+/// - #345: `maybe_decrypt_read` returns `PathLocked` for locked roots.
+pub fn read_attachment_bytes_impl(state: &VaultState, path: String) -> Result<Vec<u8>, VaultError> {
+    let target = PathBuf::from(&path);
+    let canonical = ensure_inside_vault(state, &target)?;
+    let bytes = std::fs::read(&canonical).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: path.clone() },
+        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },
+        _ => VaultError::Io(e),
+    })?;
+    // Transparent decrypt — pass-through for plain vaults.
+    crate::encryption::maybe_decrypt_read(state, &canonical, bytes)
+}
+
+#[tauri::command]
+pub async fn read_attachment_bytes(
+    state: tauri::State<'_, VaultState>,
+    path: String,
+) -> Result<Vec<u8>, VaultError> {
+    read_attachment_bytes_impl(&state, path)
 }
 
 // ─── count_wiki_links ────────────────────────────────────────────────────────

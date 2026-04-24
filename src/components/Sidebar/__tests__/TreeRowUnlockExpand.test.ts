@@ -31,8 +31,7 @@ vi.mock("../../../ipc/commands", () => ({
 }));
 
 const openUnlockModal = vi.fn<
-  [string, string, (() => void | Promise<void>)?],
-  void
+  (path: string, label: string, cb?: () => void | Promise<void>) => void
 >();
 
 vi.mock("../../../store/encryptionModalStore", () => ({
@@ -97,7 +96,7 @@ describe("TreeRow locked-folder unlock flow (#355)", () => {
     await tick();
 
     expect(openUnlockModal).toHaveBeenCalledTimes(1);
-    expect(openUnlockModal.mock.calls[0][0]).toBe(`${VAULT}/secret`);
+    expect(openUnlockModal.mock.calls[0]![0]).toBe(`${VAULT}/secret`);
     expect(props.onToggleExpand).not.toHaveBeenCalled();
   });
 
@@ -122,14 +121,14 @@ describe("TreeRow locked-folder unlock flow (#355)", () => {
       order.push("ensure");
     });
 
-    const unlockCallback = openUnlockModal.mock.calls[0][2];
+    const unlockCallback = openUnlockModal.mock.calls[0]![2];
     expect(unlockCallback).toBeTypeOf("function");
     await unlockCallback!();
 
     expect(order).toEqual(["refresh", "ensure"]);
     expect(props.onRefreshFolder).toHaveBeenCalledWith(VAULT);
     expect(props.onEnsureExpanded).toHaveBeenCalledTimes(1);
-    expect(props.onEnsureExpanded.mock.calls[0][0]).toMatchObject({
+    expect(props.onEnsureExpanded.mock.calls[0]![0]).toMatchObject({
       path: `${VAULT}/secret`,
       relPath: "secret",
     });
@@ -152,7 +151,7 @@ describe("TreeRow locked-folder unlock flow (#355)", () => {
     row.click();
     await tick();
 
-    const unlockCallback = openUnlockModal.mock.calls[0][2];
+    const unlockCallback = openUnlockModal.mock.calls[0]![2];
     await unlockCallback!();
 
     expect(props.onRefreshFolder).toHaveBeenCalledWith(`${VAULT}/outer`);

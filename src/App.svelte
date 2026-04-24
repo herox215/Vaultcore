@@ -293,7 +293,7 @@
   />
 {/if}
 
-<ProgressBar />
+<ProgressBar label="Scanning and securing vault…" />
 <ToastContainer />
 
 {#if repairPrompt}

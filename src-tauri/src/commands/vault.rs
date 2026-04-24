@@ -234,7 +234,12 @@ pub async fn open_vault(
         state.write_ignore.clone(),
         state.vault_reachable.clone(),
         index_tx,
-        state.locked_paths.clone(),
+        watcher::WatcherContext {
+            locked_paths: state.locked_paths.clone(),
+            keyring: state.keyring.clone(),
+            pending_queue: state.pending_queue.clone(),
+            manifest_cache: state.manifest_cache.clone(),
+        },
     );
     *state.watcher_handle.lock().map_err(|_| VaultError::LockPoisoned)? = Some(debouncer);
 

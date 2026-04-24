@@ -331,6 +331,10 @@ async fn read_file_decrypts_under_unlocked_root() {
     let mut key_copy = Zeroizing::new([0u8; 32]);
     key_copy.copy_from_slice(key.as_slice());
     state.keyring.insert(folder_canon.clone(), key_copy).unwrap();
+    // #357: production flows (reload_manifest_and_lock_all / unlock_folder)
+    // refresh the manifest cache as part of their contract. This test
+    // constructs VaultState directly, so the refresh is explicit.
+    state.manifest_cache.refresh_from_disk(&vault).unwrap();
 
     // read via the encryption helper — must return decrypted bytes.
     let on_disk = std::fs::read(&note_path).unwrap();
@@ -373,6 +377,9 @@ async fn write_file_encrypts_under_unlocked_root() {
     let mut key_copy = Zeroizing::new([0u8; 32]);
     key_copy.copy_from_slice(key.as_slice());
     state.keyring.insert(folder_canon.clone(), key_copy).unwrap();
+    // #357: see read_file_decrypts_under_unlocked_root — cache refresh
+    // is a production-flow invariant the test replicates directly.
+    state.manifest_cache.refresh_from_disk(&vault).unwrap();
 
     let note = folder.join("fresh.md");
     let plaintext = b"fresh note written while unlocked";
