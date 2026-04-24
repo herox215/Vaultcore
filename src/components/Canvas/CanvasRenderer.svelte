@@ -845,6 +845,44 @@
     z-index: 1;
   }
 
+  /* On non-rectangular shapes the bounding box isn't the visible area, so
+     (a) the editing textarea needs a transparent background + the same
+     clip as the shape so it doesn't paint a rectangle over the silhouette,
+     and (b) text is centered horizontally so it sits inside the narrow
+     parts of the polygon instead of hugging the left edge. */
+  .vc-canvas-node-text:not(.vc-shape-rectangle):not(.vc-shape-rounded-rectangle)
+    > .vc-canvas-node-content,
+  .vc-canvas-node-text:not(.vc-shape-rectangle):not(.vc-shape-rounded-rectangle)
+    > .vc-canvas-node-textarea {
+    text-align: center;
+  }
+
+  .vc-canvas-node-text:not(.vc-shape-rectangle):not(.vc-shape-rounded-rectangle)
+    > .vc-canvas-node-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .vc-canvas-node-text:not(.vc-shape-rectangle):not(.vc-shape-rounded-rectangle)
+    > .vc-canvas-node-textarea {
+    background: transparent;
+  }
+
+  /* Clip the editing textarea to the shape silhouette so the input's
+     own paint doesn't spill outside the rendered outline. */
+  .vc-canvas-node-text.vc-shape-ellipse > .vc-canvas-node-textarea {
+    border-radius: 50%;
+  }
+
+  .vc-canvas-node-text.vc-shape-diamond > .vc-canvas-node-textarea {
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+
+  .vc-canvas-node-text.vc-shape-triangle > .vc-canvas-node-textarea {
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  }
+
   .vc-canvas-node-content {
     padding: 8px;
     font-size: 14px;
