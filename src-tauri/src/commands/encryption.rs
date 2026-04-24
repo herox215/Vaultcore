@@ -40,22 +40,18 @@ const PROGRESS_EMIT_THRESHOLD: usize = 16;
 /// so the frontend never handles KDF material. Used by
 /// `list_encrypted_folders` and the `vault://encrypted_folders_changed`
 /// event payload.
+///
+/// #351: `locked` reflects the in-memory registry state at list time
+/// (NOT persisted in the manifest). The frontend diffs this field
+/// across refreshes to detect unlocked → locked transitions and close
+/// any open tabs that sit inside a now-locked root.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedFolderView {
     pub path: String,
     pub created_at: String,
     pub state: FolderState,
-}
-
-impl From<&EncryptedFolderMeta> for EncryptedFolderView {
-    fn from(m: &EncryptedFolderMeta) -> Self {
-        Self {
-            path: m.path.clone(),
-            created_at: m.created_at.clone(),
-            state: m.state,
-        }
-    }
+    pub locked: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -361,7 +357,44 @@ pub async fn list_encrypted_folders(
 ) -> Result<Vec<EncryptedFolderView>, VaultError> {
     let root = vault_root(&state)?;
     let metas = read_manifest(&root)?;
-    Ok(metas.iter().map(EncryptedFolderView::from).collect())
+    Ok(metas
+        .iter()
+        .map(|m| {
+            // #351: derive `locked` from the in-memory registry. A
+            // manifest entry whose folder cannot be canonicalized
+            // (renamed outside the app, orphaned entry, transient FS
+            // failure on a networked / unmounted share) reports as
+            // locked — the conservative default matches
+            // `reload_manifest_and_lock_all`, which also skips-as-locked
+            // rather than opening a plaintext read window. Log so the
+            // failure is observable when it happens; the fallback keeps
+            // the UI behavior safe but masks the root cause otherwise.
+            // Blocking `canonicalize` is acceptable here because the
+            // manifest holds < 10 entries in practice and the other
+            // encryption entry points (`lock_folder`,
+            // `reload_manifest_and_lock_all`) already canonicalize in
+            // this same pattern.
+            let abs = root.join(&m.path);
+            let locked = match std::fs::canonicalize(&abs) {
+                Ok(canon) => state
+                    .locked_paths
+                    .is_locked(&CanonicalPath::assume_canonical(canon)),
+                Err(e) => {
+                    log::warn!(
+                        "list_encrypted_folders: canonicalize {} failed: {e} — reporting locked",
+                        abs.display()
+                    );
+                    true
+                }
+            };
+            EncryptedFolderView {
+                path: m.path.clone(),
+                created_at: m.created_at.clone(),
+                state: m.state,
+                locked,
+            }
+        })
+        .collect())
 }
 
 // ── integration hook used by open_vault ──────────────────────────────────────
