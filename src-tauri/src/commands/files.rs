@@ -161,45 +161,9 @@ pub async fn write_file(
     // rename/move, update_links_after_rename).
     crate::commands::index_dispatch::dispatch_self_write(&state, &final_path, &content).await;
 
-    // Embed-on-save (#196): non-blocking enqueue to the EmbedCoordinator.
-    // Sync, returns immediately; a `QueueFull` outcome is benign because
-    // the latest content already lives in the coordinator's pending map.
-    #[cfg(feature = "embeddings")]
-    dispatch_embed_update(&state, final_path.clone(), &content);
-
     // Return hash so the frontend can track the last-known disk state
     // (EDIT-10 groundwork — Phase 5 will compare against this).
     Ok(hash_bytes(bytes))
-}
-
-#[cfg(feature = "embeddings")]
-pub(crate) fn dispatch_embed_update(state: &VaultState, abs_path: PathBuf, content: &str) {
-    let coord_handles = {
-        let Ok(guard) = state.embed_coordinator.lock() else { return };
-        guard.as_ref().map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
-    };
-    let Some((tx, pending)) = coord_handles else { return };
-    let probe = crate::embeddings::EmbedCoordinator { tx, pending };
-    if let Err(e) = probe.enqueue(abs_path, content.to_string()) {
-        log::warn!("embed enqueue: {e}");
-    }
-}
-
-/// #201 PR-A — dispatch a vector-store delete for `abs_path`. Called
-/// from the internal delete_file / rename_file / move_file paths
-/// because write_ignore suppresses the watcher's natural delete event
-/// for self-mutations.
-#[cfg(feature = "embeddings")]
-pub(crate) fn dispatch_embed_delete(state: &VaultState, abs_path: PathBuf) {
-    let coord_handles = {
-        let Ok(guard) = state.embed_coordinator.lock() else { return };
-        guard.as_ref().map(|c| (c.tx.clone(), std::sync::Arc::clone(&c.pending)))
-    };
-    let Some((tx, pending)) = coord_handles else { return };
-    let probe = crate::embeddings::EmbedCoordinator { tx, pending };
-    if let Err(e) = probe.enqueue_delete(abs_path) {
-        log::warn!("embed delete enqueue: {e}");
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -410,7 +374,7 @@ pub struct RenameResult {
 /// the file's post-rename content). Keeping dispatch in `_impl` means
 /// every caller — production wrapper, unit tests, future callers — runs
 /// the same contract. The tauri wrapper only adds the synthetic
-/// `file_changed` event + embed delete on top.
+/// `file_changed` event on top.
 pub async fn rename_file_impl(state: &VaultState, old_path: String, new_name: String) -> Result<RenameResult, VaultError> {
     let old = PathBuf::from(&old_path);
     let canonical_old = ensure_inside_vault(state, &old)?;
@@ -540,13 +504,6 @@ pub async fn rename_file(
     new_name: String,
 ) -> Result<RenameResult, VaultError> {
     use tauri::Emitter;
-    // Capture the canonical pre-rename path so we can dispatch an embed
-    // delete for the OLD path after the rename succeeds. write_ignore
-    // suppresses the watcher's natural Remove event for self-mutations,
-    // so without this the old path's vectors would linger forever. The
-    // NEW path's vectors get embedded on the next save by the user.
-    #[cfg(feature = "embeddings")]
-    let old_canonical = std::fs::canonicalize(&old_path).ok();
     let old_canonical_for_event = std::fs::canonicalize(&old_path)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| old_path.clone());
@@ -566,10 +523,6 @@ pub async fn rename_file(
         },
     );
 
-    #[cfg(feature = "embeddings")]
-    if let Some(p) = old_canonical {
-        dispatch_embed_delete(&state, p);
-    }
     Ok(result)
 }
 
@@ -602,8 +555,8 @@ async fn dispatch_new_side_after_rename(state: &VaultState, canonical_new: &Path
 
 /// Testable implementation body for delete_file. Returns the canonical path
 /// of the deleted source so the tauri wrapper can emit the synthetic
-/// `file_changed` event and dispatch the embed tombstone with the same
-/// canonical form the watcher would have used.
+/// `file_changed` event with the same canonical form the watcher would
+/// have used.
 ///
 /// The index dispatch (RemoveLinks / RemoveTags / Tantivy DeleteFile +
 /// Commit) is part of the `_impl` contract, not the wrapper. Keeping it
@@ -648,8 +601,8 @@ pub async fn delete_file(
 ) -> Result<(), VaultError> {
     use tauri::Emitter;
     // delete_file_impl returns the canonical source path AFTER a successful
-    // delete + index dispatch, so the synthetic event + embed tombstone use
-    // the same form the watcher would have seen.
+    // delete + index dispatch, so the synthetic event uses the same form
+    // the watcher would have seen.
     let canonical = delete_file_impl(&state, path).await?;
     let canonical_str = canonical.to_string_lossy().into_owned();
 
@@ -664,12 +617,6 @@ pub async fn delete_file(
             new_path: None,
         },
     );
-    // #201 PR-A: tell the embed coordinator to tombstone this path's
-    // vectors. Same reason as the synthetic file_changed event above —
-    // write_ignore suppresses the watcher's natural Remove event so we
-    // dispatch directly here.
-    #[cfg(feature = "embeddings")]
-    dispatch_embed_delete(&state, canonical);
     Ok(())
 }
 
@@ -730,11 +677,6 @@ pub async fn move_file(
     to_folder: String,
 ) -> Result<String, VaultError> {
     use tauri::Emitter;
-    // #201 PR-A: same rationale as rename_file — the OLD path's vectors
-    // need an explicit tombstone because write_ignore hides the
-    // watcher's Remove event.
-    #[cfg(feature = "embeddings")]
-    let old_canonical = std::fs::canonicalize(&from).ok();
     let old_canonical_for_event = std::fs::canonicalize(&from)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| from.clone());
@@ -754,10 +696,6 @@ pub async fn move_file(
         },
     );
 
-    #[cfg(feature = "embeddings")]
-    if let Some(p) = old_canonical {
-        dispatch_embed_delete(&state, p);
-    }
     Ok(result)
 }
 

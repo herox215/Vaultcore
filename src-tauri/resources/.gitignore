@@ -1,10 +1,5 @@
-# Binary assets fetched by build.rs are pinned via checksums.toml and
-# kept out of git. Only this file, checksums.toml, the LICENSE templates
-# (used by build.rs to populate model resource directories), and the
-# bundled docs template (#285) are tracked.
+# Only tracked resource files live alongside this .gitignore. Anything
+# fetched at build time would be ignored here.
 *
 !.gitignore
-!checksums.toml
-!LICENSE-APACHE-2.0
-!LICENSE-MIT
 !DOCS.template.md
