@@ -54,6 +54,16 @@
     onSelect: (path: string) => void;
     onOpenFile: (path: string) => void;
     onToggleExpand: (row: FlatRow) => void | Promise<void>;
+    /**
+     * Guaranteed-expand (idempotent). Use when the caller needs the
+     * folder open regardless of its current expanded state. A plain
+     * `onToggleExpand` reads `treeState.expanded` and flips it, so
+     * calling it on an already-expanded folder collapses it — wrong
+     * for any flow whose intent is "make sure this folder is open"
+     * (unlock success; "New file/folder here" context menu entries
+     * that should leave the containing folder expanded).
+     */
+    onEnsureExpanded: (row: FlatRow) => void | Promise<void>;
     /** Tell the Sidebar the child list for this folder needs re-fetching. */
     onRefreshFolder: (folderPath: string) => void | Promise<void>;
     onPathChanged: (oldPath: string, newPath: string) => void;
@@ -67,6 +77,7 @@
     onSelect,
     onOpenFile,
     onToggleExpand,
+    onEnsureExpanded,
     onRefreshFolder,
     onPathChanged,
     onRenameStateChange,
@@ -130,20 +141,25 @@
   function handleClick() {
     onSelect(row.path);
     if (row.isDir) {
-      // #345: clicking a locked folder opens the password modal
-      // instead of toggling expansion. On successful unlock we
-      // schedule the expand via onUnlocked — the tree refresh that
-      // fires from `encrypted_folders_changed` rebuilds this row
-      // with `encryption: "unlocked"`, and the expand we trigger
-      // here then descends into the now-visible children without
-      // requiring a second click.
+      // #355: clicking a locked folder opens the password modal
+      // instead of toggling expansion. On successful unlock we:
+      //   1. Re-fetch the parent listing so the cached DirEntry for
+      //      this folder flips from `encryption: "locked"` to
+      //      `"unlocked"`. Without this step, flattenTree's
+      //      `if (entry.encryption === "locked") continue` would
+      //      skip children of an otherwise-expanded folder until
+      //      the async `encrypted_folders_changed` pulse lands —
+      //      yielding a brief "expanded but empty" flash.
+      //   2. Ensure-expand (idempotent). A plain toggle would
+      //      *collapse* a folder whose relPath is still in
+      //      `treeState.expanded` from before it was locked
+      //      (locking does not prune the expanded set), forcing
+      //      a second click to re-open it.
       if (isLocked) {
         openUnlockModal(row.path, row.name, async () => {
-          // The store swap + tree refresh run asynchronously after
-          // the unlock event; yield the microtask queue so the
-          // refreshed row is the one we toggle.
-          await Promise.resolve();
-          await onToggleExpand(row);
+          const parent = parentOf(row.path) ?? getVaultRoot();
+          if (parent) await onRefreshFolder(parent);
+          await onEnsureExpanded(row);
         });
         return;
       }
@@ -287,17 +303,22 @@
   }
 
   function parentOf(absPath: string): string | null {
-    const i = absPath.lastIndexOf("/");
-    if (i <= 0) return null;
-    return absPath.slice(0, i);
+    // Backend paths (`DirEntry.path` via `to_string_lossy` in `tree.rs`)
+    // carry native separators — backslashes on Windows, forward slashes
+    // elsewhere. Accept both so a top-level folder like `C:\Vault\secret`
+    // still resolves to its parent instead of silently returning `null`
+    // and skipping the post-unlock parent refresh on Windows.
+    const lastSep = Math.max(absPath.lastIndexOf("/"), absPath.lastIndexOf("\\"));
+    if (lastSep <= 0) return null;
+    return absPath.slice(0, lastSep);
   }
 
   async function handleNewFileHere() {
     closeContextMenu();
     try {
       const newPath = await createFile(row.path, "");
-      await onToggleExpand({ ...row, expanded: false });
       await onRefreshFolder(row.path);
+      await onEnsureExpanded(row);
       tabStore.openTab(newPath);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -310,8 +331,8 @@
     try {
       const newPath = await createFile(row.path, "Untitled.canvas");
       await writeFile(newPath, serializeCanvas(emptyCanvas()));
-      await onToggleExpand({ ...row, expanded: false });
       await onRefreshFolder(row.path);
+      await onEnsureExpanded(row);
       tabStore.openFileTab(newPath, "canvas");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -323,8 +344,8 @@
     closeContextMenu();
     try {
       await createFolder(row.path, "");
-      await onToggleExpand({ ...row, expanded: false });
       await onRefreshFolder(row.path);
+      await onEnsureExpanded(row);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
