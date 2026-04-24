@@ -362,15 +362,30 @@ pub async fn list_encrypted_folders(
         .map(|m| {
             // #351: derive `locked` from the in-memory registry. A
             // manifest entry whose folder cannot be canonicalized
-            // (renamed outside the app, orphaned entry) is reported
-            // as locked — the conservative default matches
-            // `reload_manifest_and_lock_all` which also skips-as-locked
-            // rather than opening a plaintext read window.
-            let locked = match std::fs::canonicalize(root.join(&m.path)) {
+            // (renamed outside the app, orphaned entry, transient FS
+            // failure on a networked / unmounted share) reports as
+            // locked — the conservative default matches
+            // `reload_manifest_and_lock_all`, which also skips-as-locked
+            // rather than opening a plaintext read window. Log so the
+            // failure is observable when it happens; the fallback keeps
+            // the UI behavior safe but masks the root cause otherwise.
+            // Blocking `canonicalize` is acceptable here because the
+            // manifest holds < 10 entries in practice and the other
+            // encryption entry points (`lock_folder`,
+            // `reload_manifest_and_lock_all`) already canonicalize in
+            // this same pattern.
+            let abs = root.join(&m.path);
+            let locked = match std::fs::canonicalize(&abs) {
                 Ok(canon) => state
                     .locked_paths
                     .is_locked(&CanonicalPath::assume_canonical(canon)),
-                Err(_) => true,
+                Err(e) => {
+                    log::warn!(
+                        "list_encrypted_folders: canonicalize {} failed: {e} — reporting locked",
+                        abs.display()
+                    );
+                    true
+                }
             };
             EncryptedFolderView {
                 path: m.path.clone(),

@@ -157,7 +157,9 @@ async function refresh(): Promise<void> {
 
 /** Chain a refresh onto the in-flight one so concurrent events serialize. */
 function scheduleRefresh(): Promise<void> {
-  refreshChain = refreshChain.then(refresh, refresh);
+  // `refresh` catches its own errors internally — the chain never rejects,
+  // so no second handler is needed.
+  refreshChain = refreshChain.then(refresh);
   return refreshChain;
 }
 
@@ -178,8 +180,13 @@ export async function initEncryptedFoldersStore(): Promise<void> {
   }
   // Reset the lock-diff state on every init so a vault switch does not
   // leak the previous vault's locked-paths snapshot into the new vault.
+  // Also reset `refreshChain` — any in-flight refresh tail from the old
+  // vault would otherwise drain AFTER `seeded` was cleared and seed
+  // `previousLockedRelPaths` with stale old-vault paths, causing
+  // spurious or missed close events on the new vault's first real diff.
   previousLockedRelPaths = new Set();
   seeded = false;
+  refreshChain = Promise.resolve();
   await scheduleRefresh();
   try {
     unlisten = await listenEncryptedFoldersChanged(() => {

@@ -349,8 +349,13 @@ export const tabLifecycleStore = {
       }
 
       // Collapse the split when a pane becomes empty, mirroring closeTab.
+      // When every tab dies, reset activePane to "left" to match closeAll
+      // and the generic closeTab's zero-tab fallback — otherwise a stale
+      // "right" activePane pointer would outlive the pane itself.
       let newSplitState: SplitState;
-      if (newLeft.length === 0 && newRight.length > 0) {
+      if (newLeft.length === 0 && newRight.length === 0) {
+        newSplitState = { left: [], right: [], activePane: "left" };
+      } else if (newLeft.length === 0 && newRight.length > 0) {
         newSplitState = { left: newRight, right: [], activePane: "left" };
       } else if (newRight.length === 0 && newLeft.length > 0) {
         newSplitState = {
