@@ -743,6 +743,7 @@
             {onSelect}
             {onOpenFile}
             onToggleExpand={(r) => onToggleExpand(r)}
+            onEnsureExpanded={(r) => setExpanded(r.relPath, r.path, true)}
             onRefreshFolder={refreshFolder}
             onPathChanged={handlePathChanged}
             {onRenameStateChange}

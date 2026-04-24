@@ -54,6 +54,13 @@
     onSelect: (path: string) => void;
     onOpenFile: (path: string) => void;
     onToggleExpand: (row: FlatRow) => void | Promise<void>;
+    /**
+     * Guaranteed-expand (idempotent). Use when the caller needs the
+     * folder open regardless of its current expanded state — e.g. after
+     * unlock, or after creating a child, where a plain toggle would
+     * collapse an already-expanded folder.
+     */
+    onEnsureExpanded: (row: FlatRow) => void | Promise<void>;
     /** Tell the Sidebar the child list for this folder needs re-fetching. */
     onRefreshFolder: (folderPath: string) => void | Promise<void>;
     onPathChanged: (oldPath: string, newPath: string) => void;
@@ -67,6 +74,7 @@
     onSelect,
     onOpenFile,
     onToggleExpand,
+    onEnsureExpanded,
     onRefreshFolder,
     onPathChanged,
     onRenameStateChange,
@@ -132,18 +140,13 @@
     if (row.isDir) {
       // #345: clicking a locked folder opens the password modal
       // instead of toggling expansion. On successful unlock we
-      // schedule the expand via onUnlocked — the tree refresh that
-      // fires from `encrypted_folders_changed` rebuilds this row
-      // with `encryption: "unlocked"`, and the expand we trigger
-      // here then descends into the now-visible children without
-      // requiring a second click.
+      // ensure-expand — a plain toggle would *collapse* the folder
+      // if it happened to be in `treeState.expanded` from before it
+      // was locked (locking doesn't prune the expanded set), forcing
+      // a second click to re-open it.
       if (isLocked) {
         openUnlockModal(row.path, row.name, async () => {
-          // The store swap + tree refresh run asynchronously after
-          // the unlock event; yield the microtask queue so the
-          // refreshed row is the one we toggle.
-          await Promise.resolve();
-          await onToggleExpand(row);
+          await onEnsureExpanded(row);
         });
         return;
       }
