@@ -22,11 +22,11 @@ import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { get } from "svelte/store";
 import { mount, unmount } from "svelte";
 
 import { resolveAttachment } from "./embeds";
+import { resolveAttachmentSrc, releaseAttachmentSrc } from "./attachmentSource";
 import { resolveTarget } from "./wikiLink";
 import {
   findTemplateExprRanges,
@@ -234,13 +234,44 @@ class ImageEmbedWidget extends WidgetType {
   toDOM(): HTMLElement {
     const img = document.createElement("img");
     img.className = "cm-embed-img";
-    const abs = absFromRel(this.relPath);
-    img.src = abs ? convertFileSrc(abs) : "";
     img.alt = this.relPath;
     if (this.sizePx !== null) {
       img.style.width = `${this.sizePx}px`;
     }
+    const abs = absFromRel(this.relPath);
+    if (!abs) {
+      img.src = "";
+      return img;
+    }
+    // #357: encrypted-folder attachments resolve asynchronously through
+    // `read_attachment_bytes` → blob: URL; plain-vault paths resolve
+    // synchronously to an asset:// URL on the same call.
+    const result = resolveAttachmentSrc(abs);
+    if (typeof result === "string") {
+      img.src = result;
+      return img;
+    }
+    img.src = "";
+    void result.then((resolved) => {
+      if (resolved) {
+        img.src = resolved;
+        // Attach a revocation hook so the blob URL is released when the
+        // widget element detaches (CM6 calls `destroy` indirectly via
+        // DOM removal). Without this, every decoration refresh would
+        // leak a decrypted copy into the browser's blob store.
+        img.addEventListener("vc-embed-detach", () => {
+          releaseAttachmentSrc(resolved);
+        }, { once: true });
+      }
+    });
     return img;
+  }
+
+  destroy(dom: HTMLElement): void {
+    // CM6 invokes `destroy(dom)` when the decoration is replaced. Fire
+    // the detach event so any pending blob URL for an encrypted-folder
+    // image is revoked.
+    dom.dispatchEvent(new Event("vc-embed-detach"));
   }
 
   ignoreEvent(): boolean {

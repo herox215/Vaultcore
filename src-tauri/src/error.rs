@@ -61,6 +61,16 @@ pub enum VaultError {
     /// surface "this file looks corrupted" vs "your password was wrong".
     #[error("Encryption error: {msg}")]
     CryptoError { msg: String },
+
+    /// #357: file size exceeds the inline-encryption cap for auto-encrypt
+    /// on drop into an encrypted folder. Surfaced so the frontend toast
+    /// can tell the user to move the file out or encrypt manually.
+    /// Streaming encryption (VCE2 follow-up) will raise or remove the cap.
+    #[error(
+        "File too large to auto-encrypt ({size} bytes, cap {cap}): {path}. \
+         Move it outside the encrypted folder or use manual encryption."
+    )]
+    PayloadTooLarge { path: String, size: u64, cap: u64 },
 }
 
 impl VaultError {
@@ -79,6 +89,7 @@ impl VaultError {
             Self::PathLocked { .. } => "PathLocked",
             Self::WrongPassword => "WrongPassword",
             Self::CryptoError { .. } => "CryptoError",
+            Self::PayloadTooLarge { .. } => "PayloadTooLarge",
         }
     }
 
@@ -89,7 +100,8 @@ impl VaultError {
             | Self::VaultUnavailable { path }
             | Self::MergeConflict { path }
             | Self::InvalidEncoding { path }
-            | Self::PathLocked { path } => Some(path.clone()),
+            | Self::PathLocked { path }
+            | Self::PayloadTooLarge { path, .. } => Some(path.clone()),
             // `extra_data` is the IPC `data` field, reserved for a path
             // so frontend callers can `navigate(err.data)`. CryptoError
             // carries a human message, not a path — surfacing it here

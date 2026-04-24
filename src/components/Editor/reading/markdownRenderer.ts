@@ -21,6 +21,7 @@ import { get } from "svelte/store";
 
 import { resolveTarget } from "../wikiLink";
 import { resolveAttachment } from "../embeds";
+import { isInsideEncryptedFolder } from "../attachmentSource";
 import { vaultStore } from "../../../store/vaultStore";
 import { splitSegments } from "../../../lib/templateProgram";
 import { evaluate, renderValue } from "../../../lib/templateExpression";
@@ -139,8 +140,18 @@ md.renderer.rules["wiki_embed"] = (tokens, idx) => {
   const vault = get(vaultStore).currentPath;
   if (!vault) return `<span class="vc-reading-embed vc-reading-embed--unresolved">${escapedLabel}</span>`;
   const absPath = `${vault.replace(/\\/g, "/").replace(/\/$/, "")}/${attachmentRel}`;
-  const src = convertFileSrc(absPath);
   const widthAttr = sizing !== null && /^\d+$/.test(sizing) ? ` width="${sizing}"` : "";
+  // #357: paths inside an encrypted folder cannot use the asset://
+  // protocol — the raw bytes on disk are ciphertext. Emit a marker
+  // attribute so the ReadingView's post-render hydration pass can
+  // resolve them asynchronously through `read_attachment_bytes` and
+  // assign a `blob:` URL. Plain-vault paths keep the existing
+  // synchronous asset:// pipeline.
+  if (isInsideEncryptedFolder(absPath)) {
+    const escAbs = md.utils.escapeHtml(absPath);
+    return `<img class="vc-reading-embed-img" data-vc-encrypted-abs="${escAbs}" alt="${escapedLabel}"${widthAttr}>`;
+  }
+  const src = convertFileSrc(absPath);
   return `<img class="vc-reading-embed-img" src="${md.utils.escapeHtml(src)}" alt="${escapedLabel}"${widthAttr}>`;
 };
 

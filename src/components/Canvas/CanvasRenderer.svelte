@@ -13,6 +13,8 @@
   //   here because they are pure functions of doc + draft.
 
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { isInsideEncryptedFolder, resolveAttachmentSrc, releaseAttachmentSrc } from "../Editor/attachmentSource";
+  import { onDestroy } from "svelte";
   import type {
     CanvasDoc,
     CanvasEdge,
@@ -36,6 +38,41 @@
   import type { DraftEdge } from "../../lib/canvas/pointerMode";
   import { tokenizeCanvasText } from "../../lib/canvas/textTokens";
   import { resolveTarget } from "../Editor/wikiLink";
+
+  // #357: per-canvas cache of resolved blob: URLs for images inside
+  // encrypted folders. Async-resolved the first time a path is seen;
+  // the `cacheVersion` counter bumps on each new resolution and is
+  // passed INTO the function so Svelte's reactive scope cannot
+  // constant-fold the dependency away. Plain-vault paths skip this
+  // path and use `convertFileSrc` directly.
+  const encryptedUrlCache = new Map<string, string>();
+  let cacheVersion = $state(0);
+  // The `_tick` parameter is intentionally unused inside the body —
+  // its only purpose is to make `cacheVersion` a real argument at the
+  // call site, so the template's reactive scope re-derives the src
+  // every time the counter changes. Don't remove it.
+  function canvasImageSrc(abs: string, _tick: number): string {
+    if (!isInsideEncryptedFolder(abs)) return convertFileSrc(abs);
+    const cached = encryptedUrlCache.get(abs);
+    if (cached) return cached;
+    const result = resolveAttachmentSrc(abs);
+    if (typeof result === "string") {
+      encryptedUrlCache.set(abs, result);
+      return result;
+    }
+    encryptedUrlCache.set(abs, "");
+    void result.then((resolved) => {
+      if (resolved) {
+        encryptedUrlCache.set(abs, resolved);
+        cacheVersion++;
+      }
+    });
+    return "";
+  }
+  onDestroy(() => {
+    for (const url of encryptedUrlCache.values()) releaseAttachmentSrc(url);
+    encryptedUrlCache.clear();
+  });
 
   // Tiny use:-action to focus + select an input on mount (the inline
   // edits for link URL / group label rely on this rather than the
@@ -328,7 +365,7 @@
                   {#if imgResolved && vaultPath}
                     <img
                       class="vc-canvas-inline-image"
-                      src={convertFileSrc(resolveVaultAbs(vaultPath, imgResolved))}
+                      src={canvasImageSrc(resolveVaultAbs(vaultPath, imgResolved), cacheVersion)}
                       alt={seg.target}
                       draggable="false"
                     />
@@ -383,7 +420,7 @@
         {#if isImageFile(fileNode.file) && abs}
           <img
             class="vc-canvas-node-image"
-            src={convertFileSrc(abs)}
+            src={canvasImageSrc(abs, cacheVersion)}
             alt={fileNode.file}
             draggable="false"
             data-canvas-image="true"

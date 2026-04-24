@@ -1,6 +1,12 @@
 <script lang="ts">
   import { progressStore } from "../../store/progressStore";
 
+  // #357 \u2014 label is a prop so the vault-open flow can render
+  // "Scanning and securing vault\u2026" while the indexer walk and the
+  // reconciliation sweep run together. Default preserves the prior
+  // single-call-site string so other callers do not need to opt in.
+  let { label = "Scanning vault\u2026" }: { label?: string } = $props();
+
   function formatCount(n: number): string {
     return n.toLocaleString("en-US");
   }
@@ -16,7 +22,7 @@
 {#if $progressStore.active}
   <div class="vc-progress-overlay" data-testid="progress-overlay">
     <div class="vc-progress-card">
-      <p class="vc-progress-label">Scanning vault\u2026</p>
+      <p class="vc-progress-label">{label}</p>
       <p class="vc-progress-counter" data-testid="progress-counter">
         {formatCount($progressStore.current)} / {formatCount($progressStore.total)}
       </p>

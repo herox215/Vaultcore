@@ -42,8 +42,7 @@ vi.mock("../../../ipc/events", () => ({
 }));
 
 const openUnlockModal = vi.fn<
-  [string, string, (() => void | Promise<void>)?],
-  void
+  (path: string, label: string, cb?: () => void | Promise<void>) => void
 >();
 
 vi.mock("../../../store/encryptionModalStore", () => ({
@@ -144,7 +143,7 @@ describe("Sidebar unlock keeps folder expanded (#355)", () => {
     for (let i = 0; i < 5; i += 1) { await Promise.resolve(); await tick(); }
 
     expect(openUnlockModal).toHaveBeenCalledTimes(1);
-    const callback = openUnlockModal.mock.calls[0][2];
+    const callback = openUnlockModal.mock.calls[0]![2];
     expect(callback).toBeTypeOf("function");
 
     // Simulate successful unlock on the backend: the parent listing now

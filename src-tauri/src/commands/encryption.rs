@@ -36,6 +36,34 @@ const ENCRYPTED_FOLDERS_CHANGED_EVENT: &str = "vault://encrypted_folders_changed
 const PROGRESS_THROTTLE_MS: u128 = 50;
 const PROGRESS_EMIT_THRESHOLD: usize = 16;
 
+/// #357 — live progress stream for auto-encrypt-on-drop. Distinct from
+/// `vault://encrypt_progress` (which drives the batch-encrypt modal's
+/// fill bar); this event drives the bottom-center status pill and
+/// carries a per-file error slot for actionable toasts.
+pub const ENCRYPT_DROP_PROGRESS_EVENT: &str = "vault://encrypt_drop_progress";
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptDropProgress {
+    pub in_flight: usize,
+    pub total: usize,
+    pub last_completed: Option<String>,
+    /// #357 — `true` when a drop landed in a currently-locked folder
+    /// and was queued (not sealed). The frontend surfaces a distinct
+    /// toast for this case: "File queued — it remains unencrypted on
+    /// disk until you unlock the folder." Makes the threat-model gap
+    /// explicit to the user.
+    pub queued: bool,
+    pub error: Option<EncryptDropError>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptDropError {
+    pub path: String,
+    pub message: String,
+}
+
 /// Public view of an encrypted folder — salt is stripped before serde
 /// so the frontend never handles KDF material. Used by
 /// `list_encrypted_folders` and the `vault://encrypted_folders_changed`
@@ -259,6 +287,12 @@ pub async fn encrypt_folder(
     // Evict any in-memory key for this root (there should be none).
     let _ = state.keyring.remove(&folder_canon);
 
+    // #357: the manifest just changed — refresh the cache so the
+    // watcher hot path sees the new encrypted root on the next event.
+    if let Err(e) = state.manifest_cache.refresh_from_disk(&vault_root) {
+        log::warn!("manifest cache refresh after encrypt_folder failed: {e:?}");
+    }
+
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -294,14 +328,72 @@ pub async fn unlock_folder(
     // `VaultError::WrongPassword` here (remapped inside verify_sentinel).
     verify_sentinel(&folder_canon, &key)?;
 
-    // Stash the key FIRST, then release the registry lock. Order
-    // matters: a reader that races between the two operations must
-    // never see "unlocked=true, no key in keyring" — that window would
-    // produce spurious decrypt failures on the happy path. With this
-    // ordering every reader that observes `is_locked=false` is
-    // guaranteed to find a key in the keyring too.
+    // #357: ordering below closes two plaintext-leak windows at once.
+    //
+    // 1. Keyring first, registry unlock last — same invariant as before:
+    //    a reader that observes `is_locked == false` must also find a
+    //    key in the keyring.
+    //
+    // 2. Drain the pending-encryption queue BEFORE flipping the
+    //    registry. If we unlocked the registry first, an IPC `read_file`
+    //    arriving between the unlock and the drain would read plaintext
+    //    from a file that the user thinks is encrypted at rest. By
+    //    sealing every queued file WHILE the registry still reports
+    //    locked, readers are gated until every on-disk straggler has a
+    //    VCE1 header. `seal_pending_file` bypasses the `is_locked`
+    //    check deliberately because the key is already in the keyring.
     state.keyring.insert(folder_canon.clone(), key)?;
+
+    // Drain while the root is still registry-locked.
+    let pending = state.pending_queue.drain_root(&folder_canon)?;
+    if !pending.is_empty() {
+        let write_ignore = std::sync::Arc::clone(&state.write_ignore);
+        let deps = crate::encryption::EncryptDeps {
+            vault_root: &vault_root,
+            locked_paths: &state.locked_paths,
+            keyring: &state.keyring,
+            pending_queue: &state.pending_queue,
+            write_ignore: &write_ignore,
+            manifest_cache: &state.manifest_cache,
+        };
+        for path in pending {
+            match crate::encryption::seal_pending_file(&deps, &folder_canon, &path) {
+                Ok(_) => {}
+                Err(e) => {
+                    log::warn!(
+                        "pending encrypt-on-unlock failed for {}: {e:?} — \
+                         file stays plaintext until next save",
+                        path.display()
+                    );
+                    // Surface the per-file error so the frontend can
+                    // toast it. Unlock itself still succeeds — we
+                    // refuse to punish a correct password because one
+                    // queued file has bad permissions.
+                    let _ = app.emit(
+                        ENCRYPT_DROP_PROGRESS_EVENT,
+                        EncryptDropProgress {
+                            in_flight: 0,
+                            total: 0,
+                            last_completed: None,
+                            queued: false,
+                            error: Some(EncryptDropError {
+                                path: path.display().to_string(),
+                                message: e.to_string(),
+                            }),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // Now flip the registry.
     state.locked_paths.unlock_root(&folder_canon)?;
+
+    // Manifest cache refresh intentionally skipped — `unlock_folder`
+    // does not mutate the manifest JSON on disk (unlocked state is
+    // runtime-only and never persisted). Same reasoning as
+    // `lock_folder` / `lock_all_folders`.
 
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
@@ -315,13 +407,17 @@ pub async fn lock_folder(
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<(), VaultError> {
-    let (folder_canon, _) = resolve_folder(&state, &path)?;
+    let (folder_canon, _vault_root) = resolve_folder(&state, &path)?;
     // Register as locked BEFORE dropping the key so any in-flight
     // read-path race is resolved by the fail-closed gate — the reader
     // sees "locked" and returns PathLocked rather than using a stale
     // key snapshot.
     state.locked_paths.lock_root(folder_canon.clone())?;
     state.keyring.remove(&folder_canon)?;
+    // Manifest cache is NOT refreshed here: `lock_folder` only mutates
+    // in-memory registry + keyring state, never the manifest JSON on
+    // disk. The cached list of encrypted roots is unchanged; locked vs
+    // unlocked is answered by `LockedPathRegistry`, not by the cache.
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -345,6 +441,8 @@ pub async fn lock_all_folders(
     // Defensive wipe in case the keyring still carried entries not
     // backed by the manifest (shouldn't happen, but costs nothing).
     state.keyring.clear()?;
+    // Cache refresh intentionally skipped — see `lock_folder` for the
+    // reasoning. `lock_all_folders` never mutates the manifest.
     let _ = app.emit(ENCRYPTED_FOLDERS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -410,6 +508,11 @@ pub fn reload_manifest_and_lock_all(state: &VaultState, vault_root: &Path) -> Re
     // must not bleed through.
     state.locked_paths.clear()?;
     state.keyring.clear()?;
+    // #357: also clear the pending-encryption queue and refresh the
+    // manifest cache. Vault switch: queued paths for vault A must never
+    // be drained into vault B's keyring.
+    state.pending_queue.clear()?;
+    state.manifest_cache.clear()?;
     let metas = read_manifest(vault_root)?;
     for m in &metas {
         let abs = vault_root.join(&m.path);
@@ -423,6 +526,11 @@ pub fn reload_manifest_and_lock_all(state: &VaultState, vault_root: &Path) -> Re
                 abs.display()
             ),
         }
+    }
+    // #357: warm the manifest cache from the (now-current) on-disk
+    // state. Every watcher hot-path lookup reads from this cache.
+    if let Err(e) = state.manifest_cache.refresh_from_disk(vault_root) {
+        log::warn!("manifest cache refresh failed after open_vault: {e:?}");
     }
     Ok(())
 }
