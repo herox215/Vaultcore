@@ -483,21 +483,16 @@ pub fn export_decrypted_file_impl(
     source: String,
     dest: String,
 ) -> Result<(), VaultError> {
-    // 1. Source inside vault + NOT inside a locked encrypted root.
-    //    `ensure_inside_vault` canonicalizes, enforces vault scope, AND
-    //    runs `ensure_unlocked` — so a source inside a locked root
-    //    already fails here with `PathLocked` before we do any further
-    //    work. Reusing the helper means every T-02 guard that covers
-    //    `read_file` / `write_file` also covers this command.
-    let source_canonical = crate::commands::files::ensure_inside_vault(
-        state,
-        &PathBuf::from(&source),
-    )?;
-
-    // 2. Snapshot `vault_root` ONCE. A concurrent `open_vault` that
-    //    swaps the vault between the scope check and the manifest
-    //    lookup would otherwise make us consult the wrong vault's
-    //    manifest. Single-lock semantics close the TOCTOU window.
+    // 1. Snapshot `vault_root` ONCE under a single `current_vault`
+    //    lock acquisition. Every subsequent check — scope, enclosing
+    //    root, dest-in-encrypted, rel-path-for-logging — uses THIS
+    //    snapshot, so a concurrent `open_vault` that swaps the vault
+    //    mid-export produces a single coherent error (the source no
+    //    longer appears under the snapshotted vault, and the locked
+    //    path / encrypted-root checks all operate on consistent
+    //    state). Splitting the snapshot across `ensure_inside_vault`
+    //    + a second `current_vault.lock()` would reintroduce the
+    //    TOCTOU window Aristotle flagged on iter-1.
     let vault_root = {
         let guard = state
             .current_vault
@@ -510,6 +505,36 @@ pub fn export_decrypted_file_impl(
                 path: source.clone(),
             })?
     };
+
+    // 2. Canonicalize source + enforce vault scope against the single
+    //    snapshot above. Inline rather than `ensure_inside_vault`
+    //    because that helper re-locks `current_vault` internally —
+    //    doing so here would be the race this function is designed
+    //    to avoid. The `ensure_unlocked` check is inlined for the
+    //    same reason; it needs the canonical source path but not the
+    //    vault lock.
+    let source_path = PathBuf::from(&source);
+    let source_canonical = std::fs::canonicalize(&source_path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: source.clone() },
+        std::io::ErrorKind::PermissionDenied => {
+            VaultError::PermissionDenied { path: source.clone() }
+        }
+        _ => VaultError::Io(e),
+    })?;
+    if !source_canonical.starts_with(&vault_root) {
+        return Err(VaultError::PermissionDenied {
+            path: source_canonical.display().to_string(),
+        });
+    }
+    {
+        let canon =
+            crate::encryption::CanonicalPath::assume_canonical(source_canonical.clone());
+        if state.locked_paths.is_locked(&canon) {
+            return Err(VaultError::PathLocked {
+                path: source_canonical.display().to_string(),
+            });
+        }
+    }
 
     // 3. Source must be inside an encrypted root. This is distinct
     //    from "inside any vault folder" — a plain vault file has

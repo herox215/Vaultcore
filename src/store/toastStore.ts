@@ -4,7 +4,7 @@
 
 import { writable } from "svelte/store";
 
-export type ToastVariant = "error" | "conflict" | "clean-merge" | "info";
+export type ToastVariant = "error" | "conflict" | "clean-merge" | "info" | "warning";
 
 export interface Toast {
   id: number;
