@@ -64,6 +64,7 @@ function makeProps(row: FlatRow) {
     onSelect: vi.fn(),
     onOpenFile: vi.fn(),
     onToggleExpand: vi.fn(),
+    onEnsureExpanded: vi.fn(),
     onRefreshFolder: vi.fn(),
     onPathChanged: vi.fn(),
   };
