@@ -14,17 +14,10 @@
   import { DEFAULT_DAILY_DATE_FORMAT } from "../../lib/dailyNotes";
   import { vaultStore } from "../../store/vaultStore";
   import { snippetsStore } from "../../store/snippetsStore";
-  import {
-    reindexVault,
-    cancelReindex,
-    setSemanticEnabled,
-    refreshAllEmbeddings,
-    lockAllFolders,
-  } from "../../ipc/commands";
+  import { lockAllFolders } from "../../ipc/commands";
   import { encryptedFolders } from "../../store/encryptedFoldersStore";
   import { toastStore } from "../../store/toastStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
-  import { reindexStore, isActive as isReindexActive } from "../../store/reindexStore";
   import { formatShortcut } from "../../lib/shortcuts";
   import { commandRegistry, hotkeysEqual, type Command, type HotKey } from "../../lib/commands/registry";
   import { DEFAULT_COMMAND_SPECS } from "../../lib/commands/defaultCommands";
@@ -76,8 +69,6 @@
   let snippetsEnabled = $state<string[]>([]);
   let snippetsLoaded = $state<boolean>(false);
   let refreshingSnippets = $state<boolean>(false);
-  let semanticEnabled = $state<boolean>(false);
-  let reindexActive = $state<boolean>(false);
   let autoLockMinutes = $state<number>(15);
 
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
@@ -88,11 +79,7 @@
     dailyFolder = s.dailyNotesFolder;
     dailyFormat = s.dailyNotesDateFormat;
     dailyTemplate = s.dailyNotesTemplate;
-    semanticEnabled = s.enableSemanticSearch;
     autoLockMinutes = s.autoLockMinutes;
-  });
-  const unsubReindex = reindexStore.subscribe((r) => {
-    reindexActive = isReindexActive(r);
   });
   const unsubVault = vaultStore.subscribe((s) => { currentVaultPath = s.currentPath; });
   const unsubCommands = commandRegistry.subscribe((list) => {
@@ -248,58 +235,7 @@
     }
   }
 
-  /** #201 / #244: master toggle for semantic search.
-   *  - Enabling: persist the flag + lazy-init the embedding stack on the
-   *    backend, then kick off the reindex against the open vault.
-   *  - Disabling: persist the flag + tear down the backend embedding
-   *    stack so the ~200-400 MB ONNX session is released; cancel any
-   *    running reindex as the backend already does that internally
-   *    (`teardown_for_disable` cancels the reindex handle) so the
-   *    explicit `cancelReindex` is redundant but harmless.
-   *  The statusbar listens for the `embed://reindex_progress` event and
-   *  surfaces progress. */
-  async function onToggleSemantic(e: Event): Promise<void> {
-    const enabled = (e.target as HTMLInputElement).checked;
-    settingsStore.setEnableSemanticSearch(enabled);
-    try {
-      await setSemanticEnabled(enabled);
-      if (enabled) {
-        if (currentVaultPath) await reindexVault();
-      } else {
-        await cancelReindex();
-      }
-    } catch (err) {
-      console.warn("semantic toggle ipc failed", err);
-    }
-  }
-
-  // #286 — user-visible recovery path for the embedding-drift bug. A
-  // two-step confirmation is required because this deletes every on-disk
-  // vector and forces a full re-embed, which on a large vault is minutes
-  // of CPU. UI-06 bans inline `confirm()`; we render the in-modal dialog
-  // used elsewhere (TreeNode delete / rename-with-links).
-  let refreshBusy = $state<boolean>(false);
-  let refreshConfirmOpen = $state<boolean>(false);
-  function askRefreshEmbeddings(): void {
-    if (refreshBusy) return;
-    refreshConfirmOpen = true;
-  }
-  function cancelRefreshEmbeddings(): void {
-    refreshConfirmOpen = false;
-  }
-  async function confirmRefreshEmbeddings(): Promise<void> {
-    refreshConfirmOpen = false;
-    refreshBusy = true;
-    try {
-      await refreshAllEmbeddings();
-    } catch (err) {
-      console.warn("refresh embeddings ipc failed", err);
-    } finally {
-      refreshBusy = false;
-    }
-  }
-
-  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); unsubReindex(); });
+  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -481,60 +417,6 @@
         <p class="vc-settings-hint">
           Unterstützte Tokens: <code>YYYY</code>, <code>MM</code>, <code>DD</code>.
           Fehlender Ordner wird beim ersten Öffnen erstellt.
-        </p>
-      </section>
-
-      <!-- Section — Semantische Suche (#201) -->
-      <section class="vc-settings-section" data-testid="settings-semantic">
-        <h3 class="vc-settings-section-title">SEMANTISCHE SUCHE</h3>
-        <div class="vc-settings-row">
-          <label for="semantic-toggle">Semantische Suche aktivieren</label>
-          <label class="vc-snippets-toggle">
-            <input
-              id="semantic-toggle"
-              data-testid="settings-semantic-toggle"
-              type="checkbox"
-              checked={semanticEnabled}
-              onchange={onToggleSemantic}
-              disabled={!currentVaultPath}
-              aria-label="Semantische Suche aktivieren"
-            />
-            <span class="vc-snippets-toggle-track" aria-hidden="true">
-              <span class="vc-snippets-toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-        <p class="vc-settings-hint">
-          Erster Index-Lauf kann bei großen Vaults einige Minuten dauern und
-          läuft im Hintergrund. Fortschritt wird in der Statusleiste angezeigt.
-          {#if reindexActive}
-            <strong> Indexierung läuft …</strong>
-          {/if}
-          {#if !currentVaultPath}
-            <br />Öffne zuerst einen Vault, um die semantische Suche zu aktivieren.
-          {/if}
-        </p>
-
-        <!-- #286 — escape hatch for the drift bug. Wipes the on-disk
-             embeddings directory and triggers a full reindex. -->
-        <div class="vc-settings-row">
-          <label for="refresh-embeddings">Alle Embeddings neu berechnen</label>
-          <button
-            id="refresh-embeddings"
-            data-testid="settings-refresh-embeddings"
-            type="button"
-            class="vc-settings-btn"
-            onclick={askRefreshEmbeddings}
-            disabled={!currentVaultPath || refreshBusy || reindexActive}
-            title="Löscht die gespeicherten Vektoren und rechnet jede Datei neu ein."
-          >
-            {#if refreshBusy}Läuft …{:else}Neu berechnen{/if}
-          </button>
-        </div>
-        <p class="vc-settings-hint">
-          Nützlich, wenn die Treffer unvollständig wirken (z. B. kürzlich
-          hinzugefügte Notizen tauchen nicht auf). Löscht
-          <code>.vaultcore/embeddings/</code> und embeddet jede Datei erneut.
         </p>
       </section>
 
@@ -722,46 +604,6 @@
     </div>
   {/if}
 
-  <!-- #286 — refresh-embeddings confirmation. Uses the vc-confirm-*
-       family established by TreeNode (delete / rename-with-links) so
-       the visual language is consistent. -->
-  {#if refreshConfirmOpen}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="vc-confirm-overlay vc-modal-scrim"
-      onclick={cancelRefreshEmbeddings}
-      role="presentation"
-    ></div>
-    <div
-      class="vc-confirm-dialog vc-modal-surface"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="refresh-embeddings-heading"
-      data-testid="settings-refresh-embeddings-dialog"
-    >
-      <h2 id="refresh-embeddings-heading" class="vc-confirm-heading">
-        Alle Embeddings neu berechnen?
-      </h2>
-      <p class="vc-confirm-body">
-        Der Ordner <code>.vaultcore/embeddings/</code> wird gelöscht und jede
-        Datei neu eingebettet. Bei großen Vaults kann das mehrere Minuten
-        dauern.
-      </p>
-      <div class="vc-confirm-actions">
-        <button
-          type="button"
-          class="vc-confirm-btn vc-confirm-btn--cancel"
-          onclick={cancelRefreshEmbeddings}
-        >Abbrechen</button>
-        <button
-          type="button"
-          class="vc-confirm-btn vc-confirm-btn--accent"
-          onclick={() => void confirmRefreshEmbeddings()}
-          data-testid="settings-refresh-embeddings-confirm"
-        >Neu berechnen</button>
-      </div>
-    </div>
-  {/if}
 {/if}
 
 <style>
@@ -887,9 +729,8 @@
     color: var(--color-accent);
   }
 
-  /* #286 — refresh-embeddings button. Mirrors the vault-switch button
-     so neighbouring rows line up visually; adds a disabled state for
-     the semantic-off / refresh-in-flight cases. */
+  /* Shared action button for settings rows. Mirrors the vault-switch
+     button so neighbouring rows line up visually. */
   .vc-settings-btn {
     flex-shrink: 0;
     height: 32px;

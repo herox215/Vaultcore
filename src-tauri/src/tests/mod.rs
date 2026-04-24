@@ -22,9 +22,4 @@ mod rename_link_resolution;
 mod home_canvas;
 mod docs_page;
 mod encryption_gating;
-#[cfg(feature = "embeddings")]
-mod embeddings;
-#[cfg(feature = "embeddings")]
-mod semantic_quality;
-#[cfg(feature = "embeddings")]
-mod embedding_release;
+mod legacy_semantic_cleanup;

@@ -9,7 +9,6 @@
   import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
-  import ReindexStatusbar from "../Statusbar/ReindexStatusbar.svelte";
   import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
   import EncryptFolderModal from "../common/EncryptFolderModal.svelte";
   import {
@@ -859,9 +858,6 @@
   onClose={() => { settingsOpen = false; }}
   {onSwitchVault}
 />
-
-<!-- #201: reindex progress overlay. Self-hides while idle. -->
-<ReindexStatusbar />
 
 <!-- #345: global mount for the encryption modals. Encrypt modal stays
      open during the batch so the user sees progress; it closes on

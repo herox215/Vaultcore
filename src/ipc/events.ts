@@ -82,35 +82,6 @@ export function listenBulkChangeEnd(handler: () => void): Promise<UnlistenFn> {
   return listen(BULK_CHANGE_END_EVENT, () => handler());
 }
 
-// ── Semantic search (#201) ──────────────────────────────────────────────────
-
-export type ReindexPhase = "scan" | "index" | "done" | "cancelled";
-
-export interface ReindexProgressPayload {
-  done: number;
-  total: number;
-  skipped: number;
-  embedded: number;
-  phase: ReindexPhase;
-  eta_seconds: number | null;
-}
-
-export const REINDEX_PROGRESS_EVENT = "embed://reindex_progress";
-
-/**
- * #201: Subscribe to `embed://reindex_progress` events emitted by the
- * background reindex worker. One `scan` event fires on start (total=0),
- * one `index` event fires once the walk finishes (total=N, done=0), then
- * one per processed file, then a terminal `done` or `cancelled` event.
- */
-export function listenReindexProgress(
-  handler: (payload: ReindexProgressPayload) => void,
-): Promise<UnlistenFn> {
-  return listen<ReindexProgressPayload>(REINDEX_PROGRESS_EVENT, (event) =>
-    handler(event.payload),
-  );
-}
-
 // ── #345 — encrypted folders ────────────────────────────────────────────────
 
 export interface EncryptProgressPayload {

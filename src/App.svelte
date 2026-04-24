@@ -12,10 +12,8 @@
     openVault,
     pickVaultFolder,
     repairVaultIndex,
-    reindexVault,
   } from "./ipc/commands";
-  import { listenIndexProgress, listenReindexProgress } from "./ipc/events";
-  import { reindexStore } from "./store/reindexStore";
+  import { listenIndexProgress } from "./ipc/events";
   import { isVaultError, vaultErrorCopy } from "./types/errors";
   import type { RecentVault } from "./types/vault";
   import "./types/e2e-hook";
@@ -26,7 +24,6 @@
 
   let recent: RecentVault[] = $state([]);
   let unlistenProgress: (() => void) | null = null;
-  let unlistenReindex: (() => void) | null = null;
 
   // Custom CSS snippets (#64): keep one HTMLStyleElement per enabled snippet
   // mounted at the top of document.head, tagged with data-snippet="<filename>".
@@ -179,12 +176,6 @@
       progressStore.update(payload.current, payload.total, payload.current_file);
     });
 
-    // #201: pipe semantic-reindex progress events into the reindexStore so
-    // the statusbar overlay and settings modal can reflect live state.
-    unlistenReindex = await listenReindexProgress((payload) => {
-      reindexStore.apply(payload);
-    });
-
     // E2E test hook: expose loadVault + switchVault on window so WebDriver
     // specs can bypass the native file picker. Gated behind VITE_E2E=1 so
     // the hook is completely absent from normal release builds (tree-shaken
@@ -256,26 +247,6 @@
         if (!view) return -1;
         return view.state.selection.main.head;
       };
-      // #204: subscribe once to the reindex-done signal so E2E specs can
-      // wait for embeddings to be queryable before running a semantic-only
-      // search. We keep a single listener for the lifetime of the window
-      // and broadcast the terminal phase to any pending waiter.
-      const { listenReindexProgress: listenReindex } = await import("./ipc/events");
-      const waiters: Array<(result: "done" | "cancelled") => void> = [];
-      await listenReindex((payload) => {
-        if (payload.phase === "done" || payload.phase === "cancelled") {
-          const pending = waiters.splice(0);
-          for (const resolve of pending) resolve(payload.phase);
-        }
-      });
-      const reindexAndWaitDone = (): Promise<void> =>
-        new Promise((resolve, reject) => {
-          waiters.push((phase) => {
-            if (phase === "done") resolve();
-            else reject(new Error(`reindex ended with phase=${phase}`));
-          });
-          reindexVault().catch(reject);
-        });
       window.__e2e__ = {
         loadVault,
         switchVault,
@@ -287,7 +258,6 @@
         typeInActiveEditor,
         getActiveDocText,
         getActiveSelectionHead,
-        reindexAndWaitDone,
       };
     }
 
@@ -309,7 +279,6 @@
 
   onDestroy(() => {
     unlistenProgress?.();
-    unlistenReindex?.();
     unsubSnippets();
   });
 </script>

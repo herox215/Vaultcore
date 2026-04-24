@@ -31,13 +31,10 @@ Obsidian-style wikilinks, graph, and backlinks — on a Rust + Svelte + native w
 
 ### Search
 - **Full-text search** — Tantivy-backed BM25 with AND / OR / NOT / phrase queries, lenient enough for live typing
-- **Semantic search** — multilingual-e5-small (INT8 ONNX) running locally, resumable reindex, persisted HNSW with mmap reload
-- **Hybrid search** — Reciprocal Rank Fusion over BM25 + vector hits, with a match-% badge so you know *why* something ranked
-- **OmniSearch** (`Ctrl`/`Cmd`+`K`) — unified modal for filename, content, tag, and semantic queries, with recent-files memory
+- **OmniSearch** (`Ctrl`/`Cmd`+`K`) — unified modal for filename, content, and tag queries, with recent-files memory
 
 ### Graph
 - **Force-directed graph** over your wikilink topology (Sigma.js), with adjustable link distance, repulsion, and damping
-- **Embedding graph mode** — second view where edges come from semantic similarity instead of explicit links
 - **Cluster slider** — collapse similar notes into super-nodes so you can actually see the shape of a big vault
 - **Visibility-aware** — sim + render pause when the tab is hidden, so the graph doesn't eat your battery in the background
 
@@ -46,7 +43,7 @@ Obsidian-style wikilinks, graph, and backlinks — on a Rust + Svelte + native w
 - **Live file watcher** — create / rename / delete / modify events feed straight into the index and link graph, debounced, with a progress overlay for bulk changes (e.g. after a `git pull`)
 - **Backlinks & outgoing links** — both update live as you type
 - **Rename cascade** — rewrites every wikilink that pointed at the renamed file, with confirmation
-- **Canvas** — `.canvas` files with nodes, edges, and inline embedding into notes; per-vault `home.canvas` on the sidebar vault-name click
+- **Canvas** — `.canvas` files with nodes, edges, and inline note embeds; per-vault `home.canvas` on the sidebar vault-name click
 
 ### Rest of the kit
 - **Command palette** (`Ctrl`/`Cmd`+`P`) with fuzzy search and MRU tracking
@@ -78,7 +75,7 @@ pnpm tauri build
 ```
 Svelte 5 + TailwindCSS 4 + CodeMirror 6
               ↕ Tauri v2 ↕
-Rust · Tantivy · Tokio · Rayon · ONNX Runtime · HNSW
+Rust · Tantivy · Tokio · Rayon
 ```
 
 ## End-to-end tests

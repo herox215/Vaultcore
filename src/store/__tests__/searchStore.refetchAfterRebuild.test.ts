@@ -3,9 +3,10 @@
 // queried again and results reflect newly-indexed content without the
 // user having to retype the query.
 //
-// #204 switched the refetch path from searchFulltext (BM25-only) to
-// hybridSearch (RRF-fused). The store control flow is identical — only
-// the underlying IPC call and the result type (HybridHit) changed.
+// #353 reverted the refetch path from hybrid_search back to
+// search_fulltext (BM25 only) when the semantic-search feature was
+// removed. The store control flow is identical — only the underlying
+// IPC call and result type changed.
 //
 // We mock the IPC layer so the store exercises its control flow without
 // a Tauri runtime. Each assertion locks in one AC from the ticket.
@@ -13,31 +14,31 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 
-const hybridSearchMock = vi.fn();
+const searchFulltextMock = vi.fn();
 
 vi.mock("../../ipc/commands", () => ({
-  hybridSearch: (...args: unknown[]) => hybridSearchMock(...args),
+  searchFulltext: (...args: unknown[]) => searchFulltextMock(...args),
 }));
 
 import { searchStore } from "../searchStore";
 
-describe("searchStore.refetchIfQueryNonEmpty (#148, rewired in #204)", () => {
+describe("searchStore.refetchIfQueryNonEmpty (#148)", () => {
   beforeEach(() => {
     searchStore.reset();
-    hybridSearchMock.mockReset();
+    searchFulltextMock.mockReset();
   });
 
   it("re-runs the current query and replaces results", async () => {
     searchStore.setQuery("#yoda");
-    hybridSearchMock.mockResolvedValueOnce([
+    searchFulltextMock.mockResolvedValueOnce([
       { path: "a.md", title: "a", snippet: "", score: 1, matchCount: 0 },
       { path: "b.md", title: "b", snippet: "", score: 1, matchCount: 0 },
     ]);
 
     await searchStore.refetchIfQueryNonEmpty();
 
-    expect(hybridSearchMock).toHaveBeenCalledTimes(1);
-    expect(hybridSearchMock).toHaveBeenCalledWith("#yoda", 100);
+    expect(searchFulltextMock).toHaveBeenCalledTimes(1);
+    expect(searchFulltextMock).toHaveBeenCalledWith("#yoda", 100);
     const s = get(searchStore);
     expect(s.results).toHaveLength(2);
     expect(s.totalFiles).toBe(2);
@@ -47,18 +48,18 @@ describe("searchStore.refetchIfQueryNonEmpty (#148, rewired in #204)", () => {
   it("is a no-op when the query is empty (no fetch issued)", async () => {
     searchStore.setQuery("");
     await searchStore.refetchIfQueryNonEmpty();
-    expect(hybridSearchMock).not.toHaveBeenCalled();
+    expect(searchFulltextMock).not.toHaveBeenCalled();
   });
 
   it("is a no-op when the query is only whitespace", async () => {
     searchStore.setQuery("   ");
     await searchStore.refetchIfQueryNonEmpty();
-    expect(hybridSearchMock).not.toHaveBeenCalled();
+    expect(searchFulltextMock).not.toHaveBeenCalled();
   });
 
   it("marks the index stale and clears isSearching on IndexCorrupt", async () => {
     searchStore.setQuery("#yoda");
-    hybridSearchMock.mockRejectedValueOnce({ kind: "IndexCorrupt", message: "x" });
+    searchFulltextMock.mockRejectedValueOnce({ kind: "IndexCorrupt", message: "x" });
 
     await searchStore.refetchIfQueryNonEmpty();
 
@@ -69,7 +70,7 @@ describe("searchStore.refetchIfQueryNonEmpty (#148, rewired in #204)", () => {
 
   it("does not flip indexStale on unrelated errors, but clears isSearching", async () => {
     searchStore.setQuery("#yoda");
-    hybridSearchMock.mockRejectedValueOnce(new Error("network blip"));
+    searchFulltextMock.mockRejectedValueOnce(new Error("network blip"));
 
     await searchStore.refetchIfQueryNonEmpty();
 

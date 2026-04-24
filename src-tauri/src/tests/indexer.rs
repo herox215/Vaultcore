@@ -137,8 +137,8 @@ mod orphan_cleanup_tests {
         // The channel has capacity 1024, so we can't rely on backpressure.
         // Send a no-op Commit and wait for the writer's `OnCommitWithDelay`
         // (default ~100 ms) reader reload to publish. The 2 s ceiling is
-        // generous so the test tolerates CPU pressure from sibling
-        // real-ML embedding tests in the same suite.
+        // generous so the test tolerates CPU pressure from sibling tests
+        // running on a shared runtime.
         coord
             .tx
             .send(IndexCmd::Commit)
