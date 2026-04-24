@@ -83,10 +83,16 @@ impl ManifestCache {
     }
 
     /// Re-read the manifest and canonicalize every entry. Called by
-    /// `open_vault` (cold start), `encrypt_folder`, `unlock_folder`,
-    /// `lock_folder`, and `lock_all_folders` after their write. Orphaned
-    /// manifest entries (folder renamed outside the app) are dropped
-    /// from the cache — same best-effort semantics as
+    /// `open_vault` (cold start) and `encrypt_folder` — the only two
+    /// paths that mutate the manifest JSON on disk. `lock_folder`,
+    /// `unlock_folder`, and `lock_all_folders` intentionally do NOT
+    /// refresh: they mutate in-memory registry + keyring state only,
+    /// never the manifest. If a future command starts writing to the
+    /// manifest, call this method after its write — otherwise the
+    /// watcher hot path will see stale state.
+    ///
+    /// Orphaned manifest entries (folder renamed outside the app) are
+    /// dropped from the cache — same best-effort semantics as
     /// `reload_manifest_and_lock_all`.
     pub fn refresh_from_disk(&self, vault_root: &Path) -> Result<(), VaultError> {
         let metas = manifest::read_manifest(vault_root)?;
