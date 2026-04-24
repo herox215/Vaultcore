@@ -303,17 +303,22 @@
   }
 
   function parentOf(absPath: string): string | null {
-    const i = absPath.lastIndexOf("/");
-    if (i <= 0) return null;
-    return absPath.slice(0, i);
+    // Backend paths (`DirEntry.path` via `to_string_lossy` in `tree.rs`)
+    // carry native separators — backslashes on Windows, forward slashes
+    // elsewhere. Accept both so a top-level folder like `C:\Vault\secret`
+    // still resolves to its parent instead of silently returning `null`
+    // and skipping the post-unlock parent refresh on Windows.
+    const lastSep = Math.max(absPath.lastIndexOf("/"), absPath.lastIndexOf("\\"));
+    if (lastSep <= 0) return null;
+    return absPath.slice(0, lastSep);
   }
 
   async function handleNewFileHere() {
     closeContextMenu();
     try {
       const newPath = await createFile(row.path, "");
-      await onEnsureExpanded(row);
       await onRefreshFolder(row.path);
+      await onEnsureExpanded(row);
       tabStore.openTab(newPath);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -326,8 +331,8 @@
     try {
       const newPath = await createFile(row.path, "Untitled.canvas");
       await writeFile(newPath, serializeCanvas(emptyCanvas()));
-      await onEnsureExpanded(row);
       await onRefreshFolder(row.path);
+      await onEnsureExpanded(row);
       tabStore.openFileTab(newPath, "canvas");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
@@ -339,8 +344,8 @@
     closeContextMenu();
     try {
       await createFolder(row.path, "");
-      await onEnsureExpanded(row);
       await onRefreshFolder(row.path);
+      await onEnsureExpanded(row);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });

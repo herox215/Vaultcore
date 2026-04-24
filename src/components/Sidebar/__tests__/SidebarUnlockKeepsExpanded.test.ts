@@ -136,15 +136,10 @@ describe("Sidebar unlock keeps folder expanded (#355)", () => {
     for (let i = 0; i < 15; i += 1) { await Promise.resolve(); await tick(); }
 
     // Click the locked folder → opens the unlock modal (not toggle).
-    const el = document.querySelector(
-      `.vc-tree-row[data-path="${secret.path}"]`,
-    ) as HTMLElement | null;
-    // Row selector: some renderers set data-path, others don't — fall back
-    // to text match as a safety net.
-    const row = el ?? Array.from(document.querySelectorAll(".vc-tree-row"))
+    const row = Array.from(document.querySelectorAll(".vc-tree-row"))
       .find((n) => n.textContent?.includes("secret")) as HTMLElement | undefined;
     expect(row, "locked folder row rendered").toBeTruthy();
-    (row as HTMLElement).click();
+    row!.click();
 
     for (let i = 0; i < 5; i += 1) { await Promise.resolve(); await tick(); }
 
