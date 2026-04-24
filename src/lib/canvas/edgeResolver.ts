@@ -14,9 +14,20 @@
 // fallback behaviours (missing endpoint, no snap target, opposite-side
 // pick) without booting the renderer.
 
-import { anchorPoint, autoSides, bezierMidpoint, bezierPath } from "./geometry";
-import type { CanvasDoc, CanvasEdge, CanvasSide } from "./types";
+import {
+  anchorPoint,
+  autoSides,
+  bezierMidpoint,
+  bezierPath,
+  remapSideForShape,
+} from "./geometry";
+import type { CanvasDoc, CanvasEdge, CanvasNode, CanvasSide } from "./types";
+import { readShape } from "./types";
 import type { DraftEdge } from "./pointerMode";
+
+function centerOf(node: CanvasNode): { x: number; y: number } {
+  return { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+}
 
 export interface ResolvedEdge {
   edge: CanvasEdge;
@@ -35,10 +46,21 @@ export function resolveEdges(doc: CanvasDoc): ResolvedEdge[] {
     const from = byId.get(edge.fromNode);
     const to = byId.get(edge.toNode);
     if (!from || !to) continue;
-    const { fromSide, toSide } =
-      edge.fromSide && edge.toSide
-        ? { fromSide: edge.fromSide, toSide: edge.toSide }
-        : autoSides(from, to);
+    let fromSide: CanvasSide;
+    let toSide: CanvasSide;
+    if (edge.fromSide && edge.toSide) {
+      // User-set sides — still pass through remapSideForShape so an edge
+      // persisted with `top` on what is now a triangle (e.g. the node was
+      // reshaped after the edge was authored, or the file came from a
+      // producer that didn't know about triangle shapes) resolves to a
+      // side that actually has an anchor. #362.
+      const fc = centerOf(from);
+      const tc = centerOf(to);
+      fromSide = remapSideForShape(readShape(from), edge.fromSide, fc, tc);
+      toSide = remapSideForShape(readShape(to), edge.toSide, tc, fc);
+    } else {
+      ({ fromSide, toSide } = autoSides(from, to));
+    }
     const fromPt = anchorPoint(from, fromSide);
     const toPt = anchorPoint(to, toSide);
     out.push({
@@ -75,18 +97,34 @@ export function draftPath(doc: CanvasDoc, draft: DraftEdge | null): string | nul
   if (!draft) return null;
   const from = doc.nodes.find((n) => n.id === draft.fromNodeId);
   if (!from) return null;
-  const fromPt = anchorPoint(from, draft.fromSide);
+  // Shape-aware remap for the origin side. The renderer never emits `top`
+  // for triangles so this branch is defensive; it matters when a user
+  // somehow starts a draft from a legacy handle or via keyboard. #362.
+  //
+  // When we have a snap target, remap against the TARGET's center so the
+  // draft curve exits the triangle origin in the direction of the actual
+  // endpoint — remapping against the moving cursor instead would flip
+  // sides mid-drag once the cursor passed the origin's center axis.
+  const fc = centerOf(from);
+  const cursor = { x: draft.currentX, y: draft.currentY };
+  const fromShape = readShape(from);
   if (draft.targetNodeId && draft.targetSide) {
     const to = doc.nodes.find((n) => n.id === draft.targetNodeId);
     if (to) {
-      const toPt = anchorPoint(to, draft.targetSide);
-      return bezierPath(fromPt, draft.fromSide, toPt, draft.targetSide);
+      const tc = centerOf(to);
+      const fromSide = remapSideForShape(fromShape, draft.fromSide, fc, tc);
+      const toSide = remapSideForShape(readShape(to), draft.targetSide, tc, fc);
+      const fromPt = anchorPoint(from, fromSide);
+      const toPt = anchorPoint(to, toSide);
+      return bezierPath(fromPt, fromSide, toPt, toSide);
     }
   }
+  const fromSide = remapSideForShape(fromShape, draft.fromSide, fc, cursor);
+  const fromPt = anchorPoint(from, fromSide);
   return bezierPath(
     fromPt,
-    draft.fromSide,
-    { x: draft.currentX, y: draft.currentY },
-    oppositeSide(draft.fromSide),
+    fromSide,
+    cursor,
+    oppositeSide(fromSide),
   );
 }

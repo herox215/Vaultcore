@@ -18,6 +18,7 @@ import type {
   CanvasTextNode,
   CanvasUnknownNode,
 } from "./types";
+import { DEFAULT_CANVAS_SHAPE, isCanvasShape } from "./types";
 
 const KNOWN_NODE_KEYS = new Set([
   "id",
@@ -29,6 +30,7 @@ const KNOWN_NODE_KEYS = new Set([
   "color",
   // text
   "text",
+  "shape", // #362 — VaultCore extension on text nodes
   // file
   "file",
   "subpath",
@@ -103,10 +105,16 @@ function parseNode(raw: unknown): CanvasNode | null {
   const extra = extraMaybe ? { extra: extraMaybe } : {};
   switch (type) {
     case "text": {
+      // #362: promote `shape` out of the raw bag into a typed field so
+      // downstream code accesses it via `node.shape` instead of reading
+      // through `extra`. Unknown values drop silently — rendering falls
+      // back to the default shape.
+      const shape = isCanvasShape(raw.shape) ? raw.shape : undefined;
       const node: CanvasTextNode = {
         ...base,
         type: "text",
         text: asString(raw.text),
+        ...(shape !== undefined ? { shape } : {}),
         ...extra,
       };
       return node;
@@ -214,7 +222,13 @@ function serializeNode(n: CanvasNode): Record<string, unknown> {
   };
   if (n.color !== undefined) out.color = n.color;
   if (n.type === "text") {
-    out.text = (n as CanvasTextNode).text;
+    const tn = n as CanvasTextNode;
+    out.text = tn.text;
+    // #362: emit `shape` only when it diverges from the default so
+    // existing canvases without a shape field stay byte-identical.
+    if (tn.shape !== undefined && tn.shape !== DEFAULT_CANVAS_SHAPE) {
+      out.shape = tn.shape;
+    }
   } else if (n.type === "file") {
     const fn = n as CanvasFileNode;
     out.file = fn.file;

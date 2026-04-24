@@ -237,4 +237,115 @@ describe("serializeCanvas", () => {
     expect(parsed.edges[0]).not.toHaveProperty("fromSide");
     expect(parsed.edges[0]).not.toHaveProperty("toEnd");
   });
+
+  // ───────── #362: shape roundtrip ─────────
+
+  it("parses a valid `shape` on a text node into the typed field", () => {
+    const doc = parseCanvas(
+      JSON.stringify({
+        nodes: [
+          {
+            id: "a",
+            type: "text",
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            text: "x",
+            shape: "triangle",
+          },
+        ],
+        edges: [],
+      }),
+    );
+    expect(doc.nodes[0]).toMatchObject({ type: "text", shape: "triangle" });
+    // shape must be promoted out of the extra bag — it's a first-class field.
+    expect(doc.nodes[0]?.extra?.shape).toBeUndefined();
+  });
+
+  it("rejects unknown shape strings — renders as the default without roundtripping the invalid value", () => {
+    const doc = parseCanvas(
+      JSON.stringify({
+        nodes: [
+          {
+            id: "a",
+            type: "text",
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            text: "x",
+            shape: "hexagon",
+          },
+        ],
+        edges: [],
+      }),
+    );
+    // Field dropped so readShape returns the default (rounded-rectangle).
+    expect((doc.nodes[0] as { shape?: string }).shape).toBeUndefined();
+    expect(doc.nodes[0]?.extra?.shape).toBeUndefined();
+  });
+
+  it("omits the default shape on serialize — existing canvases stay byte-identical", () => {
+    const out = serializeCanvas({
+      nodes: [
+        {
+          id: "a",
+          type: "text",
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          text: "x",
+          shape: "rounded-rectangle",
+        },
+      ],
+      edges: [],
+    });
+    const parsed = JSON.parse(out);
+    expect(parsed.nodes[0]).not.toHaveProperty("shape");
+  });
+
+  it("emits a non-default shape explicitly", () => {
+    const out = serializeCanvas({
+      nodes: [
+        {
+          id: "a",
+          type: "text",
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          text: "x",
+          shape: "diamond",
+        },
+      ],
+      edges: [],
+    });
+    const parsed = JSON.parse(out);
+    expect(parsed.nodes[0].shape).toBe("diamond");
+  });
+
+  it("roundtrips a non-default shape alongside other extra fields", () => {
+    const input = {
+      nodes: [
+        {
+          id: "a",
+          type: "text",
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          text: "x",
+          shape: "ellipse",
+          styleAttributes: { theme: "dark" },
+        },
+      ],
+      edges: [],
+    };
+    const doc = parseCanvas(JSON.stringify(input));
+    const out = JSON.parse(serializeCanvas(doc));
+    expect(out.nodes[0].shape).toBe("ellipse");
+    expect(out.nodes[0].styleAttributes).toEqual({ theme: "dark" });
+  });
 });
