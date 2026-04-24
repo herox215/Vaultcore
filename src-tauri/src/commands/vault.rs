@@ -557,7 +557,7 @@ pub(crate) async fn merge_external_change_impl(
 /// Purge `<vault>/.vaultcore/embeddings/` if present. Called from
 /// `open_vault` on every open so upgraded installs self-heal without user
 /// action.
-pub fn purge_legacy_embeddings_dir(vault_root: &Path) {
+pub(crate) fn purge_legacy_embeddings_dir(vault_root: &Path) {
     let embed_dir = vault_root.join(".vaultcore").join("embeddings");
     match std::fs::remove_dir_all(&embed_dir) {
         Ok(()) => log::info!(
@@ -574,7 +574,7 @@ pub fn purge_legacy_embeddings_dir(vault_root: &Path) {
 
 /// Purge `<app_data_dir>/semantic-enabled.json` if present. Called once
 /// from the Tauri `setup` closure on app boot.
-pub fn purge_legacy_semantic_toggle_file(app_data_dir: &Path) {
+pub(crate) fn purge_legacy_semantic_toggle_file(app_data_dir: &Path) {
     let toggle = app_data_dir.join("semantic-enabled.json");
     match std::fs::remove_file(&toggle) {
         Ok(()) => log::info!(
