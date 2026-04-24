@@ -25,7 +25,8 @@
     CanvasSide,
     CanvasTextNode,
   } from "../../lib/canvas/types";
-  import { SIDES } from "../../lib/canvas/geometry";
+  import { SIDES, sidesForShape } from "../../lib/canvas/geometry";
+  import { readShape } from "../../lib/canvas/types";
   import {
     isImageFile,
     isMarkdownFile,
@@ -302,9 +303,10 @@
 
   {#each orderedNodes as node (node.id)}
     {#if node.type === "text"}
+      {@const textShape = readShape(node)}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (role and tabindex co-vary on `interactive`) -->
       <div
-        class="vc-canvas-node vc-canvas-node-text"
+        class="vc-canvas-node vc-canvas-node-text vc-shape-{textShape}"
         class:vc-canvas-node-selected={selectedNodeId === node.id}
         class:vc-canvas-node-editing={editingNodeId === node.id}
         class:vc-canvas-node-hovered={hoveredNodeId === node.id || draft?.fromNodeId === node.id}
@@ -322,6 +324,11 @@
         role={interactive ? "button" : undefined}
         tabindex={interactive ? 0 : undefined}
       >
+        <!-- #362: visual-shape underlay. `clip-path` / `border-radius`
+             live on this child so the outer node div can stay
+             overflow: visible — edge handles + resize grabber remain
+             unclipped even for triangle / diamond. -->
+        <div class="vc-canvas-node-shape" aria-hidden="true"></div>
         {#if interactive && editingNodeId === node.id}
           <textarea
             bind:this={editingTextareaEl}
@@ -383,7 +390,7 @@
             onpointerdown={(e) => onResizePointerDown?.(e, node)}
             role="presentation"
           ></div>
-          {#each SIDES as side (side)}
+          {#each sidesForShape(textShape) as side (side)}
             <button
               type="button"
               class="vc-canvas-edge-handle vc-canvas-edge-handle-{side}"
@@ -771,6 +778,71 @@
   .vc-canvas-node-selected {
     border-color: var(--color-accent);
     box-shadow: 0 0 0 2px var(--color-accent-bg);
+  }
+
+  /* #362: text nodes use a separate shape underlay so the visual outline
+     can carry clip-path / border-radius without clipping the hover
+     handles + resize grabber. The outer .vc-canvas-node drops its own
+     border/bg/shadow for text only; the underlay provides them. */
+  .vc-canvas-node-text {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  .vc-canvas-node-text.vc-canvas-node-selected {
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .vc-canvas-node-shape {
+    position: absolute;
+    inset: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .vc-canvas-node-text.vc-canvas-node-selected > .vc-canvas-node-shape {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-bg);
+  }
+
+  .vc-canvas-node-text.vc-shape-rounded-rectangle > .vc-canvas-node-shape {
+    border-radius: 6px;
+  }
+
+  .vc-canvas-node-text.vc-shape-rectangle > .vc-canvas-node-shape {
+    border-radius: 0;
+  }
+
+  .vc-canvas-node-text.vc-shape-ellipse > .vc-canvas-node-shape {
+    border-radius: 50%;
+  }
+
+  /* clip-path shapes: border-radius has no effect under a clip, so the
+     outline comes from the polygon itself. Border still participates
+     (clip-path clips both paint and border) so the shape reads as a
+     solid filled polygon on a light surface. */
+  .vc-canvas-node-text.vc-shape-diamond > .vc-canvas-node-shape {
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    border-radius: 0;
+  }
+
+  .vc-canvas-node-text.vc-shape-triangle > .vc-canvas-node-shape {
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    border-radius: 0;
+  }
+
+  /* Content sits above the shape underlay so text is always readable,
+     even when the underlay is a diamond/triangle polygon. */
+  .vc-canvas-node-text > .vc-canvas-node-content,
+  .vc-canvas-node-text > .vc-canvas-node-textarea {
+    position: relative;
+    z-index: 1;
   }
 
   .vc-canvas-node-content {

@@ -109,11 +109,37 @@ describe("CanvasView context menus (#164)", () => {
     ]);
   });
 
-  it("Add text node creates a text node in the doc", async () => {
+  it("Add text node expands the shape picker — picking a shape creates the node (#362)", async () => {
     const { container } = await mountWithDoc({ nodes: [], edges: [] });
     await openMenuOnViewport(container);
     await clickMenuItem(container, "Add text node");
+    // Click now expands the picker; no node has been created yet.
+    expect(container.querySelectorAll(".vc-canvas-node-text")).toHaveLength(0);
+    const picker = container.querySelector(".vc-shape-picker");
+    expect(picker).toBeTruthy();
+    // Pick the default (rounded-rectangle) → creates a node with no
+    // persisted shape field (shape === undefined roundtrips as absent).
+    const rounded = container.querySelector(
+      '.vc-shape-picker-row[data-shape="rounded-rectangle"]',
+    ) as HTMLButtonElement;
+    await fireEvent.click(rounded);
+    await tick();
     expect(container.querySelectorAll(".vc-canvas-node-text")).toHaveLength(1);
+  });
+
+  it("Picking triangle creates a text node rendered with the triangle shape class (#362)", async () => {
+    const { container } = await mountWithDoc({ nodes: [], edges: [] });
+    await openMenuOnViewport(container);
+    await clickMenuItem(container, "Add text node");
+    const triangle = container.querySelector(
+      '.vc-shape-picker-row[data-shape="triangle"]',
+    ) as HTMLButtonElement;
+    await fireEvent.click(triangle);
+    await tick();
+    const node = container.querySelector(
+      ".vc-canvas-node-text.vc-shape-triangle",
+    );
+    expect(node).toBeTruthy();
   });
 
   it("Add group creates a group node in the doc", async () => {
@@ -125,7 +151,7 @@ describe("CanvasView context menus (#164)", () => {
 
   // ─── Text node ───────────────────────────────────────────────────────
 
-  it("text-node menu lists the expected entries", async () => {
+  it("text-node menu lists the expected entries (#362 adds Change shape…)", async () => {
     const { container } = await mountWithDoc({
       nodes: [{ id: "t", type: "text", text: "hi", x: 0, y: 0, width: 100, height: 40 }],
       edges: [],
@@ -135,10 +161,60 @@ describe("CanvasView context menus (#164)", () => {
       "Edit text",
       "Duplicate",
       "Copy text",
+      "Change shape…",
       "Bring to front",
       "Send to back",
       "Delete",
     ]);
+  });
+
+  it("Change shape… on a text node re-renders the node with the chosen shape class (#362)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [{ id: "t", type: "text", text: "hi", x: 0, y: 0, width: 100, height: 40 }],
+      edges: [],
+    });
+    await openMenuOnNode(container, "t");
+    await clickMenuItem(container, "Change shape…");
+    const diamond = container.querySelector(
+      '.vc-shape-picker-row[data-shape="diamond"]',
+    ) as HTMLButtonElement;
+    expect(diamond).toBeTruthy();
+    await fireEvent.click(diamond);
+    await tick();
+    const node = container.querySelector(
+      ".vc-canvas-node-text.vc-shape-diamond",
+    );
+    expect(node).toBeTruthy();
+  });
+
+  it("Change shape… back to rounded-rectangle deletes the shape field (#362)", async () => {
+    const { container } = await mountWithDoc({
+      nodes: [{
+        id: "t",
+        type: "text",
+        text: "hi",
+        x: 0, y: 0, width: 100, height: 40,
+        shape: "triangle",
+      }],
+      edges: [],
+    });
+    await openMenuOnNode(container, "t");
+    await clickMenuItem(container, "Change shape…");
+    const rr = container.querySelector(
+      '.vc-shape-picker-row[data-shape="rounded-rectangle"]',
+    ) as HTMLButtonElement;
+    await fireEvent.click(rr);
+    await tick();
+    // Wait for the debounced autosave (400 ms).
+    for (let i = 0; i < 30; i++) {
+      if (writeFileMock.mock.calls.length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const out = nodesFromLastWrite();
+    const node = out.nodes[0] as unknown as Record<string, unknown>;
+    // Default shape is never persisted — the field must disappear so
+    // the on-disk JSON matches a pre-#362 canvas byte-for-byte.
+    expect(node.shape).toBeUndefined();
   });
 
   it("Duplicate on a text node creates a clone with a new id and offset position", async () => {

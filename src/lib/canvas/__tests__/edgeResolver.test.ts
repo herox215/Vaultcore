@@ -95,6 +95,43 @@ describe("resolveEdges", () => {
     const out = resolveEdges(doc([a, b], [valid, orphan]));
     expect(out.map((r) => r.edge.id)).toEqual(["ok"]);
   });
+
+  // #362: triangles only expose three anchors (left/right/bottom). An
+  // edge whose user-set `top` side lands on a triangle (possible if the
+  // node was reshaped after the edge was authored) must remap to a
+  // triangle side instead of silently drawing to the missing apex anchor.
+  it("remaps an explicit `fromSide: top` on a triangle to a valid triangle side", () => {
+    const tri = node("a", { x: 0, y: 0, width: 100, height: 40, shape: "triangle" });
+    const other = node("b", { x: 500, y: 0, width: 100, height: 40 });
+    const e: CanvasEdge = {
+      id: "e1",
+      fromNode: "a",
+      toNode: "b",
+      fromSide: "top",
+      toSide: "left",
+    };
+    const out = resolveEdges(doc([tri, other], [e]));
+    expect(out).toHaveLength(1);
+    // Other node is to the right → top remaps to right.
+    expect(out[0]?.fromSide).toBe("right");
+    // Anchor point must match the triangle's right-edge midpoint, not the
+    // bounding-box top midpoint.
+    expect(out[0]?.fromPt).toEqual({ x: 75, y: 20 });
+  });
+
+  it("remaps an explicit `toSide: top` on a triangle", () => {
+    const other = node("a", { x: 500, y: 0, width: 100, height: 40 });
+    const tri = node("b", { x: 0, y: 0, width: 100, height: 40, shape: "triangle" });
+    const e: CanvasEdge = {
+      id: "e1",
+      fromNode: "a",
+      toNode: "b",
+      fromSide: "left",
+      toSide: "top",
+    };
+    const out = resolveEdges(doc([other, tri], [e]));
+    expect(out[0]?.toSide).toBe("right"); // other is to the right → remap right
+  });
 });
 
 describe("draftPath", () => {
