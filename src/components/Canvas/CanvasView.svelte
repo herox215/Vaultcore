@@ -60,6 +60,8 @@
     readShape,
   } from "../../lib/canvas/types";
   import { anchorPoint } from "../../lib/canvas/geometry";
+  import { computeCanvasTextHtml } from "../../lib/canvas/textMarkdown";
+  import { titleFromPath } from "../../lib/templateScope";
   import {
     canvasFilePreview,
     isImageFile,
@@ -127,6 +129,18 @@
   // Missing / failed reads become "" so the renderer falls back to a
   // generic file card. `$state` keeps the template reactive to async loads.
   let mdPreviews = $state<Record<string, string>>({});
+
+  // #364: pre-rendered Markdown HTML for every text node, keyed by
+  // node.id. Recomputed whenever `doc.nodes` or `editingNodeId`
+  // change — the currently-edited node is intentionally skipped so
+  // we don't burn a render per keystroke (the textarea owns the
+  // display in that branch). `renderMarkdownToHtml` is sync and
+  // cheap for small card-sized text, so a blanket recompute is
+  // fine for MVP. If this ever shows up in a flame graph, swap in
+  // a per-node memo keyed on `node.text`.
+  let mdTextNodes = $derived(
+    computeCanvasTextHtml(doc, editingNodeId, titleFromPath(abs)),
+  );
 
   let pointerMode = $state<PointerMode | null>(null);
   let longpressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1260,6 +1274,7 @@
       {zoom}
       vaultPath={$vaultStore.currentPath}
       {mdPreviews}
+      {mdTextNodes}
       interactive={true}
       {selectedNodeId}
       {selectedEdgeId}
