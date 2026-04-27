@@ -148,6 +148,34 @@ describe("CanvasRenderer markdown text nodes (#364)", () => {
     expect(onCardKey).toHaveBeenCalledTimes(1);
   });
 
+  it("non-rectangular shapes stack multi-block markdown vertically (#366)", async () => {
+    // #362 added `display: flex` on non-rectangular content to center the
+    // single-line label inside ellipse / diamond / triangle silhouettes.
+    // #364 then started rendering Markdown HTML, which is multi-block —
+    // without `flex-direction: column` the default `row` direction laid
+    // <h1> + <p> next to each other. Vite-svelte does not inject scoped
+    // <style> into JSDOM, and JSDOM does not compute flex layout, so we
+    // assert against the source CSS directly: the only place the bug can
+    // be reintroduced is the rule itself.
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const source = await fs.readFile(
+      path.resolve(__dirname, "../CanvasRenderer.svelte"),
+      "utf8",
+    );
+    const rule = source.match(
+      /\.vc-canvas-node-text:not\(\.vc-shape-rectangle\):not\(\.vc-shape-rounded-rectangle\)\s*>\s*\.vc-canvas-node-content\s*\{[^}]*\}/,
+    );
+    expect(rule, "non-rectangular content flex rule must exist").toBeTruthy();
+    expect(rule![0]).toMatch(/flex-direction:\s*column/);
+    // Coupled invariant: with flex-direction: column the cross axis is
+    // horizontal — `align-items: center` would shrink-wrap block children
+    // (<p>, <h1>) to max-content width and wrap them narrower than the
+    // shape's available area. Horizontal centering of the inline content
+    // is handled by `text-align: center` on the sibling rule above.
+    expect(rule![0]).not.toMatch(/align-items:\s*center/);
+  });
+
   it("wiki-link clicks inside the textarea (during edit) do not trigger onOpenWikiTarget", async () => {
     // While editing, only the textarea is rendered — there is no HTML link
     // to click. The display branch is fully replaced. This asserts the

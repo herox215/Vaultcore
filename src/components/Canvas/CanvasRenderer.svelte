@@ -943,7 +943,7 @@
   .vc-canvas-node-text:not(.vc-shape-rectangle):not(.vc-shape-rounded-rectangle)
     > .vc-canvas-node-content {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     justify-content: center;
   }
 
