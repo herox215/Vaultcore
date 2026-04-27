@@ -168,6 +168,12 @@ describe("CanvasRenderer markdown text nodes (#364)", () => {
     );
     expect(rule, "non-rectangular content flex rule must exist").toBeTruthy();
     expect(rule![0]).toMatch(/flex-direction:\s*column/);
+    // Coupled invariant: with flex-direction: column the cross axis is
+    // horizontal — `align-items: center` would shrink-wrap block children
+    // (<p>, <h1>) to max-content width and wrap them narrower than the
+    // shape's available area. Horizontal centering of the inline content
+    // is handled by `text-align: center` on the sibling rule above.
+    expect(rule![0]).not.toMatch(/align-items:\s*center/);
   });
 
   it("wiki-link clicks inside the textarea (during edit) do not trigger onOpenWikiTarget", async () => {
