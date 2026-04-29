@@ -56,16 +56,20 @@ describe("AsciiWave (#358 add-on)", () => {
     expect(media![0]).toMatch(/animation:\s*none/);
   });
 
-  it("source palette is block-fills and box-drawing only — no ASCII slashes in any content: declaration", () => {
+  it("CREST constant uses only block-fill glyphs — no ASCII slashes, no braille", () => {
+    // The wave's only source of glyph variation is the CREST constant;
+    // every frame is built by sliding it across a `░` field. Asserting
+    // directly on CREST is the regression guard for palette violations.
+    // (A previous form scanned `content: "…"` literals, but the
+    // component injects frames via inline CSS custom properties, so no
+    // such literals exist and the scan was inert.)
     const src = readFileSync(SOURCE_PATH, "utf8");
-    const declarations = src.match(/content:\s*"([^"]*)"/g) ?? [];
-    // The component may pass frame strings via CSS custom properties;
-    // the @keyframes block then references content: var(--vc-wave-fN).
-    // In either form, the literal `content: "..."` declarations that
-    // do exist must not contain ASCII slashes.
-    for (const decl of declarations) {
-      expect(decl).not.toMatch(/[\\/]/);
-    }
+    const crestMatch = src.match(/const\s+CREST\s*=\s*"([^"]*)"/);
+    expect(crestMatch).toBeTruthy();
+    const crest = crestMatch![1]!;
+    expect(crest).not.toMatch(/[\\/]/);
+    expect(crest).not.toMatch(/[⠀-⣿]/);
+    expect(crest).toMatch(/^[░▒▓█]+$/);
   });
 
   it("source uses no braille characters (U+2800–U+28FF)", () => {
