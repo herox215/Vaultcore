@@ -156,17 +156,33 @@ describe("LocalGraphPanel (#43 — ResizeObserver-gated mount)", () => {
   // the "Computing local graph" text, and carry an aria-label so screen
   // readers announce it.
   it("#358 loading state renders AsciiSpinner + 'Computing local graph' with aria-label", async () => {
-    vi.useFakeTimers();
-    const { container } = render(LocalGraphPanel);
+    // Hold the IPC promise so `loading` stays true across the assertions.
+    // Restore at the end so adjacent tests keep the default mock.
+    const { getLocalGraph } = await import("../../../ipc/commands");
+    const originalImpl = vi.mocked(getLocalGraph).getMockImplementation();
+    let _resolve!: (v: unknown) => void;
+    vi.mocked(getLocalGraph).mockImplementation(
+      () => new Promise((r) => { _resolve = r; }) as unknown as ReturnType<typeof getLocalGraph>,
+    );
+    try {
+      vi.useFakeTimers();
+      const { container } = render(LocalGraphPanel);
+      await vi.advanceTimersByTimeAsync(250);
+      await tick();
+      await tick();
 
-    // Component schedules a 200ms-debounced load on mount; pre-debounce
-    // the loading flag is true.
-    await tick();
-    const loading = container.querySelector(".vc-graph-loading");
-    expect(loading).toBeTruthy();
-    expect(loading!.getAttribute("aria-label")).toBe("Computing local graph");
-    expect(loading!.querySelector(".vc-ascii-spinner")).toBeTruthy();
-    expect(loading!.textContent).toMatch(/Computing local graph/);
+      const loading = container.querySelector(".vc-graph-loading");
+      expect(loading).toBeTruthy();
+      expect(loading!.getAttribute("aria-label")).toBe("Computing local graph");
+      expect(loading!.querySelector(".vc-ascii-spinner")).toBeTruthy();
+      expect(loading!.textContent).toMatch(/Computing local graph/);
+
+      _resolve({ nodes: [], edges: [] });
+    } finally {
+      if (originalImpl) {
+        vi.mocked(getLocalGraph).mockImplementation(originalImpl);
+      }
+    }
   });
 
   // #358 boy-scout — empty-state divs gain aria-label.

@@ -16,6 +16,7 @@
     DEFAULT_FORCE_SETTINGS,
     type GraphHandle,
   } from "./graphRender";
+  import AsciiSpinner from "../ascii/AsciiSpinner.svelte";
 
   const STORAGE_KEY_COLLAPSED = "vaultcore-graph-collapsed";
   const DEBOUNCE_MS = 200;
@@ -260,7 +261,7 @@
   {#if !collapsed}
     <div class="vc-graph-body">
       {#if !hasNote}
-        <div class="vc-graph-empty">Keine Datei geöffnet.</div>
+        <div class="vc-graph-empty" aria-label="No file open">Keine Datei geöffnet.</div>
       {:else if errorMessage}
         <div class="vc-graph-empty">{errorMessage}</div>
       {:else}
@@ -279,11 +280,16 @@
           title={centerRel ?? ""}
         ></div>
         {#if graphData && !hasLinks}
-          <div class="vc-graph-no-links">Keine Verbindungen</div>
+          <div
+            class="vc-graph-no-links"
+            aria-label="No outgoing or incoming links for this file"
+          >Keine Verbindungen</div>
         {/if}
       {/if}
       {#if loading}
-        <div class="vc-graph-loading">…</div>
+        <div class="vc-graph-loading" aria-label="Computing local graph">
+          <AsciiSpinner /> Computing local graph
+        </div>
       {/if}
     </div>
   {/if}
