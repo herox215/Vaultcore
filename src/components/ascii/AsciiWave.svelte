@@ -62,23 +62,37 @@
 ></span>
 
 <style>
+  /* The host has a FIXED height and centres its ::before child via
+     flex. Block-fill glyphs (`▒ ▓ █`) span the full character cell
+     vertically while `░` covers much less ink — without a clamped
+     container, the host's intrinsic height "breathed" as frames cycled
+     and the eye saw the wave jumping. Fixed height + flex-centre +
+     overflow:hidden prevents that. The 4px vertical padding + margin
+     give the row breathing room from neighbouring DOM. */
   .vc-ascii-wave {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    height: 1.4em;
+    padding: 4px 0;
+    margin: 4px 0;
+    box-sizing: content-box;
+    overflow: hidden;
     font-family: var(--vc-font-mono);
+    font-size: var(--vc-font-size, 14px);
     color: var(--color-text-muted);
     line-height: 1;
     white-space: pre;
     letter-spacing: 0;
-    /* The host span has no visible text node; the ::before pseudo
-       paints the current frame. Width is intrinsic to the rendered
-       glyph string. */
-    visibility: hidden;
-    position: relative;
+    vertical-align: middle;
   }
   .vc-ascii-wave::before {
-    visibility: visible;
-    position: relative;
     content: var(--vc-wave-rest);
+    line-height: 1;
+    /* The pseudo is the only visual; centre it vertically inside the
+       fixed-height host so density swings don't shift the baseline. */
+    display: inline-block;
+    vertical-align: middle;
     animation: vc-ascii-wave 800ms steps(8, end) infinite;
   }
   @keyframes vc-ascii-wave {
