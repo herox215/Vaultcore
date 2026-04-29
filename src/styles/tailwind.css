@@ -164,15 +164,18 @@ html, body, #app {
   animation: vc-spin 1s linear infinite;
 }
 
-/* Phase 3 — Flash highlight for scroll-to-match */
+/* Phase 3 — Flash highlight for scroll-to-match.
+ * Only the background fades — fading `opacity` would also fade the text
+ * itself, making the user briefly stare at an invisible block before it
+ * pops back. Background-only keeps the surrounding paragraph readable
+ * the entire time. */
 .vc-flash-highlight {
   background: #FEF9C3;
-  transition: background 2500ms ease-out, opacity 2500ms ease-out;
+  transition: background 2500ms ease-out;
   border-radius: 2px;
 }
 .vc-flash-highlight.vc-flash-done {
   background: transparent;
-  opacity: 0;
 }
 
 /* Phase 4: Wiki-link decoration in CM6 editor */
