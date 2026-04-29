@@ -153,17 +153,19 @@ describe("Canvas context menus (#164)", () => {
     });
     expect(expanded).toBe(true);
 
-    const picked = await browser.waitUntil(
-      async () => {
-        return (await browser.execute(() => {
-          const row = document.querySelector<HTMLElement>(".vc-shape-picker-row");
-          if (!row) return false;
-          row.click();
-          return true;
-        })) as boolean;
-      },
+    // Wait for the picker to appear, THEN click — never click inside the
+    // poll predicate (that turns the wait into N rapid-fire clicks).
+    await browser.waitUntil(
+      async () =>
+        (await browser.$$(".vc-shape-picker-row")).length > 0,
       { timeout: 3000, timeoutMsg: "shape picker never expanded after Add text node" },
     );
+    const picked = await browser.execute(() => {
+      const row = document.querySelector<HTMLElement>(".vc-shape-picker-row");
+      if (!row) return false;
+      row.click();
+      return true;
+    });
     expect(picked).toBe(true);
 
     // A text node should materialise in the active canvas viewport.

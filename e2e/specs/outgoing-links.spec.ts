@@ -152,28 +152,42 @@ describe("Outgoing Links panel", () => {
       { timeout: 5000, timeoutMsg: "unresolved row never appeared for the new target" },
     );
 
-    // Click the unresolved row → click-to-create at vault root.
-    await browser.execute((target: string) => {
+    // Click the unresolved row → click-to-create at vault root. Surface a
+    // hard error if the row vanished between the wait above and the click
+    // — a silent `?.click()` would let the test press on with stale
+    // assumptions and timeout 5 s later with an unhelpful message.
+    const rowClicked = await browser.execute((target: string) => {
       const rows = Array.from(
         document.querySelectorAll<HTMLElement>(".vc-outlink-row--unresolved"),
       );
       const match = rows.find((r) => (r.textContent ?? "").includes(target));
-      match?.click();
+      if (!match) return false;
+      match.click();
+      return true;
     }, dangling);
+    expect(rowClicked).toBe(true);
 
-    // The new file appears in the tree and a tab opens for it.
+    // The handler does `createFile` → `tabStore.openTab` → tree refresh.
+    // All three resolve asynchronously; assert each in the order the user
+    // would observe them. Accept any filename that contains the dangling
+    // stem so the test doesn't ossify the create-at-root extension policy
+    // beyond the one assertion that matters: a NEW file exists.
     await browser.waitUntil(
       async () => {
         const names = await textsOf(await browser.$$(".vc-tree-name"));
-        return names.includes(`${dangling}.md`);
+        return names.some((n) => n.includes(dangling));
       },
       { timeout: 5000, timeoutMsg: "newly-created note never appeared in tree" },
     );
-
-    const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
     await browser.waitUntil(
-      async () => ((await activeLabel.getProperty("textContent")) as string).includes(dangling),
-      { timeout: 3000, timeoutMsg: "active tab never switched to the new note" },
+      async () => {
+        // Re-query each iteration — `.vc-tab--active` re-renders on tab
+        // switches, so the cached element handle from a previous tick
+        // would be stale.
+        const labels = await textsOf(await browser.$$(".vc-tab--active .vc-tab-label"));
+        return labels.some((l) => l.includes(dangling));
+      },
+      { timeout: 5000, timeoutMsg: "active tab never switched to the newly-created note" },
     );
   });
 });

@@ -227,9 +227,22 @@ describe("Encrypted folders (#345)", () => {
     await lockAll.waitForDisplayed({ timeout: 3000 });
     await lockAll.click();
 
-    // Close the modal so the sidebar is observable again. The button is
-    // disabled when no encrypted folders are present, so the lock-all
-    // round-trip must have completed by the time we close.
+    // Toast confirms the IPC has returned. The settings list of encrypted
+    // folders shows the locked state once the registry update propagates,
+    // so we wait on the toast (which fires on success) instead of racing
+    // a click-then-close. Without this assertion, the test could close
+    // the modal before lock_all_folders completes.
+    await browser.waitUntil(
+      async () => {
+        const toasts = await browser.$$('[data-testid="toast"]');
+        for (const t of toasts) {
+          if ((await textOf(t)).toLowerCase().includes("locked")) return true;
+        }
+        return false;
+      },
+      { timeout: 5000, timeoutMsg: "lock-all toast never appeared — IPC may not have completed" },
+    );
+
     const close = await browser.$(".vc-settings-close");
     if (await close.isDisplayed().catch(() => false)) await close.click();
     await browser.$('[data-testid="settings-modal"]').waitForDisplayed({

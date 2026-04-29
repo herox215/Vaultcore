@@ -131,15 +131,13 @@ describe("Canvas file-reference nodes (#162)", () => {
   });
 
   it("clicking the wiki-link opens the target note in a new tab", async () => {
-    // Still on Linked.canvas from the previous test. Use a real mousedown
-    // — the canvas click delegation listens on `mousedown` paired with the
-    // [data-wiki-target] hit-testing in CanvasRenderer.
+    // Still on Linked.canvas from the previous test. Single `.click()`
+    // — firing both `mousedown` and `click` would invoke the canvas
+    // delegation handler twice (the listener catches either event) and
+    // could open the target tab twice or trip dedup logic.
     const clicked = await browser.execute(() => {
       const link = document.querySelector<HTMLElement>(".vc-reading-wikilink--resolved");
       if (!link) return false;
-      link.dispatchEvent(
-        new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
-      );
       link.click();
       return true;
     });

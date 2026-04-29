@@ -32,35 +32,49 @@ describe("Daily notes", () => {
     return `${y}-${m}-${d}.md`;
   }
 
-  async function setDailyFormat(format: string): Promise<void> {
+  /**
+   * Apply (folder, format, template) to the Daily Notes settings panel,
+   * then close the modal. Any field passed as `undefined` is skipped;
+   * use `""` to explicitly clear a setting. `settingsStore` persists to
+   * localStorage which survives across spec sessions, so callers that
+   * rely on a default state should pass `""` for the settings they care
+   * about — leaving them undefined would inherit whatever the previous
+   * session left behind.
+   */
+  async function applyDailySettings(opts: {
+    folder?: string;
+    format?: string;
+    template?: string;
+  }): Promise<void> {
     const btn = await browser.$('button[aria-label="Einstellungen"]');
     await btn.click();
-    const input = await browser.$('[data-testid="settings-daily-format"]');
-    await input.waitForDisplayed({ timeout: 3000 });
-    await browser.execute((el: HTMLInputElement, v: string) => {
-      el.value = v;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, input, format);
-    // `settingsStore` persists to localStorage which survives across spec
-    // sessions, so any pollution from prior runs (template path, custom
-    // folder) leaks in. Reset folder + template to defaults here so each
-    // session starts from a clean slate regardless of the previous one.
-    const folderInput = await browser.$('[data-testid="settings-daily-folder"]');
-    await browser.execute((el: HTMLInputElement) => {
-      el.value = "";
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, folderInput);
-    const tplInput = await browser.$('[data-testid="settings-daily-template"]');
-    await browser.execute((el: HTMLInputElement) => {
-      el.value = "";
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, tplInput);
-    const close = await browser.$(".vc-settings-close");
-    await close.click();
+    await browser.$('[data-testid="settings-daily-format"]').waitForDisplayed({
+      timeout: 3000,
+    });
+    const setField = async (selector: string, value: string): Promise<void> => {
+      const el = await browser.$(selector);
+      await browser.execute((node: HTMLInputElement, v: string) => {
+        node.value = v;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+      }, el, value);
+    };
+    if (opts.format !== undefined)
+      await setField('[data-testid="settings-daily-format"]', opts.format);
+    if (opts.folder !== undefined)
+      await setField('[data-testid="settings-daily-folder"]', opts.folder);
+    if (opts.template !== undefined)
+      await setField('[data-testid="settings-daily-template"]', opts.template);
+    await (await browser.$(".vc-settings-close")).click();
     await browser.$('[data-testid="settings-modal"]').waitForDisplayed({
       timeout: 2000,
       reverse: true,
     });
+  }
+
+  async function setDailyFormat(format: string): Promise<void> {
+    // The default (idempotent) reset path: format set explicitly, folder
+    // + template cleared so prior-session pollution can't leak in.
+    await applyDailySettings({ format, folder: "", template: "" });
   }
 
   it("creates and opens today's note on Ctrl+Shift+D", async () => {
@@ -120,42 +134,18 @@ describe("Daily notes", () => {
     fs.writeFileSync(path.join(vault.path, templateRelPath), templateContent, "utf-8");
 
     // Configure a NEW daily folder so a fresh file path is generated —
-    // earlier tests already created today's note in the vault root.
-    const btn = await browser.$('button[aria-label="Einstellungen"]');
-    await btn.click();
-    const folderInput = await browser.$('[data-testid="settings-daily-folder"]');
-    await folderInput.waitForDisplayed({ timeout: 3000 });
-    await browser.execute((el: HTMLInputElement, v: string) => {
-      el.value = v;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, folderInput, "Daily-Tpl");
-
-    const tplInput = await browser.$('[data-testid="settings-daily-template"]');
-    await browser.execute((el: HTMLInputElement, v: string) => {
-      el.value = v;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, tplInput, templateRelPath);
-
-    const close = await browser.$(".vc-settings-close");
-    await close.click();
-    await browser.$('[data-testid="settings-modal"]').waitForDisplayed({
-      timeout: 2000,
-      reverse: true,
-    });
+    // earlier tests already created today's note at the vault root.
+    await applyDailySettings({ folder: "Daily-Tpl", template: templateRelPath });
 
     await browser.keys(["Control", "Shift", "d"]);
 
     const expected = todayFilename();
     const newAbs = path.join(vault.path, "Daily-Tpl", expected);
-    await browser.waitUntil(
-      () => Promise.resolve(fs.existsSync(newAbs)),
-      { timeout: 5000, timeoutMsg: `${newAbs} never written` },
-    );
 
-    // Daily note must contain the template marker — proves the seeding
-    // path did the read+write; an empty file means the readFile failed
-    // silently and the user gets a blank note (per AC, that fallback
-    // must not block creation, but the happy path shouldn't take it).
+    // Single wait covering both file existence AND seeded content. Two
+    // separate waits opened a window where the file could exist but be
+    // empty (write not yet flushed) and the second wait would then time
+    // out instead of capturing the eventual fill.
     await browser.waitUntil(
       () => {
         try {
@@ -165,29 +155,10 @@ describe("Daily notes", () => {
           return Promise.resolve(false);
         }
       },
-      { timeout: 3000, timeoutMsg: "daily note was never seeded with the template content" },
+      { timeout: 8000, timeoutMsg: `daily note ${newAbs} never carried the template marker` },
     );
 
-    // Reset daily-notes settings — `settingsStore` is global (not
-    // vault-scoped), so leaving "Daily-Tpl" + a template path in place
-    // would change what the *next* spec session sees on cold start.
-    const reopenBtn = await browser.$('button[aria-label="Einstellungen"]');
-    await reopenBtn.click();
-    const folderResetInput = await browser.$('[data-testid="settings-daily-folder"]');
-    await folderResetInput.waitForDisplayed({ timeout: 3000 });
-    await browser.execute((el: HTMLInputElement) => {
-      el.value = "";
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, folderResetInput);
-    const tplResetInput = await browser.$('[data-testid="settings-daily-template"]');
-    await browser.execute((el: HTMLInputElement) => {
-      el.value = "";
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, tplResetInput);
-    await (await browser.$(".vc-settings-close")).click();
-    await browser.$('[data-testid="settings-modal"]').waitForDisplayed({
-      timeout: 2000,
-      reverse: true,
-    });
+    // Reset settings — see helper docstring.
+    await applyDailySettings({ folder: "", template: "" });
   });
 });
