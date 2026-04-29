@@ -15,10 +15,7 @@
 
 <main class="vc-welcome" data-testid="welcome-screen">
   <div class="vc-welcome-card">
-    <h1 class="vc-sr-only">VaultCore</h1>
-    <pre class="vc-welcome-wordmark" aria-hidden="true">{`┌──────────────────────────────────────────────────┐
-│  V A U L T C O R E                               │
-└──────────────────────────────────────────────────┘`}</pre>
+    <h1 class="vc-welcome-heading">VaultCore</h1>
     <p class="vc-welcome-tagline">A faster Markdown workspace for large vaults.</p>
 
     <button
@@ -68,23 +65,12 @@
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   }
-  /* #358 — ASCII wordmark replaces the visible <h1>. The h1 itself is
-     kept in the DOM via .vc-sr-only so screen readers still announce
-     "VaultCore". Font is sized down to 12 px so the 52-col art fits
-     inside the 480 px card with its 32 px horizontal padding (Plan §9
-     risk 3 mitigation: ~7.2 px/glyph × 52 ≈ 374 px). */
-  .vc-welcome-wordmark {
-    margin: 0 0 16px 0;
-    padding: 0;
-    font-family: var(--vc-font-mono);
-    font-size: 12px;
+  .vc-welcome-heading {
+    margin: 0 0 8px 0;
+    font-size: 20px;
+    font-weight: 700;
     line-height: 1.2;
-    color: var(--color-text-muted);
-    white-space: pre;
-    /* Reveal — not silently clip — any overflow if the user's mono
-       fallback renders wider than JetBrains Mono. `overflow-x: auto`
-       surfaces the visual regression instead of swallowing it. */
-    overflow-x: auto;
+    color: var(--color-text);
   }
   .vc-welcome-tagline {
     margin: 0 0 32px 0;

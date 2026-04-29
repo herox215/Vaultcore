@@ -947,15 +947,6 @@
   />
 {/if}
 
-<!-- #358 — permanent ASCII status-bar accent. Lives at the absolute end
-     of the layout (after the modal {#if} blocks) so it is always
-     mounted, never inside a conditional. Decorative; pointer-events:none
-     so it never steals clicks from the editor or the encryption pill. -->
-<footer class="vc-statusbar-accent" aria-hidden="true">
-  <span class="vc-statusbar-rule">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄</span>
-  <span class="vc-statusbar-badge">[VaultCore]</span>
-</footer>
-
 <style>
   .vc-vault-layout {
     display: grid;
@@ -965,45 +956,11 @@
       1fr
       auto
       var(--right-sidebar-width, 0px);
-    /* #358 — leave 18 px clear at the bottom for the permanent
-       statusbar-accent footer so the last editor line never sits under
-       it. The footer's `position: fixed; bottom: 0; height: 18px` is
-       the source of truth; if you change the height, change this too. */
-    height: calc(100vh - 18px);
+    height: 100vh;
     background: var(--color-bg);
     overflow: hidden;
     transition: grid-template-columns 200ms ease;
   }
-
-  /* #358 — htop-style decorative accent. Permanent chrome, never
-     conditional. z-index 10 sits below the encryption pill (z-index 40)
-     so the live-status pill floats visually above the static accent;
-     well below modals (100) and toasts. */
-  .vc-statusbar-accent {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 8px;
-    font-family: var(--vc-font-mono);
-    font-size: 11px;
-    color: var(--color-text-muted);
-    pointer-events: none;
-    z-index: 10;
-    user-select: none;
-    background: var(--color-bg);
-  }
-  .vc-statusbar-rule {
-    flex: 1 1 auto;
-    overflow: hidden;
-    white-space: nowrap;
-    letter-spacing: 0;
-  }
-  .vc-statusbar-badge { flex: 0 0 auto; padding-left: 8px; }
 
   .vc-vault-layout--dragging {
     cursor: col-resize;
