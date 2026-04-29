@@ -211,10 +211,10 @@
     const willExpand = !treeState.expanded.includes(row.relPath);
     if (willExpand) {
       // Optimistically expand the folder — the vault-tree status spinner
-      // above (around line 727) covers the loading indicator while
-      // listDirectory resolves. Persist only once listDirectory resolves —
-      // matches #336 B3 so a failure doesn't stick in `expanded` across
-      // sessions.
+      // (the {#if loading} block above the tree container) covers the
+      // loading indicator while listDirectory resolves. Persist only
+      // once listDirectory resolves — matches #336 B3 so a failure
+      // doesn't stick in `expanded` across sessions.
       const expanded = new Set(treeState.expanded);
       expanded.add(row.relPath);
       treeState = { ...treeState, expanded: Array.from(expanded) };
@@ -719,6 +719,19 @@
 
   <BookmarksPanel />
 
+  <!-- #358 — the loading placeholder is a SIBLING of the tree container,
+       never a child. role="status" inside role="tree" is invalid ARIA
+       (live region won't fire and the tree role is malformed). -->
+  {#if loading}
+    <p
+      class="vc-sidebar-status"
+      role="status"
+      aria-label="Loading vault tree"
+    >
+      <AsciiSpinner /> Loading
+    </p>
+  {/if}
+
   <!-- Tree area (virtualized) -->
   <div
     class="vc-sidebar-tree"
@@ -728,13 +741,9 @@
     onscroll={onScroll}
   >
     {#if loading}
-      <p
-        class="vc-sidebar-status"
-        role="status"
-        aria-label="Loading vault tree"
-      >
-        <AsciiSpinner /> Loading
-      </p>
+      <!-- Loader rendered above; this branch is intentionally empty so
+           the rest of the if/else chain (loadError, empty, populated)
+           keeps its mutual exclusivity. -->
     {:else if loadError}
       <p class="vc-sidebar-status vc-sidebar-status--error">{loadError}</p>
     {:else if flatRows.length === 0}
