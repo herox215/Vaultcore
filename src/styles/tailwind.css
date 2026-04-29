@@ -122,6 +122,21 @@ html, body, #app {
   }
 }
 
+/* #358 — visually-hidden helper for screen-reader-only headings/text.
+   Used where the visible chrome is decorative ASCII (e.g. the welcome
+   wordmark) and the meaningful label still needs to reach AT. */
+.vc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Phase 3 — Sidebar tabs */
 .vc-sidebar-tabs {
   display: flex;
