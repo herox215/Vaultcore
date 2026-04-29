@@ -54,25 +54,30 @@ describe("Encrypted folders (#345)", () => {
   }
 
   async function openFolderContextMenu(name: string) {
-    const row = await findTreeRowByName(name);
-    if (!row) throw new Error(`Folder row "${name}" not found`);
-    // Simulate right-click via rclick on the row.
-    await row.moveTo();
-    // WDIO's keyboard trigger for contextmenu via browser.performActions.
-    await browser.performActions([
-      {
-        type: "pointer",
-        id: "mouse",
-        parameters: { pointerType: "mouse" },
-        actions: [
-          { type: "pointerMove", duration: 0, origin: row },
-          { type: "pointerDown", button: 2 },
-          { type: "pointerUp", button: 2 },
-        ],
-      },
-    ]);
-    await browser.releaseActions();
-    // Wait for the context menu to render.
+    // WebKitWebDriver rejects `pointerMove { origin: <element> }` actions
+    // ("'x' parameter for the action is missing") — fall back to a JS-level
+    // contextmenu dispatch, the same pattern rename-cascade.spec.ts uses.
+    const dispatched = await browser.execute((target: string) => {
+      const nodes = document.querySelectorAll(".vc-tree-name");
+      for (const n of Array.from(nodes)) {
+        if ((n.textContent ?? "").trim() === target) {
+          const row = (n as Element).closest(".vc-tree-row") ?? n.parentElement;
+          if (!row) return false;
+          row.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: 100,
+              clientY: 100,
+              button: 2,
+            }),
+          );
+          return true;
+        }
+      }
+      return false;
+    }, name);
+    if (!dispatched) throw new Error(`Folder row "${name}" not found`);
     const menu = await browser.$(".vc-context-menu");
     await menu.waitForDisplayed({ timeout: 3000 });
     return menu;
@@ -83,8 +88,10 @@ describe("Encrypted folders (#345)", () => {
     const encryptItem = await browser.$('[data-testid="context-encrypt-folder"]');
     await encryptItem.waitForDisplayed({ timeout: 3000 });
     expect(await textOf(encryptItem)).toContain("Encrypt folder");
-    // Close the menu by clicking elsewhere.
-    await browser.$(".vc-tree").click();
+    // Close the menu by pressing Escape — `.vc-tree` was renamed to
+    // `.vc-tree-root` (#253 virtualization), so the original click-to-
+    // dismiss selector no longer matches.
+    await browser.keys("Escape");
   });
 
   it("encrypts a folder through the EncryptFolderModal", async () => {
@@ -185,6 +192,71 @@ describe("Encrypted folders (#345)", () => {
         return await icon.isExisting();
       },
       { timeout: 10_000, timeoutMsg: "locked icon never reappeared after manual lock" },
+    );
+  });
+
+  it("Lock all now — Settings button locks every unlocked folder", async () => {
+    // Re-unlock first so we have something for the button to act on; the
+    // previous test left the folder locked.
+    const row = await findTreeRowByName(folderName);
+    if (!row) throw new Error("locked row missing");
+    await row.click();
+    const promptInput = await browser.$('[data-testid="password-prompt-input"]');
+    await promptInput.waitForDisplayed({ timeout: 3000 });
+    await promptInput.setValue(password);
+    await browser.$('[data-testid="password-prompt-confirm"]').click();
+    await browser.$('[data-testid="password-prompt"]').waitForDisplayed({
+      reverse: true,
+      timeout: 10_000,
+    });
+    await browser.waitUntil(
+      async () => {
+        const r = await findTreeRowByName(folderName);
+        if (!r) return false;
+        return (await r.$(".vc-tree-icon--unlocked").isExisting());
+      },
+      { timeout: 10_000, timeoutMsg: "folder never returned to unlocked" },
+    );
+
+    // Open settings → Lock all now → folder flips back to locked.
+    const settingsBtn = await browser.$('button[aria-label="Einstellungen"]');
+    await settingsBtn.click();
+    await browser.$('[data-testid="settings-modal"]').waitForDisplayed({ timeout: 3000 });
+
+    const lockAll = await browser.$('[data-testid="settings-lock-all"]');
+    await lockAll.waitForDisplayed({ timeout: 3000 });
+    await lockAll.click();
+
+    // Toast confirms the IPC has returned. The settings list of encrypted
+    // folders shows the locked state once the registry update propagates,
+    // so we wait on the toast (which fires on success) instead of racing
+    // a click-then-close. Without this assertion, the test could close
+    // the modal before lock_all_folders completes.
+    await browser.waitUntil(
+      async () => {
+        const toasts = await browser.$$('[data-testid="toast"]');
+        for (const t of toasts) {
+          if ((await textOf(t)).toLowerCase().includes("locked")) return true;
+        }
+        return false;
+      },
+      { timeout: 5000, timeoutMsg: "lock-all toast never appeared — IPC may not have completed" },
+    );
+
+    const close = await browser.$(".vc-settings-close");
+    if (await close.isDisplayed().catch(() => false)) await close.click();
+    await browser.$('[data-testid="settings-modal"]').waitForDisplayed({
+      reverse: true,
+      timeout: 3000,
+    });
+
+    await browser.waitUntil(
+      async () => {
+        const r = await findTreeRowByName(folderName);
+        if (!r) return false;
+        return (await r.$(".vc-tree-icon--locked").isExisting());
+      },
+      { timeout: 10_000, timeoutMsg: "Lock all now did not relock the folder" },
     );
   });
 });

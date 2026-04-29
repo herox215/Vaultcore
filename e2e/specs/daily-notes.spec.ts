@@ -32,21 +32,49 @@ describe("Daily notes", () => {
     return `${y}-${m}-${d}.md`;
   }
 
-  async function setDailyFormat(format: string): Promise<void> {
+  /**
+   * Apply (folder, format, template) to the Daily Notes settings panel,
+   * then close the modal. Any field passed as `undefined` is skipped;
+   * use `""` to explicitly clear a setting. `settingsStore` persists to
+   * localStorage which survives across spec sessions, so callers that
+   * rely on a default state should pass `""` for the settings they care
+   * about — leaving them undefined would inherit whatever the previous
+   * session left behind.
+   */
+  async function applyDailySettings(opts: {
+    folder?: string;
+    format?: string;
+    template?: string;
+  }): Promise<void> {
     const btn = await browser.$('button[aria-label="Einstellungen"]');
     await btn.click();
-    const input = await browser.$('[data-testid="settings-daily-format"]');
-    await input.waitForDisplayed({ timeout: 3000 });
-    await browser.execute((el: HTMLInputElement, v: string) => {
-      el.value = v;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, input, format);
-    const close = await browser.$(".vc-settings-close");
-    await close.click();
+    await browser.$('[data-testid="settings-daily-format"]').waitForDisplayed({
+      timeout: 3000,
+    });
+    const setField = async (selector: string, value: string): Promise<void> => {
+      const el = await browser.$(selector);
+      await browser.execute((node: HTMLInputElement, v: string) => {
+        node.value = v;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+      }, el, value);
+    };
+    if (opts.format !== undefined)
+      await setField('[data-testid="settings-daily-format"]', opts.format);
+    if (opts.folder !== undefined)
+      await setField('[data-testid="settings-daily-folder"]', opts.folder);
+    if (opts.template !== undefined)
+      await setField('[data-testid="settings-daily-template"]', opts.template);
+    await (await browser.$(".vc-settings-close")).click();
     await browser.$('[data-testid="settings-modal"]').waitForDisplayed({
       timeout: 2000,
       reverse: true,
     });
+  }
+
+  async function setDailyFormat(format: string): Promise<void> {
+    // The default (idempotent) reset path: format set explicitly, folder
+    // + template cleared so prior-session pollution can't leak in.
+    await applyDailySettings({ format, folder: "", template: "" });
   }
 
   it("creates and opens today's note on Ctrl+Shift+D", async () => {
@@ -93,5 +121,47 @@ describe("Daily notes", () => {
     const labels = await textsOf(await browser.$$(".vc-tab-label"));
     const count = labels.filter((l) => l === expected).length;
     expect(count).toBe(1);
+  });
+
+  it("seeds new daily notes from the configured template", async () => {
+    // Drop a template file with a stable marker so the assertion doesn't
+    // need to depend on date interpolation. The daily-notes flow reads
+    // the template via `readFile` then writes it into the new note —
+    // template tokens are not currently expanded by this code path.
+    const templateRelPath = "Templates/Daily Template.md";
+    const templateContent = "# Daily template\n\nMarker: e2e-daily-template-seed\n";
+    fs.mkdirSync(path.join(vault.path, "Templates"), { recursive: true });
+    fs.writeFileSync(path.join(vault.path, templateRelPath), templateContent, "utf-8");
+
+    // Configure a NEW daily folder so a fresh file path is generated —
+    // earlier tests already created today's note at the vault root.
+    await applyDailySettings({ folder: "Daily-Tpl", template: templateRelPath });
+
+    await browser.keys(["Control", "Shift", "d"]);
+
+    const expected = todayFilename();
+    const newAbs = path.join(vault.path, "Daily-Tpl", expected);
+
+    // Single wait covering both file existence AND seeded content. Two
+    // separate waits opened a window where the file could exist but be
+    // empty (write not yet flushed) and the second wait would then time
+    // out instead of capturing the eventual fill.
+    await browser.waitUntil(
+      () => {
+        try {
+          const content = fs.readFileSync(newAbs, "utf-8");
+          return Promise.resolve(content.includes("e2e-daily-template-seed"));
+        } catch {
+          return Promise.resolve(false);
+        }
+      },
+      { timeout: 8000, timeoutMsg: `daily note ${newAbs} never carried the template marker` },
+    );
+
+    // Reset every field this test touched (incl. format, since the
+    // helper docstring says undefined fields are skipped — leaving
+    // `dailyNotesDateFormat` at "YYYY-MM-DD" would change the path the
+    // *next* spec session computes if test order ever shifts).
+    await applyDailySettings({ folder: "", template: "", format: "" });
   });
 });

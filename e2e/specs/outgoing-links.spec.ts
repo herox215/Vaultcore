@@ -100,17 +100,108 @@ describe("Outgoing Links panel", () => {
       { timeout: 3000 },
     );
 
-    const rows = await browser.$$(".vc-outlink-row");
-    const texts = await textsOf(rows);
-    const idx = texts.findIndex((t) => t.includes("Daily Log"));
-    if (idx < 0) throw new Error("Daily Log outlink not found");
-    await rows[idx]!.click();
+    // Find + click in one execute so the index isn't reused against a
+    // separate $$() result (the panel re-renders on data changes; an
+    // index from one tick may not point at the same row in the next).
+    const clicked = await browser.execute((needle: string) => {
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(".vc-outlink-row"));
+      const match = rows.find((r) => (r.textContent ?? "").includes(needle));
+      if (!match) return false;
+      match.click();
+      return true;
+    }, "Daily Log");
+    expect(clicked).toBe(true);
 
-    // Active tab label switches to "Daily Log".
-    const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
+    // Re-query the active tab label each iteration; the `.vc-tab--active`
+    // element is replaced on every tab transition.
     await browser.waitUntil(
-      async () => ((await activeLabel.getProperty("textContent")) as string).includes("Daily Log"),
+      async () => {
+        const labels = await textsOf(await browser.$$(".vc-tab--active .vc-tab-label"));
+        return labels.some((l) => l.includes("Daily Log"));
+      },
       { timeout: 3000, timeoutMsg: "Active tab never switched to Daily Log" },
+    );
+  });
+
+  it("creates the missing note at vault root when an unresolved outlink is clicked", async () => {
+    // Wiki Links.md only references [[Welcome]], which exists. Edit the
+    // doc to add a brand-new dangling target so the outgoing panel renders
+    // an unresolved row we can click.
+    await openTreeFile("Wiki Links.md");
+    await browser.waitUntil(
+      async () => {
+        const els = await browser.$$(".cm-content");
+        for (const el of els) if (await el.isDisplayed()) return true;
+        return false;
+      },
+      { timeout: 5000 },
+    );
+
+    const dangling = `Brand New Note ${Date.now()}`;
+    // Type the link via the __e2e__ hook so the doc-change goes through
+    // the same CM6 transaction path the user would; raw `view.dispatch`
+    // requires reaching into CM6 internals that aren't exposed on
+    // `.cm-editor`.
+    await browser.executeAsync(
+      (target: string, done: () => void) => {
+        window.__e2e__!.typeInActiveEditor(`\n[[${target}]]\n`).then(() => done());
+      },
+      dangling,
+    );
+
+    // The right sidebar may have been hidden by an earlier spec — without
+    // ensuring it's visible, `activateOutgoingSubtab()` would target a
+    // tab button that isn't in the DOM and the test would time out at
+    // the unresolved-row wait further down.
+    await ensureRightSidebar();
+    await activateOutgoingSubtab();
+    await browser.waitUntil(
+      async () => {
+        const unresolved = await browser.$$(".vc-outlink-row--unresolved");
+        for (const el of unresolved) {
+          if ((await textOf(el)).includes(dangling)) return true;
+        }
+        return false;
+      },
+      { timeout: 5000, timeoutMsg: "unresolved row never appeared for the new target" },
+    );
+
+    // Click the unresolved row → click-to-create at vault root. Surface a
+    // hard error if the row vanished between the wait above and the click
+    // — a silent `?.click()` would let the test press on with stale
+    // assumptions and timeout 5 s later with an unhelpful message.
+    const rowClicked = await browser.execute((target: string) => {
+      const rows = Array.from(
+        document.querySelectorAll<HTMLElement>(".vc-outlink-row--unresolved"),
+      );
+      const match = rows.find((r) => (r.textContent ?? "").includes(target));
+      if (!match) return false;
+      match.click();
+      return true;
+    }, dangling);
+    expect(rowClicked).toBe(true);
+
+    // The handler does `createFile` → `tabStore.openTab` → tree refresh.
+    // All three resolve asynchronously; assert each in the order the user
+    // would observe them. Accept any filename that contains the dangling
+    // stem so the test doesn't ossify the create-at-root extension policy
+    // beyond the one assertion that matters: a NEW file exists.
+    await browser.waitUntil(
+      async () => {
+        const names = await textsOf(await browser.$$(".vc-tree-name"));
+        return names.some((n) => n.includes(dangling));
+      },
+      { timeout: 5000, timeoutMsg: "newly-created note never appeared in tree" },
+    );
+    await browser.waitUntil(
+      async () => {
+        // Re-query each iteration — `.vc-tab--active` re-renders on tab
+        // switches, so the cached element handle from a previous tick
+        // would be stale.
+        const labels = await textsOf(await browser.$$(".vc-tab--active .vc-tab-label"));
+        return labels.some((l) => l.includes(dangling));
+      },
+      { timeout: 5000, timeoutMsg: "active tab never switched to the newly-created note" },
     );
   });
 });

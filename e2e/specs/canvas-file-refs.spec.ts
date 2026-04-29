@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createTestVault, type TestVault } from "../helpers/vault.js";
 import { openVaultInApp } from "../helpers/open-vault.js";
-import { textOf } from "../helpers/text.js";
+import { textOf, textsOf } from "../helpers/text.js";
 
 /**
  * E2E coverage for #162 — file-reference nodes on canvas:
@@ -80,9 +80,13 @@ describe("Canvas file-reference nodes (#162)", () => {
   }
 
   async function waitForActiveTab(label: string, timeout = 5000) {
-    const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
+    // Re-query each iteration: `.vc-tab--active` is replaced on every tab
+    // switch, so a handle captured before the transition becomes stale.
     await browser.waitUntil(
-      async () => ((await activeLabel.getProperty("textContent")) as string).includes(label),
+      async () => {
+        const labels = await textsOf(await browser.$$(".vc-tab--active .vc-tab-label"));
+        return labels.some((l) => l.includes(label));
+      },
       { timeout, timeoutMsg: `active tab never switched to "${label}"` },
     );
   }
@@ -114,23 +118,34 @@ describe("Canvas file-reference nodes (#162)", () => {
     await openTreeFile("Linked.canvas");
     await waitForActiveTab("Linked.canvas");
 
+    // #364: canvas text nodes now route through the shared markdown
+    // renderer, so wiki-links carry the same `.vc-reading-wikilink` class
+    // they do in reading mode — not the legacy `.vc-canvas-link*` classes
+    // (which still have CSS but are no longer emitted).
     await browser.waitUntil(
       async () => {
-        const els = await browser.$$(".vc-canvas-link");
+        const els = await browser.$$(".vc-reading-wikilink");
         return els.length >= 1;
       },
-      { timeout: 5000, timeoutMsg: "no .vc-canvas-link element rendered for [[Welcome]]" },
+      { timeout: 5000, timeoutMsg: "no .vc-reading-wikilink element rendered for [[Welcome]]" },
     );
 
-    // The sidebar tree fixture has `Welcome.md`, so the link should be resolved.
-    const resolved = await browser.$$(".vc-canvas-link-resolved");
+    const resolved = await browser.$$(".vc-reading-wikilink--resolved");
     expect(resolved.length).toBeGreaterThanOrEqual(1);
   });
 
   it("clicking the wiki-link opens the target note in a new tab", async () => {
-    // Still on Linked.canvas from the previous test.
-    const link = await browser.$(".vc-canvas-link-resolved");
-    await link.click();
+    // Still on Linked.canvas from the previous test. Single `.click()`
+    // — firing both `mousedown` and `click` would invoke the canvas
+    // delegation handler twice (the listener catches either event) and
+    // could open the target tab twice or trip dedup logic.
+    const clicked = await browser.execute(() => {
+      const link = document.querySelector<HTMLElement>(".vc-reading-wikilink--resolved");
+      if (!link) return false;
+      link.click();
+      return true;
+    });
+    expect(clicked).toBe(true);
 
     await waitForActiveTab("Welcome.md");
     const editor = await browser.$(".cm-content");
