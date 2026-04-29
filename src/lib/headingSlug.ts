@@ -15,10 +15,16 @@
 // We do NOT collapse adjacent dashes from dropped characters because Rust
 // doesn't either — only whitespace creates dashes.
 
-/** Re-exported alphanumeric test that stays in sync with Rust's
- * `char::is_alphanumeric`. JS `\p{L}\p{N}` matches the same Unicode
- * categories. */
-const ALNUM_RE = /[\p{L}\p{N}]/u;
+/** Alphanumeric test that stays in sync with Rust's `char::is_alphanumeric`.
+ *
+ * `is_alphanumeric` is `is_alphabetic || is_numeric`, where `is_alphabetic`
+ * uses the Unicode **Alphabetic** property — a superset of `General_Category
+ * = Letter` that also includes combining marks with `Alphabetic = true`
+ * (e.g. Devanagari vowel signs U+093E / U+0902, Arabic fathatan). The
+ * naive `\p{L}\p{N}` regex misses those, so a heading written in Hindi
+ * with vowel diacritics would slug differently on each side. `\p{Alphabetic}`
+ * matches Rust exactly. */
+const ALNUM_RE = /[\p{Alphabetic}\p{N}]/u;
 
 export function slugify(text: string): string {
   let out = "";

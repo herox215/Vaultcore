@@ -13,6 +13,9 @@
     { "name": "unicode mixed", "input": "Düsseldorf 2026 — 一月", "expected": "düsseldorf-2026-一月" },
     { "name": "drops leading and trailing punctuation", "input": "  ! Hello !  ", "expected": "hello" },
     { "name": "empty", "input": "", "expected": "" },
-    { "name": "punctuation only", "input": "!!! ??? ...", "expected": "" }
+    { "name": "punctuation only", "input": "!!! ??? ...", "expected": "" },
+    { "name": "devanagari vowel signs survive, virama drops (Mn non-Alphabetic)", "input": "हिन्दी पाठ", "expected": "हिनदी-पाठ" },
+    { "name": "arabic damma diacritic survives (Mn Alphabetic)", "input": "النصُ العربي", "expected": "النصُ-العربي" },
+    { "name": "combining marks survive", "input": "café", "expected": "café" }
   ]
 }

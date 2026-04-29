@@ -68,6 +68,10 @@ const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
 /**
  * Look up the anchor entry the embed regex captured.
  *
+ * `headingText` is the raw text written between `#` and the next pipe / end
+ * — NOT a pre-slugified value. `resolveAnchor` slugifies it internally so
+ * `![[Note#Multi Word Heading]]` matches the index-time slug.
+ *
  * Returns:
  *   - `null`      — no anchor was requested (whole-note embed).
  *   - `"missing"` — anchor was requested but doesn't resolve. Caller renders
@@ -77,15 +81,15 @@ const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
  */
 function resolveEmbedAnchor(
   relPath: string,
-  headingSlug: string | undefined,
+  headingText: string | undefined,
   blockId: string | undefined,
 ): AnchorEntry | "missing" | null {
   if (blockId !== undefined) {
     const found = resolveAnchor(relPath, { kind: "block", value: blockId.toLowerCase() });
     return found ?? "missing";
   }
-  if (headingSlug !== undefined) {
-    const found = resolveAnchor(relPath, { kind: "heading", value: headingSlug });
+  if (headingText !== undefined) {
+    const found = resolveAnchor(relPath, { kind: "heading", value: headingText });
     return found ?? "missing";
   }
   return null;
@@ -642,7 +646,7 @@ function buildDecorations(view: EditorView): DecorationSet {
     if (head >= from && head <= to) continue;
 
     const target = rawTarget.trim();
-    const headingSlug = m[2];
+    const headingText = m[2];
     const blockId = m[3];
     const sizePx = parseSizePx(m[4]);
 
@@ -677,12 +681,12 @@ function buildDecorations(view: EditorView): DecorationSet {
             requestLoadNote(rel);
             deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, "…") });
           } else {
-            const anchorEntry = resolveEmbedAnchor(rel, headingSlug, blockId);
+            const anchorEntry = resolveEmbedAnchor(rel, headingText, blockId);
             if (anchorEntry === "missing") {
               const label = blockId
                 ? `${target}^${blockId}`
-                : headingSlug
-                  ? `${target}#${headingSlug}`
+                : headingText
+                  ? `${target}#${headingText}`
                   : target;
               deco = Decoration.replace({ widget: new BrokenEmbedWidget(label) });
             } else if (anchorEntry !== null) {
