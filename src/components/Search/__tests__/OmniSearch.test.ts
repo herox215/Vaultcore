@@ -8,7 +8,7 @@
 //   - the status line under the input reflects the rebuild lifecycle
 //   - tag-prefill opens in content mode with the query pre-run
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
 
