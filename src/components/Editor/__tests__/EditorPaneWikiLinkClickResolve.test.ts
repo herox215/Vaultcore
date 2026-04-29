@@ -17,10 +17,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/svelte";
 import { tick } from "svelte";
 
-const { readFile, createFile, getResolvedLinks, getResolvedAttachments } = vi.hoisted(() => ({
+const { readFile, createFile, getResolvedLinks, getResolvedAnchors, getResolvedAttachments } = vi.hoisted(() => ({
   readFile: vi.fn().mockResolvedValue(""),
   createFile: vi.fn().mockResolvedValue(""),
   getResolvedLinks: vi.fn().mockResolvedValue(new Map()),
+  getResolvedAnchors: vi.fn().mockResolvedValue(new Map()),
   getResolvedAttachments: vi.fn().mockResolvedValue(new Map()),
 }));
 
@@ -31,6 +32,7 @@ vi.mock("../../../ipc/commands", () => ({
   getFileHash: vi.fn().mockResolvedValue("0".repeat(64)),
   mergeExternalChange: vi.fn().mockResolvedValue({ outcome: "clean", merged_content: "" }),
   getResolvedLinks,
+  getResolvedAnchors,
   getResolvedAttachments,
   getLinkGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
   getLocalGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
@@ -73,7 +75,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { tabStore } from "../../../store/tabStore";
 import { vaultStore } from "../../../store/vaultStore";
-import { setResolvedLinks } from "../wikiLink";
+import { setResolvedAnchors, setResolvedLinks } from "../wikiLink";
 import EditorPane from "../EditorPane.svelte";
 
 async function flushAsync(): Promise<void> {
@@ -89,8 +91,10 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     vaultStore.reset();
     createFile.mockReset().mockResolvedValue("");
     getResolvedLinks.mockReset().mockResolvedValue(new Map());
+    getResolvedAnchors.mockReset().mockResolvedValue(new Map());
     getResolvedAttachments.mockReset().mockResolvedValue(new Map());
     setResolvedLinks(new Map());
+    setResolvedAnchors(new Map());
   });
 
   afterEach(() => {
@@ -134,7 +138,7 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     cm.dispatchEvent(
       new CustomEvent("wiki-link-click", {
         bubbles: true,
-        detail: { target: "Untitled", resolved: false },
+        detail: { target: "Untitled", resolution: "unresolved", anchor: null },
       }),
     );
     await flushAsync();
@@ -165,7 +169,7 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     cm.dispatchEvent(
       new CustomEvent("wiki-link-click", {
         bubbles: true,
-        detail: { target: "DeletedNote", resolved: true },
+        detail: { target: "DeletedNote", resolution: "resolved", anchor: null },
       }),
     );
     await flushAsync();
@@ -191,11 +195,94 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     cm.dispatchEvent(
       new CustomEvent("wiki-link-click", {
         bubbles: true,
-        detail: { target: "Ghost", resolved: false },
+        detail: { target: "Ghost", resolution: "unresolved", anchor: null },
       }),
     );
     await flushAsync();
 
     expect(createFile).toHaveBeenCalledWith("/vault", "Ghost.md");
+  });
+
+  // ── #62: anchor navigation ─────────────────────────────────────────────
+
+  it("scrolls to the resolved anchor range after opening the target tab", async () => {
+    vaultStore.setReady({
+      currentPath: "/vault",
+      fileList: ["host.md", "target.md"],
+      fileCount: 2,
+    });
+    const cm = await mountMarkdownTabAndGetCm();
+
+    setResolvedLinks(new Map([["target", "target.md"]]));
+    setResolvedAnchors(
+      new Map([
+        [
+          "target.md",
+          {
+            blocks: [
+              { id: "para1", byteStart: 0, byteEnd: 12, jsStart: 100, jsEnd: 130 },
+            ],
+            headings: [],
+          },
+        ],
+      ]),
+    );
+
+    const { scrollStore } = await import("../../../store/scrollStore");
+    const requestRangeSpy = vi.spyOn(scrollStore, "requestScrollToRange");
+    const openTabSpy = vi.spyOn(tabStore, "openTab");
+
+    cm.dispatchEvent(
+      new CustomEvent("wiki-link-click", {
+        bubbles: true,
+        detail: {
+          target: "target",
+          resolution: "resolved",
+          anchor: { kind: "block", value: "para1" },
+        },
+      }),
+    );
+    await flushAsync();
+
+    expect(openTabSpy).toHaveBeenCalledWith("/vault/target.md");
+    expect(requestRangeSpy).toHaveBeenCalledWith("/vault/target.md", 100, 130);
+  });
+
+  it("opens the tab and warns via toast when the anchor is missing", async () => {
+    vaultStore.setReady({
+      currentPath: "/vault",
+      fileList: ["host.md", "target.md"],
+      fileCount: 2,
+    });
+    const cm = await mountMarkdownTabAndGetCm();
+
+    setResolvedLinks(new Map([["target", "target.md"]]));
+    setResolvedAnchors(
+      new Map([
+        ["target.md", { blocks: [], headings: [] }],
+      ]),
+    );
+
+    const { toastStore } = await import("../../../store/toastStore");
+    const toastSpy = vi.spyOn(toastStore, "push");
+    const openTabSpy = vi.spyOn(tabStore, "openTab");
+
+    cm.dispatchEvent(
+      new CustomEvent("wiki-link-click", {
+        bubbles: true,
+        detail: {
+          target: "target",
+          resolution: "anchor-missing",
+          anchor: { kind: "block", value: "missing" },
+        },
+      }),
+    );
+    await flushAsync();
+
+    expect(openTabSpy).toHaveBeenCalledWith("/vault/target.md");
+    expect(toastSpy).toHaveBeenCalled();
+    const toastArg = toastSpy.mock.calls[0]?.[0] as { variant: string; message: string };
+    expect(toastArg.variant).toBe("warning");
+    expect(toastArg.message).toContain("^missing");
   });
 });

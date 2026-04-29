@@ -1,0 +1,21 @@
+{
+  "_description": "Cross-language parity fixture for the heading-slug algorithm (#62). Both src-tauri/src/indexer/anchors.rs::slugify and src/lib/headingSlug.ts::slugify MUST produce the same output for every case. The frontend slugifies a heading-ref's `value` at click time; the Rust side slugifies at index time. Drift produces silently-broken anchor navigation for every multi-word heading.",
+  "cases": [
+    { "name": "ascii basic", "input": "Section", "expected": "section" },
+    { "name": "multi-word", "input": "Multi Word Heading", "expected": "multi-word-heading" },
+    { "name": "trim outer dashes", "input": "---Trim---", "expected": "trim" },
+    { "name": "collapse repeated whitespace", "input": "multi   space", "expected": "multi-space" },
+    { "name": "drop punctuation", "input": "Hello, World!", "expected": "hello-world" },
+    { "name": "strip markdown emphasis", "input": "**Bold** heading", "expected": "bold-heading" },
+    { "name": "preserves underscore", "input": "with_under_score", "expected": "with_under_score" },
+    { "name": "preserves dash", "input": "kebab-case", "expected": "kebab-case" },
+    { "name": "unicode preserves non-ascii letters", "input": "Düsseldorf", "expected": "düsseldorf" },
+    { "name": "unicode mixed", "input": "Düsseldorf 2026 — 一月", "expected": "düsseldorf-2026-一月" },
+    { "name": "drops leading and trailing punctuation", "input": "  ! Hello !  ", "expected": "hello" },
+    { "name": "empty", "input": "", "expected": "" },
+    { "name": "punctuation only", "input": "!!! ??? ...", "expected": "" },
+    { "name": "devanagari vowel signs survive, virama drops (Mn non-Alphabetic)", "input": "हिन्दी पाठ", "expected": "हिनदी-पाठ" },
+    { "name": "arabic damma diacritic survives (Mn Alphabetic)", "input": "النصُ العربي", "expected": "النصُ-العربي" },
+    { "name": "combining marks survive", "input": "café", "expected": "café" }
+  ]
+}

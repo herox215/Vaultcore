@@ -164,15 +164,18 @@ html, body, #app {
   animation: vc-spin 1s linear infinite;
 }
 
-/* Phase 3 — Flash highlight for scroll-to-match */
+/* Phase 3 — Flash highlight for scroll-to-match.
+ * Only the background fades — fading `opacity` would also fade the text
+ * itself, making the user briefly stare at an invisible block before it
+ * pops back. Background-only keeps the surrounding paragraph readable
+ * the entire time. */
 .vc-flash-highlight {
   background: #FEF9C3;
-  transition: background 2500ms ease-out, opacity 2500ms ease-out;
+  transition: background 2500ms ease-out;
   border-radius: 2px;
 }
 .vc-flash-highlight.vc-flash-done {
   background: transparent;
-  opacity: 0;
 }
 
 /* Phase 4: Wiki-link decoration in CM6 editor */
@@ -191,6 +194,20 @@ html, body, #app {
 }
 .cm-wikilink-unresolved:hover {
   text-decoration: underline;
+}
+/* #62: note exists but the anchor (^id / #H) does not. Vitruvius briefed
+ * this third state with #92400E light-mode (≈7:1 vs surface white,
+ * passes WCAG AA) and the existing `--color-warning` dark-mode value. */
+.cm-wikilink-unresolved-anchor {
+  color: #92400E;
+  cursor: pointer;
+  text-decoration: none;
+}
+.cm-wikilink-unresolved-anchor:hover {
+  text-decoration: underline;
+}
+:root.dark .cm-wikilink-unresolved-anchor {
+  color: var(--color-warning, #FCD34D);
 }
 
 /* Phase 4 Plan 03: Wiki-link autocomplete popup styling */

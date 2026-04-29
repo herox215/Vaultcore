@@ -15,7 +15,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { editorStore } from "../../store/editorStore";
   import { activeViewStore } from "../../store/activeViewStore";
-  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
+  import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAnchors, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { openFileAsTab } from "../../lib/openFileAsTab";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
@@ -35,7 +35,14 @@
   import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { tagsStore } from "../../store/tagsStore";
   import { tabReloadStore } from "../../store/tabReloadStore";
-  import { setResolvedLinks, resolveTarget, refreshWikiLinks } from "./wikiLink";
+  import {
+    setResolvedAnchors,
+    setResolvedLinks,
+    resolveAnchor,
+    resolveTarget,
+    refreshWikiLinks,
+    type WikiLinkClickDetail,
+  } from "./wikiLink";
   import { setResolvedAttachments } from "./embeds";
   import { decideExternalModifyAction, sha256Hex } from "./externalChangeHandler";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
@@ -276,11 +283,13 @@
    */
   async function reloadResolvedLinks(): Promise<void> {
     try {
-      const [linksMap, attachmentsMap] = await Promise.all([
+      const [linksMap, anchorsMap, attachmentsMap] = await Promise.all([
         getResolvedLinks(),
+        getResolvedAnchors(),
         getResolvedAttachments(),
       ]);
       setResolvedLinks(linksMap);
+      setResolvedAnchors(anchorsMap);
       setResolvedAttachments(attachmentsMap);
       for (const view of viewMap.values()) {
         refreshWikiLinks(view);
@@ -288,6 +297,7 @@
     } catch {
       // Soft-fail: all links/embeds render as unresolved until next reload
       setResolvedLinks(new Map());
+      setResolvedAnchors(new Map());
       setResolvedAttachments(new Map());
     }
     // #309 — bump readyToken AFTER the map has been swapped in (success or
@@ -300,62 +310,84 @@
 
   /**
    * Handle wiki-link-click CustomEvent dispatched by the CM6 wikiLink plugin.
-   * Resolved clicks open the target in a tab (zero IPC at click time).
-   * Unresolved clicks create the note, open it, and refresh the resolution map.
+   *
+   * Three resolution paths (#62):
+   *   - "resolved"       — open the target tab; if an anchor is attached,
+   *                        scroll to the anchor's `[jsStart, jsEnd)` range.
+   *   - "anchor-missing" — open the target tab and surface a warning toast;
+   *                        do not scroll (no usable target range).
+   *   - "unresolved"     — click-to-create at vault root, same as before.
+   *
+   * Even on "resolved" we re-check the live map (#309) so a stale decoration
+   * doesn't route a now-broken link into the wrong branch.
    */
   function handleWikiLinkClick(event: Event): void {
-    const detail = (event as CustomEvent).detail as { target: string; resolved: boolean };
+    const detail = (event as CustomEvent<WikiLinkClickDetail>).detail;
     const vault = get(vaultStore).currentPath;
     if (!vault) return;
 
-    // #309 — the decoration's `data-wiki-resolved` attribute reflects the
-    // resolved-links map at decoration-build time. When a file is created or
-    // moved between render and click (e.g. template re-renders on vaultStore
-    // tick before the async resolvedLinks refetch lands), the attribute can
-    // be stale-`false` while the live map now resolves the target. Re-check
-    // synchronously here so a stale decoration never routes into the
-    // create-at-root fallback. Zero IPC — `resolveTarget` is a `Map.get`.
+    // #309 kept verbatim: re-check the live map so a stale decoration
+    // (`resolved` baked in at decoration time, file came/went between then
+    // and click) doesn't route the wrong way.
     const liveRelPath = resolveTarget(detail.target);
 
-    if (detail.resolved || liveRelPath !== null) {
-      if (!liveRelPath) {
-        // Map out of sync (rare: file deleted between decoration and click)
-        void reloadResolvedLinks();
-        return;
-      }
+    if (liveRelPath) {
       const relPath = liveRelPath;
       const absPath = `${vault}/${relPath}`;
-      // #147 — `.canvas` targets need the canvas viewer; plain notes keep
-      // the synchronous `openTab` fast path so markdown clicks stay on the
-      // "zero IPC" path.
       if (relPath.endsWith(".canvas")) {
         tabStore.openFileTab(absPath, "canvas");
-      } else {
-        tabStore.openTab(absPath);
+        return;
       }
-    } else {
-      // LINK-04, D-08: click-to-create at vault root
-      const filename = detail.target.endsWith(".md")
-        ? detail.target
-        : `${detail.target}.md`;
-      const vaultPath = vault as string;
-      createFile(vaultPath, filename)
-        .then(async (newAbsPath) => {
-          tabStore.openTab(newAbsPath);
-          // Refresh map so the new file now resolves in future decorations
-          await reloadResolvedLinks();
-          // Signal sidebar to re-fetch its tree — the watcher suppresses
-          // backend-initiated writes via write_ignore, so the tree won't
-          // otherwise learn that this file exists.
-          treeRefreshStore.requestRefresh();
-        })
-        .catch(() =>
+      tabStore.openTab(absPath);
+      if (detail.anchor) {
+        // #62: prefer a fresh anchor lookup over the decoration-time
+        // `resolution` so an anchor newly indexed between render and click
+        // navigates correctly instead of toasting "not found".
+        const entry = resolveAnchor(relPath, detail.anchor);
+        if (entry) {
+          // Same store the OmniSearch flow uses — pane-agnostic routing keeps
+          // anchor scrolls working when the target tab opens in the other
+          // pane. Range may also fire before the view is mounted; the
+          // subscriber clamps to doc length and the request stays pending
+          // until consumed.
+          scrollStore.requestScrollToRange(absPath, entry.jsStart, entry.jsEnd);
+        } else {
+          const anchorLabel =
+            detail.anchor.kind === "block" ? `^${detail.anchor.value}` : `#${detail.anchor.value}`;
           toastStore.push({
-            variant: "error",
-            message: "Notiz konnte nicht erstellt werden.",
-          })
-        );
+            variant: "warning",
+            message: `Anker ${anchorLabel} in ${relPath} nicht gefunden`,
+          });
+        }
+      }
+      return;
     }
+
+    // No live entry. If the decoration thought the target resolved (or had
+    // an anchor on a now-missing note), short-circuit into a reload — the
+    // map is stale, not the user's intent.
+    if (detail.resolution === "resolved" || detail.resolution === "anchor-missing") {
+      void reloadResolvedLinks();
+      return;
+    }
+
+    // Truly unresolved — click-to-create at vault root.
+    const filename = detail.target.endsWith(".md")
+      ? detail.target
+      : `${detail.target}.md`;
+    const vaultPath = vault as string;
+    createFile(vaultPath, filename)
+      .then(async (newAbsPath) => {
+        tabStore.openTab(newAbsPath);
+        await reloadResolvedLinks();
+        treeRefreshStore.requestRefresh();
+      })
+      .catch(() =>
+        toastStore.push({
+          variant: "error",
+          message: "Notiz konnte nicht erstellt werden.",
+        })
+      );
   }
 
   // Track vault open transitions to reload the resolution map
@@ -418,16 +450,25 @@
   });
 
   // Subscribe to scrollStore — execute scroll-to-match when a request targets a file in this pane.
-  // Uses doc.toString().indexOf() to find the first occurrence (no @codemirror/search dep needed).
+  // Two paths: an explicit `range` (anchor navigation #62) wins; otherwise
+  // fall back to the legacy string search OmniSearch uses.
   const unsubScroll = scrollStore.subscribe((state) => {
     if (!state.pending) return;
-    const { filePath, searchText } = state.pending;
-    // Find which tab in this pane has this file
+    const { filePath, searchText, range } = state.pending;
     const tab = allTabs.find((t) => t.filePath === filePath && paneTabIds.includes(t.id));
     if (!tab) return;
     const view = viewMap.get(tab.id);
     if (!view) return;
-    // Find first occurrence of searchText using plain string search (case-insensitive)
+    if (range) {
+      // Clamp to current document length — the anchor index can lag a hot
+      // edit by one save cycle, and a stale range past EOF would crash CM6.
+      const docLen = view.state.doc.length;
+      const from = Math.min(range.from, docLen);
+      const to = Math.min(range.to, docLen);
+      if (from < to) scrollToMatch(view, from, to);
+      scrollStore.clearPending();
+      return;
+    }
     const docText = view.state.doc.toString();
     const lowerDoc = docText.toLowerCase();
     const lowerSearch = searchText.toLowerCase();
@@ -784,6 +825,23 @@
     // mutation can't re-trigger the mount-lifecycle $effect while this
     // mount is still in-flight (issue #41).
     tabStore.setLastSavedContent(tabId, content);
+
+    // #62: an anchor click that opened this tab via `tabStore.openTab` will
+    // have queued a `scrollStore.requestScrollToRange` BEFORE the view
+    // existed. The scrollStore subscriber only fires on store changes and
+    // bails when the view isn't in `viewMap`, so without this peek the
+    // request stays pending forever. Consume it now that the view is
+    // ready and the file path matches.
+    {
+      const pending = get(scrollStore).pending;
+      if (pending && pending.filePath === tabFilePath && pending.range) {
+        const docLen = view.state.doc.length;
+        const from = Math.min(pending.range.from, docLen);
+        const to = Math.min(pending.range.to, docLen);
+        if (from < to) scrollToMatch(view, from, to);
+        scrollStore.clearPending();
+      }
+    }
 
     // Attach wiki-link-click listener only on editable markdown tabs —
     // read-only previews don't have the wiki-link plugin loaded so no

@@ -63,6 +63,43 @@ tags: [alpha, beta]
 ---
 # Tagged
 `,
+
+  // ── #62: block + heading anchor fixtures ──────────────────────────────
+  "Anchored.md": `# Anchored Source
+
+## Quick Recap
+
+This is the recap paragraph that the block-ref test scrolls to. ^recap
+
+## Multi Word Heading
+
+Body of the multi-word section. Slug is \`multi-word-heading\`.
+
+### Nested H3 inside Multi Word
+
+This nested heading sits inside the multi-word section embed.
+
+## Düsseldorf trip
+
+Unicode-slug section to exercise the parity fixture in a live test.
+
+## Final section
+
+Last section, embed runs to EOF.
+`,
+
+  "Anchor Refs.md": `# Anchor Refs
+
+Block ref: [[Anchored^recap]]
+
+Heading ref (multi-word slug): [[Anchored#Multi Word Heading]]
+
+Anchor missing: [[Anchored^does-not-exist]]
+
+Heading embed: ![[Anchored#Multi Word Heading]]
+
+Block embed: ![[Anchored^recap]]
+`,
 };
 
 export function createTestVault(): TestVault {

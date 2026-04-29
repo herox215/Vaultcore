@@ -163,7 +163,10 @@ md.renderer.rules["wiki_link"] = (tokens, idx) => {
   const label = md.utils.escapeHtml(alias ?? target);
   const escapedTarget = md.utils.escapeHtml(target);
   const cls = resolved ? "vc-reading-wikilink vc-reading-wikilink--resolved" : "vc-reading-wikilink vc-reading-wikilink--unresolved";
-  return `<a class="${cls}" href="#" data-wiki-target="${escapedTarget}" data-wiki-resolved="${resolved ? "true" : "false"}">${label}</a>`;
+  // #62: three-valued resolution attribute. The reading-view markdown
+  // renderer doesn't track anchors, so the only outcomes are
+  // "resolved" / "unresolved" — never "anchor-missing".
+  return `<a class="${cls}" href="#" data-wiki-target="${escapedTarget}" data-wiki-resolved="${resolved ? "resolved" : "unresolved"}">${label}</a>`;
 };
 
 // ── Heading slug IDs ─────────────────────────────────────────────────────────
