@@ -246,11 +246,16 @@
     if (wikiAnchor) {
       event.preventDefault();
       const wikiTarget = wikiAnchor.getAttribute("data-wiki-target") ?? "";
-      const resolved = wikiAnchor.getAttribute("data-wiki-resolved") === "true";
+      // Three-valued resolution (#62). Reading view never emits anchor
+      // information, so the click always carries `anchor: null`; the
+      // EditorPane handler still re-checks the live map per #309.
+      const raw = wikiAnchor.getAttribute("data-wiki-resolved") ?? "unresolved";
+      const resolution: "resolved" | "anchor-missing" | "unresolved" =
+        raw === "resolved" || raw === "anchor-missing" ? raw : "unresolved";
       containerEl?.dispatchEvent(
         new CustomEvent("wiki-link-click", {
           bubbles: true,
-          detail: { target: wikiTarget, resolved },
+          detail: { target: wikiTarget, resolution, anchor: null },
         }),
       );
       return;

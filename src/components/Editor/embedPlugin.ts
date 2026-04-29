@@ -27,7 +27,8 @@ import { mount, unmount } from "svelte";
 
 import { resolveAttachment } from "./embeds";
 import { resolveAttachmentSrc, releaseAttachmentSrc } from "./attachmentSource";
-import { resolveTarget } from "./wikiLink";
+import { resolveAnchor, resolveTarget } from "./wikiLink";
+import type { AnchorEntry } from "../../types/links";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
@@ -52,18 +53,43 @@ import CanvasRenderer from "../Canvas/CanvasRenderer.svelte";
 // ── Regex ──────────────────────────────────────────────────────────────────────
 
 /**
- * Matches `![[target]]`, `![[target|sizing]]`, `![[target#heading]]`, and the
- * combined `![[target#heading|sizing]]`. Captures:
- *   1 — target (path/filename, no `]`, `|`, or `#`)
- *   2 — heading (optional, after `#`)
- *   3 — sizing/alias text (optional, after `|`)
- *
- * The heading capture is parsed but not yet used for slicing — see PR notes.
+ * Matches `![[target]]`, `![[target|sizing]]`, `![[target#heading]]`,
+ * `![[target^blockid]]` (#62), and any combination thereof. Captures:
+ *   1 — target (path/filename, no `]`, `|`, `#`, or `^`)
+ *   2 — heading slug (optional, after `#`)
+ *   3 — block id (optional, after `^`) — `[A-Za-z0-9-]+` per Obsidian
+ *   4 — sizing/alias text (optional, after `|`)
  */
-const WIKI_EMBED_RE = /!\[\[([^\]|#]+?)(?:#([^\]|]+))?(?:\|([^\]]*))?\]\]/g;
+const WIKI_EMBED_RE = /!\[\[([^\]|#^]+?)(?:#([^\]|^]+))?(?:\^([A-Za-z0-9-]+))?(?:\|([^\]]*))?\]\]/g;
 
 /** Matches `![alt](path)` — captures the path. */
 const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
+
+/**
+ * Look up the anchor entry the embed regex captured.
+ *
+ * Returns:
+ *   - `null`      — no anchor was requested (whole-note embed).
+ *   - `"missing"` — anchor was requested but doesn't resolve. Caller renders
+ *                   `BrokenEmbedWidget` with a "not found" label.
+ *   - `AnchorEntry` — anchor resolved; caller slices `cached.slice(jsStart,
+ *                     jsEnd)` to render only that block's content.
+ */
+function resolveEmbedAnchor(
+  relPath: string,
+  headingSlug: string | undefined,
+  blockId: string | undefined,
+): AnchorEntry | "missing" | null {
+  if (blockId !== undefined) {
+    const found = resolveAnchor(relPath, { kind: "block", value: blockId.toLowerCase() });
+    return found ?? "missing";
+  }
+  if (headingSlug !== undefined) {
+    const found = resolveAnchor(relPath, { kind: "heading", value: headingSlug });
+    return found ?? "missing";
+  }
+  return null;
+}
 
 // ── Cache for canvas-embed content ────────────────────────────────────────────
 //
@@ -616,7 +642,9 @@ function buildDecorations(view: EditorView): DecorationSet {
     if (head >= from && head <= to) continue;
 
     const target = rawTarget.trim();
-    const sizePx = parseSizePx(m[3]);
+    const headingSlug = m[2];
+    const blockId = m[3];
+    const sizePx = parseSizePx(m[4]);
 
     let deco: Decoration;
     if (isImageFilename(target)) {
@@ -627,15 +655,14 @@ function buildDecorations(view: EditorView): DecorationSet {
         deco = Decoration.replace({ widget: new BrokenEmbedWidget(target) });
       }
     } else {
-      // Note / canvas embed. We intentionally ignore the #heading capture for
-      // now and render the entire target; heading slicing is a follow-up.
+      // Note / canvas embed. #62: optional `#H` / `^id` anchor selects a
+      // sub-slice of the target file's content; missing anchors fall through
+      // to BrokenEmbedWidget so the user sees an explicit "not found" cue.
       const rel = resolveTarget(target);
       if (rel !== null) {
         if (rel.endsWith(".canvas")) {
           // #147 — route canvas targets through the SVG preview widget.
-          // #154 — bundle the cached JSON into the widget so edits to the
-          // source canvas produce a value-different widget and CM6 swaps
-          // the DOM; a miss schedules a fetch with a null-content placeholder.
+          // Anchor suffixes don't apply to canvases — keep behaviour stable.
           const cachedCanvas = canvasContentCache.get(rel);
           if (cachedCanvas === undefined) {
             scheduleCanvasFetch(view, rel);
@@ -648,11 +675,22 @@ function buildDecorations(view: EditorView): DecorationSet {
           const cached = readCachedNote(rel);
           if (cached === null) {
             requestLoadNote(rel);
-            // Show a muted placeholder while the fetch is in flight so the UI
-            // doesn't flash with a stale version of the target note.
             deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, "…") });
           } else {
-            deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, cached) });
+            const anchorEntry = resolveEmbedAnchor(rel, headingSlug, blockId);
+            if (anchorEntry === "missing") {
+              const label = blockId
+                ? `${target}^${blockId}`
+                : headingSlug
+                  ? `${target}#${headingSlug}`
+                  : target;
+              deco = Decoration.replace({ widget: new BrokenEmbedWidget(label) });
+            } else if (anchorEntry !== null) {
+              const sliced = cached.slice(anchorEntry.jsStart, anchorEntry.jsEnd);
+              deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, sliced) });
+            } else {
+              deco = Decoration.replace({ widget: new NoteEmbedWidget(rel, cached) });
+            }
           }
         }
       } else {

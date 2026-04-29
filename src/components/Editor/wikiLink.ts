@@ -1,13 +1,21 @@
-// Wiki-link CM6 ViewPlugin — Phase 4 Plan 02
+// Wiki-link CM6 ViewPlugin — Phase 4 Plan 02 / Issue #62 anchor support.
 //
 // Architecture:
 //   - Module-level `resolvedLinks: Map<stem, relPath>` populated once per vault
 //     open via EditorPane calling setResolvedLinks(await getResolvedLinks()).
+//   - Module-level `resolvedAnchors: Map<relPath, AnchorKeySet>` (#62) added
+//     alongside so block-ref / heading-ref decoration is also a sync Map.get().
 //   - Every decoration + click lookup is a synchronous Map.get() — zero IPC
 //     inside the CM6 render loop, zero IPC at click time.
 //   - Click events are dispatched as CustomEvent("wiki-link-click") on the
 //     EditorView DOM so the Svelte layer handles navigation without coupling
 //     the CM6 extension to Svelte stores.
+//
+// Resolution model (#62):
+//   "resolved"       — note exists, anchor (if any) matches.
+//   "anchor-missing" — note exists, anchor does NOT match. Click opens note,
+//                      Svelte side surfaces a toast.
+//   "unresolved"     — note does not exist. Click creates the note.
 
 import { ViewPlugin, Decoration, EditorView } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
@@ -15,6 +23,7 @@ import { RangeSetBuilder } from "@codemirror/state";
 import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 
+import type { AnchorEntry, AnchorKeySet } from "../../types/links";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
@@ -24,39 +33,96 @@ const HIDE = Decoration.replace({});
 
 // ── Wiki-link regex ────────────────────────────────────────────────────────────
 
-/** Matches [[target]] and [[target|alias]]. Global flag — reset lastIndex before use. */
+/**
+ * Matches `[[target]]`, `[[target|alias]]`, `[[target#H]]`, `[[target^id]]`,
+ * and any `target` + heading + block + alias combination.
+ *
+ * Capture groups are intentionally NOT used for anchor splitting — the regex
+ * captures the full target including any `#H` / `^id` suffix in group 1; the
+ * runtime parser (`parseLinkTarget`) splits stem / heading / block-id with
+ * the same precedence rule the rename-cascade regex uses on the Rust side.
+ * Single-source-of-truth for the parsing rule lives in `parseLinkTarget`.
+ */
 const WIKI_LINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]*))?\]\]/g;
 
-// ── Resolution map ─────────────────────────────────────────────────────────────
+// ── Resolution state ───────────────────────────────────────────────────────────
 
 /**
- * Stem (lowercased) → vault-relative path.
- * Populated once per vault open via EditorPane calling
- * `setResolvedLinks(await getResolvedLinks())`.
- * Incrementally updated on file create/delete/rename by EditorPane.
+ * Stem (lowercased) → vault-relative path. Populated by EditorPane on vault
+ * open (and on every `resolvedLinksStore.requestReload()` after rename/move).
  */
 let resolvedLinks: Map<string, string> = new Map();
 
 /**
- * Replace the resolution map. Called by EditorPane after `get_resolved_links`
- * IPC returns on vault open, and on incremental file create/delete/rename events.
+ * Vault-relative path → anchor table (#62). Populated alongside
+ * `resolvedLinks` by EditorPane. Empty until `setResolvedAnchors` fires.
  */
+let resolvedAnchors: Map<string, AnchorKeySet> = new Map();
+
 export function setResolvedLinks(map: Map<string, string>): void {
   resolvedLinks = map;
 }
 
 /**
- * Synchronous lookup used by both the ViewPlugin (decoration) and the
- * EditorPane click handler.
- *
- * @param target - Raw link target from `[[target]]` (may include a `.md` or
- *   `.canvas` suffix — #147; alias is already stripped by the caller via
- *   the regex group 1 capture).
- * @returns Vault-relative path, or `null` if the target is not resolved.
+ * Replace the per-vault anchor map. Called by EditorPane right after
+ * `setResolvedLinks` in `reloadResolvedLinks`.
+ */
+export function setResolvedAnchors(map: Map<string, AnchorKeySet>): void {
+  resolvedAnchors = map;
+}
+
+/**
+ * Parsed wiki-link suffix. Block-id wins when both `^` and `#` are present —
+ * a malformed `[[Note#H^id]]` is treated as a block ref because Obsidian's
+ * own parser anchors on the trailing `^id`. The exact precedence is locked
+ * in by the test suite.
+ */
+export interface ParsedAnchor {
+  kind: "block" | "heading";
+  /** Lowercased for blocks, original case (slug-case folded) for headings. */
+  value: string;
+}
+
+export interface ParsedTarget {
+  stem: string;
+  anchor: ParsedAnchor | null;
+}
+
+/**
+ * Split a raw wiki-link target into `(stem, anchor?)`. Pure function — does
+ * not consult any resolution map. Single source of truth for anchor-suffix
+ * parsing on the frontend; the Rust side parses anchors at index time.
+ */
+export function parseLinkTarget(raw: string): ParsedTarget {
+  const stripped = stripKnownExt(raw);
+  // Block-id wins: scan for the LAST `^` and accept it only when the suffix
+  // is a valid block-id ([A-Za-z0-9-]+) and contains no `#`. This means
+  // `[[Note#H^id]]` resolves as `^id` (matches Rust-side block-id grammar).
+  const caretIdx = stripped.lastIndexOf("^");
+  if (caretIdx > 0) {
+    const id = stripped.slice(caretIdx + 1);
+    if (/^[A-Za-z0-9-]+$/.test(id)) {
+      return { stem: stripped.slice(0, caretIdx), anchor: { kind: "block", value: id.toLowerCase() } };
+    }
+  }
+  const hashIdx = stripped.indexOf("#");
+  if (hashIdx > 0) {
+    return {
+      stem: stripped.slice(0, hashIdx),
+      anchor: { kind: "heading", value: stripped.slice(hashIdx + 1) },
+    };
+  }
+  return { stem: stripped, anchor: null };
+}
+
+/**
+ * Synchronous lookup of `[[target]]` → vault-relative path. Strips any
+ * `#H` / `^id` suffix before consulting the stem map so legacy callers that
+ * pass the full link text still receive a match for the underlying note.
  */
 export function resolveTarget(target: string): string | null {
-  const stem = stripKnownExt(target).toLowerCase();
-  return resolvedLinks.get(stem) ?? null;
+  const { stem } = parseLinkTarget(target);
+  return resolvedLinks.get(stem.toLowerCase()) ?? null;
 }
 
 export function stripKnownExt(target: string): string {
@@ -65,16 +131,42 @@ export function stripKnownExt(target: string): string {
   return target;
 }
 
+/**
+ * Look up the anchor entry for `(relPath, anchor)`, or `null` when the file
+ * has no anchors registered or the anchor doesn't match. Slug comparison is
+ * case-insensitive for headings; block ids compare byte-for-byte against the
+ * lowercased value already produced by `parseLinkTarget`.
+ */
+export function resolveAnchor(relPath: string, anchor: ParsedAnchor): AnchorEntry | null {
+  const set = resolvedAnchors.get(relPath);
+  if (!set) return null;
+  if (anchor.kind === "block") {
+    return set.blocks.find((b) => b.id === anchor.value) ?? null;
+  }
+  const target = anchor.value.toLowerCase();
+  return set.headings.find((h) => h.id.toLowerCase() === target) ?? null;
+}
+
+/** Three-valued resolution state for wiki-links carrying optional anchors (#62). */
+export type LinkResolution = "resolved" | "anchor-missing" | "unresolved";
+
+function resolveLink(parsed: ParsedTarget): { resolution: LinkResolution; relPath: string | null } {
+  const relPath = resolvedLinks.get(parsed.stem.toLowerCase()) ?? null;
+  if (relPath === null) {
+    return { resolution: "unresolved", relPath: null };
+  }
+  if (parsed.anchor === null) {
+    return { resolution: "resolved", relPath };
+  }
+  const anchor = resolveAnchor(relPath, parsed.anchor);
+  return {
+    resolution: anchor !== null ? "resolved" : "anchor-missing",
+    relPath,
+  };
+}
+
 // ── Code block detection ───────────────────────────────────────────────────────
 
-/**
- * Returns true when `pos` is inside a fenced code block, indented code block,
- * or inline code span. Uses the lezer syntax tree to check node ancestry.
- *
- * Node names are based on `@lezer/markdown`'s grammar. If a vault's content
- * triggers a different node name (e.g. language-specific embedding), the
- * decoration is skipped safely — a false positive here is always safe.
- */
 function isInsideCodeBlock(state: EditorState, pos: number): boolean {
   const node = syntaxTree(state).resolve(pos, 1);
   let cur: typeof node | null = node;
@@ -98,8 +190,12 @@ function isInsideCodeBlock(state: EditorState, pos: number): boolean {
 interface WikiMatch {
   from: number;
   to: number;
+  /** Stem (without anchor and without alias). */
   target: string;
-  resolved: boolean;
+  resolution: LinkResolution;
+  /** Parsed anchor suffix or `null`. Carried so the click event can dispatch
+   * navigation without re-parsing. */
+  anchor: ParsedAnchor | null;
   aliasStart: number | null;
   aliasEnd: number | null;
 }
@@ -110,33 +206,40 @@ interface DecoratedRange {
   decoration: Decoration;
 }
 
-/**
- * Bytes to extend on each side of `view.viewport` so wiki-links and
- * `{{ ... }}` template bodies that straddle the viewport boundary are still
- * detected by the scan (#247). Wiki-links are tiny; templates can be
- * multi-line but rarely exceed a few hundred bytes in practice. 512 is
- * comfortably above both.
- */
 const VIEWPORT_WIDEN_BYTES = 512;
+
+function classFor(resolution: LinkResolution): string {
+  switch (resolution) {
+    case "resolved":
+      return "cm-wikilink-resolved";
+    case "anchor-missing":
+      return "cm-wikilink-unresolved-anchor";
+    case "unresolved":
+      return "cm-wikilink-unresolved";
+  }
+}
+
+function attrsFor(match: WikiMatch): Record<string, string> {
+  const attrs: Record<string, string> = {
+    "data-wiki-target": match.target,
+    "data-wiki-resolved": match.resolution,
+  };
+  if (match.anchor) {
+    attrs["data-wiki-anchor-kind"] = match.anchor.kind;
+    attrs["data-wiki-anchor-value"] = match.anchor.value;
+  }
+  return attrs;
+}
 
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const state = view.state;
   const docLength = state.doc.length;
 
-  // #247 — viewport-bounded scan. The old full-doc serialisation allocated
-  // O(doc length) per keystroke and burned the 16ms budget on medium+ notes.
-  // Slice only the visible region (± VIEWPORT_WIDEN_BYTES so straddling
-  // wiki-links and template bodies still match) and offset absolute positions
-  // by `windowFrom`. Code-block detection keeps using `syntaxTree(state)` with
-  // absolute coordinates — the slice is a scanning input, not an index space.
   const windowFrom = Math.max(0, view.viewport.from - VIEWPORT_WIDEN_BYTES);
   const windowTo = Math.min(docLength, view.viewport.to + VIEWPORT_WIDEN_BYTES);
   const text = state.sliceDoc(windowFrom, windowTo);
   const head = state.selection.main.head;
-  // Template ranges MUST be offset by windowFrom — otherwise every
-  // `{{ ... }}` exclusion breaks and literal `[[...]]` inside an expression
-  // gets decorated.
   const exprRanges = findTemplateExprRanges(text, windowFrom);
 
   const matches: WikiMatch[] = [];
@@ -153,15 +256,13 @@ function buildDecorations(view: EditorView): DecorationSet {
     if (isInsideCodeBlock(state, from)) continue;
     if (isInsideTemplateExpr(exprRanges, from, to)) continue;
 
-    const stem: string = stripKnownExt(rawTarget);
-    const resolved = resolvedLinks.has(stem.toLowerCase());
+    const parsed = parseLinkTarget(rawTarget);
+    const { resolution } = resolveLink(parsed);
 
     const aliasText = m[2];
     let aliasStart: number | null = null;
     let aliasEnd: number | null = null;
     if (aliasText !== undefined) {
-      // `text` is the widened-window slice; searching for `|` in it and
-      // translating back via windowFrom keeps absolute coordinates correct.
       const pipePosInSlice = text.indexOf("|", m.index + 2);
       if (pipePosInSlice !== -1) {
         aliasStart = windowFrom + pipePosInSlice;
@@ -169,7 +270,15 @@ function buildDecorations(view: EditorView): DecorationSet {
       }
     }
 
-    matches.push({ from, to, target: stem, resolved, aliasStart, aliasEnd });
+    matches.push({
+      from,
+      to,
+      target: parsed.stem,
+      resolution,
+      anchor: parsed.anchor,
+      aliasStart,
+      aliasEnd,
+    });
   }
 
   matches.sort((a, b) => a.from - b.from);
@@ -178,18 +287,14 @@ function buildDecorations(view: EditorView): DecorationSet {
 
   for (const match of matches) {
     const cursorInLink = head >= match.from && head <= match.to;
+    const cls = classFor(match.resolution);
+    const attrs = attrsFor(match);
 
     if (cursorInLink) {
       allRanges.push({
         from: match.from,
         to: match.to,
-        decoration: Decoration.mark({
-          class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
-          attributes: {
-            "data-wiki-target": match.target,
-            "data-wiki-resolved": match.resolved ? "true" : "false",
-          },
-        }),
+        decoration: Decoration.mark({ class: cls, attributes: attrs }),
       });
     } else {
       allRanges.push({ from: match.from, to: match.from + 2, decoration: HIDE });
@@ -202,13 +307,7 @@ function buildDecorations(view: EditorView): DecorationSet {
         allRanges.push({
           from: visibleFrom,
           to: visibleTo,
-          decoration: Decoration.mark({
-            class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
-            attributes: {
-              "data-wiki-target": match.target,
-              "data-wiki-resolved": match.resolved ? "true" : "false",
-            },
-          }),
+          decoration: Decoration.mark({ class: cls, attributes: attrs }),
         });
       } else {
         const visibleFrom = match.from + 2;
@@ -217,13 +316,7 @@ function buildDecorations(view: EditorView): DecorationSet {
           allRanges.push({
             from: visibleFrom,
             to: visibleTo,
-            decoration: Decoration.mark({
-              class: match.resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved",
-              attributes: {
-                "data-wiki-target": match.target,
-                "data-wiki-resolved": match.resolved ? "true" : "false",
-              },
-            }),
+            decoration: Decoration.mark({ class: cls, attributes: attrs }),
           });
         }
       }
@@ -240,6 +333,17 @@ function buildDecorations(view: EditorView): DecorationSet {
 }
 
 // ── ViewPlugin ─────────────────────────────────────────────────────────────────
+
+/** Detail payload for the `wiki-link-click` CustomEvent. */
+export interface WikiLinkClickDetail {
+  /** Stem only — anchor / alias are stripped. */
+  target: string;
+  /** Three-valued resolution state. */
+  resolution: LinkResolution;
+  /** Anchor suffix (if any) — pre-parsed so the Svelte handler can route
+   * straight to scroll-to-block / scroll-to-heading without reparsing. */
+  anchor: ParsedAnchor | null;
+}
 
 export const wikiLinkPlugin = ViewPlugin.fromClass(
   class {
@@ -264,19 +368,27 @@ export const wikiLinkPlugin = ViewPlugin.fromClass(
         if (!wikiTarget) return false;
 
         const linkTarget = wikiTarget.getAttribute("data-wiki-target");
-        const isResolved = wikiTarget.getAttribute("data-wiki-resolved") === "true";
         if (!linkTarget) return false;
+        const rawResolution = wikiTarget.getAttribute("data-wiki-resolved") ?? "unresolved";
+        const resolution: LinkResolution =
+          rawResolution === "resolved" || rawResolution === "anchor-missing"
+            ? rawResolution
+            : "unresolved";
+        const kind = wikiTarget.getAttribute("data-wiki-anchor-kind");
+        const value = wikiTarget.getAttribute("data-wiki-anchor-value");
+        const anchor: ParsedAnchor | null =
+          kind === "block" || kind === "heading"
+            ? { kind, value: value ?? "" }
+            : null;
 
         event.preventDefault();
         event.stopPropagation();
 
-        // Dispatch custom event for the Svelte layer to handle navigation.
-        // The listener calls resolveTarget(linkTarget) for resolved links to
-        // get the vault-relative path — no flat-vault stub, no IPC at click time.
+        const detail: WikiLinkClickDetail = { target: linkTarget, resolution, anchor };
         view.dom.dispatchEvent(
-          new CustomEvent("wiki-link-click", {
+          new CustomEvent<WikiLinkClickDetail>("wiki-link-click", {
             bubbles: true,
-            detail: { target: linkTarget, resolved: isResolved },
+            detail,
           }),
         );
 
@@ -291,9 +403,6 @@ export const wikiLinkPlugin = ViewPlugin.fromClass(
 /**
  * Force decoration rebuild on all open EditorViews after `setResolvedLinks`
  * is called. Dispatches a no-op transaction to trigger `update()`.
- *
- * EditorPane calls this on every mounted EditorView after vault open so
- * decorations reflect the fresh resolution map immediately.
  */
 export function refreshWikiLinks(view: EditorView): void {
   view.dispatch({ effects: [] });

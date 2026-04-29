@@ -192,6 +192,20 @@ html, body, #app {
 .cm-wikilink-unresolved:hover {
   text-decoration: underline;
 }
+/* #62: note exists but the anchor (^id / #H) does not. Vitruvius briefed
+ * this third state with #92400E light-mode (≈7:1 vs surface white,
+ * passes WCAG AA) and the existing `--color-warning` dark-mode value. */
+.cm-wikilink-unresolved-anchor {
+  color: #92400E;
+  cursor: pointer;
+  text-decoration: none;
+}
+.cm-wikilink-unresolved-anchor:hover {
+  text-decoration: underline;
+}
+:root.dark .cm-wikilink-unresolved-anchor {
+  color: var(--color-warning, #FCD34D);
+}
 
 /* Phase 4 Plan 03: Wiki-link autocomplete popup styling */
 .cm-tooltip-autocomplete {

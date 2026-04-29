@@ -172,7 +172,7 @@ describe("templateLivePlugin — rendering", () => {
     const anchor = view.dom.querySelector(".vc-template-rendered [data-wiki-target]");
     expect(anchor).not.toBeNull();
     expect(anchor!.getAttribute("data-wiki-target")).toBe("first");
-    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("resolved");
     expect(anchor!.classList.contains("cm-wikilink-resolved")).toBe(true);
     expect(anchor!.textContent).toBe("first");
   });
@@ -184,7 +184,7 @@ describe("templateLivePlugin — rendering", () => {
 
     const anchor = view.dom.querySelector(".vc-template-rendered [data-wiki-target]");
     expect(anchor).not.toBeNull();
-    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("false");
+    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("unresolved");
     expect(anchor!.classList.contains("cm-wikilink-unresolved")).toBe(true);
   });
 
@@ -197,7 +197,7 @@ describe("templateLivePlugin — rendering", () => {
     expect(anchor).not.toBeNull();
     expect(anchor!.textContent).toBe("Display");
     expect(anchor!.getAttribute("data-wiki-target")).toBe("real");
-    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    expect(anchor!.getAttribute("data-wiki-resolved")).toBe("resolved");
   });
 
   // #303 — multi-segment `{{ ... ; ... }}` bodies.
@@ -291,7 +291,7 @@ describe("templateLivePlugin — rendering", () => {
       );
       expect(anchor).not.toBeNull();
       expect(anchor!.getAttribute("data-wiki-target")).toBe("first");
-      expect(anchor!.getAttribute("data-wiki-resolved")).toBe("true");
+      expect(anchor!.getAttribute("data-wiki-resolved")).toBe("resolved");
     });
   });
 
@@ -342,7 +342,7 @@ describe("templateLivePlugin — rendering", () => {
       );
       expect(link).not.toBeNull();
       expect(link!.getAttribute("data-wiki-target")).toBe("first");
-      expect(link!.getAttribute("data-wiki-resolved")).toBe("true");
+      expect(link!.getAttribute("data-wiki-resolved")).toBe("resolved");
       expect(link!.classList.contains("cm-wikilink-resolved")).toBe(true);
     });
 
@@ -461,7 +461,7 @@ describe("templateLivePlugin — rendering", () => {
     );
     expect(before).not.toBeNull();
     const beforeNode = before as HTMLElement;
-    expect(beforeNode.getAttribute("data-wiki-resolved")).toBe("false");
+    expect(beforeNode.getAttribute("data-wiki-resolved")).toBe("unresolved");
 
     // Simulate the stale-edge only — the map is NOT updated.
     resolvedLinksStore.requestReload();
@@ -471,7 +471,7 @@ describe("templateLivePlugin — rendering", () => {
       ".vc-template-rendered [data-wiki-target]",
     );
     expect(after).toBe(beforeNode);
-    expect(after!.getAttribute("data-wiki-resolved")).toBe("false");
+    expect(after!.getAttribute("data-wiki-resolved")).toBe("unresolved");
   });
 
   // #309 — regression: a file created between render and click left the
@@ -489,7 +489,7 @@ describe("templateLivePlugin — rendering", () => {
       ".vc-template-rendered [data-wiki-target]",
     );
     expect(initialAnchor).not.toBeNull();
-    expect(initialAnchor!.getAttribute("data-wiki-resolved")).toBe("false");
+    expect(initialAnchor!.getAttribute("data-wiki-resolved")).toBe("unresolved");
 
     // Simulate the flow after a sidebar "New note": EditorPane's async
     // reloadResolvedLinks lands, setResolvedLinks is called, then markReady()
@@ -501,7 +501,7 @@ describe("templateLivePlugin — rendering", () => {
       ".vc-template-rendered [data-wiki-target]",
     );
     expect(refreshedAnchor).not.toBeNull();
-    expect(refreshedAnchor!.getAttribute("data-wiki-resolved")).toBe("true");
+    expect(refreshedAnchor!.getAttribute("data-wiki-resolved")).toBe("resolved");
     expect(refreshedAnchor!.classList.contains("cm-wikilink-resolved")).toBe(true);
   });
 });
