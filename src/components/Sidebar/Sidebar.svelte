@@ -35,6 +35,7 @@
   import { Hash } from "lucide-svelte";
   import TreeRow from "./TreeRow.svelte";
   import ProgressBar from "../Progress/ProgressBar.svelte";
+  import AsciiSpinner from "../ascii/AsciiSpinner.svelte";
   import TagsPanel from "../Tags/TagsPanel.svelte";
   import BookmarksPanel from "../Bookmarks/BookmarksPanel.svelte";
   import { bookmarksStore } from "../../store/bookmarksStore";
@@ -209,9 +210,11 @@
     if (!row.isDir) return;
     const willExpand = !treeState.expanded.includes(row.relPath);
     if (willExpand) {
-      // Optimistically show the folder as expanded (with spinner) while the
-      // load is in flight. Persist only once listDirectory resolves — matches
-      // #336 B3 so a failure doesn't stick in `expanded` across sessions.
+      // Optimistically expand the folder — the vault-tree status spinner
+      // above (around line 727) covers the loading indicator while
+      // listDirectory resolves. Persist only once listDirectory resolves —
+      // matches #336 B3 so a failure doesn't stick in `expanded` across
+      // sessions.
       const expanded = new Set(treeState.expanded);
       expanded.add(row.relPath);
       treeState = { ...treeState, expanded: Array.from(expanded) };
@@ -725,7 +728,13 @@
     onscroll={onScroll}
   >
     {#if loading}
-      <p class="vc-sidebar-status">Loading...</p>
+      <p
+        class="vc-sidebar-status"
+        role="status"
+        aria-label="Loading vault tree"
+      >
+        <AsciiSpinner /> Loading
+      </p>
     {:else if loadError}
       <p class="vc-sidebar-status vc-sidebar-status--error">{loadError}</p>
     {:else if flatRows.length === 0}
