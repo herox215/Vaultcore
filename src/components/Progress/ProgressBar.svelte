@@ -1,5 +1,6 @@
 <script lang="ts">
   import { progressStore } from "../../store/progressStore";
+  import AsciiProgressBar from "../ascii/AsciiProgressBar.svelte";
 
   // #357 \u2014 label is a prop so the vault-open flow can render
   // "Scanning and securing vault\u2026" while the indexer walk and the
@@ -30,13 +31,11 @@
            aria-valuemin="0"
            aria-valuemax={$progressStore.total}
            aria-valuenow={$progressStore.current}>
-        <div
-          class="vc-progress-fill"
-          data-testid="progress-fill"
-          style:width="{$progressStore.total > 0
-            ? ($progressStore.current / $progressStore.total) * 100
-            : 0}%"
-        ></div>
+        <AsciiProgressBar
+          value={$progressStore.current}
+          max={$progressStore.total}
+          testid="progress-fill"
+        />
       </div>
       <p class="vc-progress-file" data-testid="progress-file">
         {truncatePath($progressStore.currentFile)}
@@ -74,17 +73,12 @@
     color: var(--color-text-muted);
     text-align: right;
   }
+  /* The progressbar wrapper retains its semantic role + aria-valuemin/max/now;
+     the visual bar inside is now the AsciiProgressBar component. The old
+     coloured div + transition are intentionally gone \u2014 the ASCII pulse on
+     the filled run is the new motion language. */
   .vc-progress-track {
     width: 100%;
-    height: 8px;
-    background: var(--color-border);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .vc-progress-fill {
-    height: 100%;
-    background: var(--color-accent);
-    transition: width 120ms linear;
   }
   .vc-progress-file {
     margin: 8px 0 0 0;
