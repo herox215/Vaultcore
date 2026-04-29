@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createTestVault, type TestVault } from "../helpers/vault.js";
 import { openVaultInApp } from "../helpers/open-vault.js";
-import { textOf } from "../helpers/text.js";
+import { textOf, textsOf } from "../helpers/text.js";
 
 /**
  * E2E coverage for #162 — file-reference nodes on canvas:
@@ -80,9 +80,13 @@ describe("Canvas file-reference nodes (#162)", () => {
   }
 
   async function waitForActiveTab(label: string, timeout = 5000) {
-    const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
+    // Re-query each iteration: `.vc-tab--active` is replaced on every tab
+    // switch, so a handle captured before the transition becomes stale.
     await browser.waitUntil(
-      async () => ((await activeLabel.getProperty("textContent")) as string).includes(label),
+      async () => {
+        const labels = await textsOf(await browser.$$(".vc-tab--active .vc-tab-label"));
+        return labels.some((l) => l.includes(label));
+      },
       { timeout, timeoutMsg: `active tab never switched to "${label}"` },
     );
   }

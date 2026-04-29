@@ -100,16 +100,25 @@ describe("Outgoing Links panel", () => {
       { timeout: 3000 },
     );
 
-    const rows = await browser.$$(".vc-outlink-row");
-    const texts = await textsOf(rows);
-    const idx = texts.findIndex((t) => t.includes("Daily Log"));
-    if (idx < 0) throw new Error("Daily Log outlink not found");
-    await rows[idx]!.click();
+    // Find + click in one execute so the index isn't reused against a
+    // separate $$() result (the panel re-renders on data changes; an
+    // index from one tick may not point at the same row in the next).
+    const clicked = await browser.execute((needle: string) => {
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(".vc-outlink-row"));
+      const match = rows.find((r) => (r.textContent ?? "").includes(needle));
+      if (!match) return false;
+      match.click();
+      return true;
+    }, "Daily Log");
+    expect(clicked).toBe(true);
 
-    // Active tab label switches to "Daily Log".
-    const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
+    // Re-query the active tab label each iteration; the `.vc-tab--active`
+    // element is replaced on every tab transition.
     await browser.waitUntil(
-      async () => ((await activeLabel.getProperty("textContent")) as string).includes("Daily Log"),
+      async () => {
+        const labels = await textsOf(await browser.$$(".vc-tab--active .vc-tab-label"));
+        return labels.some((l) => l.includes("Daily Log"));
+      },
       { timeout: 3000, timeoutMsg: "Active tab never switched to Daily Log" },
     );
   });
@@ -140,6 +149,11 @@ describe("Outgoing Links panel", () => {
       dangling,
     );
 
+    // The right sidebar may have been hidden by an earlier spec — without
+    // ensuring it's visible, `activateOutgoingSubtab()` would target a
+    // tab button that isn't in the DOM and the test would time out at
+    // the unresolved-row wait further down.
+    await ensureRightSidebar();
     await activateOutgoingSubtab();
     await browser.waitUntil(
       async () => {

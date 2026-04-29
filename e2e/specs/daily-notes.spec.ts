@@ -158,7 +158,10 @@ describe("Daily notes", () => {
       { timeout: 8000, timeoutMsg: `daily note ${newAbs} never carried the template marker` },
     );
 
-    // Reset settings — see helper docstring.
-    await applyDailySettings({ folder: "", template: "" });
+    // Reset every field this test touched (incl. format, since the
+    // helper docstring says undefined fields are skipped — leaving
+    // `dailyNotesDateFormat` at "YYYY-MM-DD" would change the path the
+    // *next* spec session computes if test order ever shifts).
+    await applyDailySettings({ folder: "", template: "", format: "" });
   });
 });
