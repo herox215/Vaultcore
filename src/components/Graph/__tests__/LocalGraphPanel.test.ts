@@ -152,6 +152,80 @@ describe("LocalGraphPanel (#43 — ResizeObserver-gated mount)", () => {
     expect(roDisconnects).toBeGreaterThanOrEqual(1);
   });
 
+  // #358 — the loading container must surface an AsciiSpinner alongside
+  // the "Computing local graph" text, and carry an aria-label so screen
+  // readers announce it.
+  it("#358 loading state renders AsciiSpinner + 'Computing local graph' with aria-label", async () => {
+    // Hold the IPC promise so `loading` stays true across the assertions.
+    // try/finally restores BOTH the mock impl and the real-timers state so
+    // an assertion failure can't leak fake timers into adjacent tests
+    // (Aristotle PR-D review).
+    const { getLocalGraph } = await import("../../../ipc/commands");
+    const originalImpl = vi.mocked(getLocalGraph).getMockImplementation();
+    let _resolve!: (v: unknown) => void;
+    vi.mocked(getLocalGraph).mockImplementation(
+      () => new Promise((r) => { _resolve = r; }) as unknown as ReturnType<typeof getLocalGraph>,
+    );
+    try {
+      vi.useFakeTimers();
+      const { container } = render(LocalGraphPanel);
+      await vi.advanceTimersByTimeAsync(250);
+      await tick();
+      await tick();
+
+      const loading = container.querySelector(".vc-graph-loading");
+      expect(loading).toBeTruthy();
+      expect(loading!.getAttribute("aria-label")).toBe("Computing local graph");
+      expect(loading!.querySelector(".vc-ascii-spinner")).toBeTruthy();
+      expect(loading!.textContent).toMatch(/Computing local graph/);
+
+      _resolve({ nodes: [], edges: [] });
+    } finally {
+      vi.useRealTimers();
+      if (originalImpl) {
+        vi.mocked(getLocalGraph).mockImplementation(originalImpl);
+      }
+    }
+  });
+
+  // #358 boy-scout — empty-state divs gain aria-label. The default file-
+  // scope mock returns one edge, so the {#if !hasLinks} branch is
+  // unreachable from there. Override per-test to return zero edges so
+  // the no-links overlay actually renders and the assertion is real
+  // (Aristotle PR-D review — inert assertion).
+  it("#358 no-connections div has aria-label 'No outgoing or incoming links for this file'", async () => {
+    const { getLocalGraph } = await import("../../../ipc/commands");
+    const originalImpl = vi.mocked(getLocalGraph).getMockImplementation();
+    vi.mocked(getLocalGraph).mockResolvedValue({
+      nodes: [
+        { id: "note.md", label: "note", path: "note.md", backlinkCount: 0, resolved: true },
+      ],
+      edges: [],
+    } as unknown as Awaited<ReturnType<typeof getLocalGraph>>);
+    try {
+      vi.useFakeTimers();
+      const { container } = render(LocalGraphPanel);
+      await vi.advanceTimersByTimeAsync(250);
+      await tick();
+      await tick();
+      setCanvasSize(container as HTMLElement, 320, 240);
+      fireObserver(320, 240);
+      await tick();
+      await tick();
+
+      const noLinks = container.querySelector(".vc-graph-no-links");
+      expect(noLinks).toBeTruthy();
+      expect(noLinks!.getAttribute("aria-label")).toBe(
+        "No outgoing or incoming links for this file",
+      );
+    } finally {
+      vi.useRealTimers();
+      if (originalImpl) {
+        vi.mocked(getLocalGraph).mockImplementation(originalImpl);
+      }
+    }
+  });
+
   it("ignores observations that still report a sub-threshold size", async () => {
     vi.useFakeTimers();
 
