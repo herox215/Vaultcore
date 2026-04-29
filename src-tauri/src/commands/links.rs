@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::encryption::CanonicalPath;
 use crate::error::VaultError;
+use crate::indexer::anchors::AnchorKeySet;
 use crate::indexer::link_graph::{self, BacklinkEntry, LinkGraph, ParsedLink, UnresolvedLink};
 use crate::indexer::memory::FileIndex;
 use crate::indexer::tag_index::TagIndex;
@@ -136,8 +137,15 @@ pub struct RenameResult {
 /// internally consistent.
 ///
 /// `re` MUST be the pre-compiled rename regex
-/// (`\[\[<old_stem>(\|[^\]]*)?(\]\])`).  Compilation is hoisted to the
-/// caller so the `rayon` parallel loop reuses a single instance.
+/// (`\[\[<old_stem>(#[^\]\|\^]+)?(\^[A-Za-z0-9-]+)?(\|[^\]]*)?(\]\])`).
+/// Compilation is hoisted to the caller so the `rayon` parallel loop
+/// reuses a single instance.
+///
+/// #62: heading (`#H`) and block-id (`^id`) suffixes are preserved
+/// unchanged so a rename of `Note` → `NewNote` rewrites `[[Note#H]]` →
+/// `[[NewNote#H]]` and `[[Note^id]]` → `[[NewNote^id]]` instead of
+/// collapsing them to `[[NewNote]]` (which would silently drop the anchor
+/// and route every cascade'd link to the top of the renamed note).
 fn rewrite_wiki_links_respecting_templates(
     content: &str,
     re: &Regex,
@@ -152,8 +160,10 @@ fn rewrite_wiki_links_respecting_templates(
                 return whole.as_str().to_string();
             }
             link_count += 1;
-            let alias_part = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            format!("[[{}{}]]", new_stem, alias_part)
+            let heading_part = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let block_part = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let alias_part = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            format!("[[{}{}{}{}]]", new_stem, heading_part, block_part, alias_part)
         })
         .into_owned();
     (new_content, link_count)
@@ -421,8 +431,15 @@ pub async fn update_links_after_rename(
         .strip_suffix(".md")
         .unwrap_or(&new_path);
 
-    // Regex: [[old_stem]] or [[old_stem|alias]]
-    let pattern = format!(r"\[\[{}(\|[^\]]*)?(\]\])", regex::escape(old_stem));
+    // Regex: [[old_stem]], [[old_stem#H]], [[old_stem^id]], [[old_stem|alias]],
+    // [[old_stem#H|alias]], [[old_stem^id|alias]], or any combination thereof.
+    // #62: heading and block-id suffixes are captured separately so the
+    // rewriter preserves them on the rewritten link instead of collapsing
+    // every cascade'd link to a bare stem reference.
+    let pattern = format!(
+        r"\[\[{}(#[^\]\|\^]+)?(\^[A-Za-z0-9-]+)?(\|[^\]]*)?(\]\])",
+        regex::escape(old_stem)
+    );
     let re = Regex::new(&pattern).map_err(|e| {
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
@@ -673,6 +690,52 @@ pub async fn get_resolved_links(
         .filter(|(p, _)| !checker.is_locked(p))
         .collect();
     Ok(link_graph::resolved_map_with_aliases(&paths, &filtered_aliases))
+}
+
+// ── get_resolved_anchors ───────────────────────────────────────────────────────
+
+/// Return a `rel_path -> AnchorKeySet` map covering every indexed file that
+/// owns at least one block-id or heading anchor (#62).
+///
+/// Two design decisions baked in:
+///   1. **Keyed by rel_path**, not stem. Anchor data is unambiguous given the
+///      file's relative path; stems can collide across folders.
+///   2. **UTF-16 offsets are precomputed in Rust.** The frontend slices
+///      `noteContentCache` content (a JS string) directly with `js_start /
+///      js_end`, which avoids byte-vs-code-unit drift on multi-byte content
+///      (CJK, emoji). Byte offsets are still surfaced for tools and tests.
+///
+/// Empty entries are skipped so the wire payload stays bounded — most notes
+/// in a typical vault carry zero anchors.
+#[tauri::command]
+pub async fn get_resolved_anchors(
+    state: tauri::State<'_, VaultState>,
+) -> Result<HashMap<String, AnchorKeySet>, VaultError> {
+    let ai_arc = {
+        let guard = state
+            .index_coordinator
+            .lock()
+            .map_err(|_| VaultError::IndexCorrupt)?;
+        match guard.as_ref() {
+            Some(c) => c.anchor_index(),
+            None => return Ok(HashMap::new()),
+        }
+    };
+
+    let snapshot = {
+        let ai = ai_arc.lock().map_err(|_| VaultError::IndexCorrupt)?;
+        ai.snapshot_payload()
+    };
+
+    // #345 parity with `get_resolved_links`: drop entries whose path lives
+    // inside a locked encrypted root so anchor data doesn't leak.
+    let checker = LockedRelChecker::new(&state);
+    Ok(snapshot
+        .into_iter()
+        .filter(|(rel, ks)| {
+            !checker.is_locked(rel) && (!ks.blocks.is_empty() || !ks.headings.is_empty())
+        })
+        .collect())
 }
 
 // ── get_resolved_attachments ───────────────────────────────────────────────────
@@ -1243,7 +1306,10 @@ mod tests {
     // render and the user may not notice until much later.
 
     fn build_rename_regex(old_stem: &str) -> regex::Regex {
-        let pattern = format!(r"\[\[{}(\|[^\]]*)?(\]\])", regex::escape(old_stem));
+        let pattern = format!(
+            r"\[\[{}(#[^\]\|\^]+)?(\^[A-Za-z0-9-]+)?(\|[^\]]*)?(\]\])",
+            regex::escape(old_stem)
+        );
         regex::Regex::new(&pattern).expect("test regex must compile")
     }
 
@@ -1284,6 +1350,44 @@ mod tests {
         let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
         assert_eq!(count, 0);
         assert_eq!(out, content);
+    }
+
+    // ── #62: rename cascade preserves block-id and heading suffixes ────────
+
+    #[test]
+    fn rewrite_preserves_heading_anchor_on_rename() {
+        let re = build_rename_regex("foo");
+        let content = "see [[foo#Section Title]] for more";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 1);
+        assert_eq!(out, "see [[bar#Section Title]] for more");
+    }
+
+    #[test]
+    fn rewrite_preserves_block_anchor_on_rename() {
+        let re = build_rename_regex("foo");
+        let content = "see [[foo^para1]] then [[foo^para2]]";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 2);
+        assert_eq!(out, "see [[bar^para1]] then [[bar^para2]]");
+    }
+
+    #[test]
+    fn rewrite_preserves_heading_plus_alias() {
+        let re = build_rename_regex("foo");
+        let content = "[[foo#Heading|Display]]";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 1);
+        assert_eq!(out, "[[bar#Heading|Display]]");
+    }
+
+    #[test]
+    fn rewrite_preserves_block_plus_alias() {
+        let re = build_rename_regex("foo");
+        let content = "[[foo^id|caption]]";
+        let (out, count) = rewrite_wiki_links_respecting_templates(content, &re, "bar");
+        assert_eq!(count, 1);
+        assert_eq!(out, "[[bar^id|caption]]");
     }
 
     #[test]

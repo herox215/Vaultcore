@@ -11,7 +11,14 @@ import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
 import type { DirEntry } from "../types/tree";
 import type { SearchResult, FileMatch } from "../types/search";
-import type { BacklinkEntry, ParsedLink, UnresolvedLink, RenameResult, LocalGraph } from "../types/links";
+import type {
+  AnchorKeySet,
+  BacklinkEntry,
+  ParsedLink,
+  UnresolvedLink,
+  RenameResult,
+  LocalGraph,
+} from "../types/links";
 import type { TagUsage, TagOccurrence } from "../types/tags";
 import type { EncryptedFolderView } from "../types/encryption";
 
@@ -331,6 +338,23 @@ export async function updateLinksAfterRename(
 export async function getResolvedLinks(): Promise<Map<string, string>> {
   try {
     const record = await invoke<Record<string, string>>("get_resolved_links");
+    return new Map(Object.entries(record));
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+/**
+ * Return a `rel_path → AnchorKeySet` map covering every indexed file with at
+ * least one block-id or heading anchor (#62).
+ *
+ * UTF-16 offsets (`jsStart` / `jsEnd`) are precomputed in Rust so the
+ * frontend can slice JS strings (`noteContentCache` content) directly without
+ * worrying about UTF-8 vs. UTF-16 drift on multi-byte content.
+ */
+export async function getResolvedAnchors(): Promise<Map<string, AnchorKeySet>> {
+  try {
+    const record = await invoke<Record<string, AnchorKeySet>>("get_resolved_anchors");
     return new Map(Object.entries(record));
   } catch (e) {
     throw normalizeError(e);

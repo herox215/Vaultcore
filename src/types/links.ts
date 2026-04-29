@@ -71,6 +71,29 @@ export interface LocalGraph {
   edges: GraphEdge[];
 }
 
+/**
+ * One anchor entry returned by `get_resolved_anchors` (#62).
+ *
+ * `byteStart`/`byteEnd` are UTF-8 byte offsets — kept for completeness but
+ * the frontend never slices by them. `jsStart`/`jsEnd` are UTF-16 code-unit
+ * offsets, precomputed in Rust so JS string slicing on `noteContentCache`
+ * content is correct for multi-byte content (CJK, emoji, surrogate pairs).
+ */
+export interface AnchorEntry {
+  /** Block id (lowercased) for blocks; heading slug for headings. */
+  id: string;
+  byteStart: number;
+  byteEnd: number;
+  jsStart: number;
+  jsEnd: number;
+}
+
+/** All anchors discovered in one file, returned by `get_resolved_anchors`. */
+export interface AnchorKeySet {
+  blocks: AnchorEntry[];
+  headings: AnchorEntry[];
+}
+
 /** Result returned by update_links_after_rename. */
 export interface RenameResult {
   /** Number of files that had their links rewritten. */

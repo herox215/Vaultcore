@@ -153,6 +153,7 @@ pub fn run() {
             commands::links::suggest_links,
             commands::links::update_links_after_rename,
             commands::links::get_resolved_links,
+            commands::links::get_resolved_anchors,
             commands::links::get_resolved_attachments,
             commands::links::get_local_graph,
             commands::links::get_link_graph,

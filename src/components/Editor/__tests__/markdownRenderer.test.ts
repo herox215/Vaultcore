@@ -57,14 +57,14 @@ describe("renderMarkdownToHtml (#63)", () => {
   it("renders resolved wiki-links as anchors carrying target + resolved attributes", () => {
     setResolvedLinks(new Map([["foo", "notes/foo.md"]]));
     const html = renderMarkdownToHtml("Link: [[Foo]]");
-    expect(html).toMatch(/<a[^>]*data-wiki-target="Foo"[^>]*data-wiki-resolved="true"[^>]*>/);
+    expect(html).toMatch(/<a[^>]*data-wiki-target="Foo"[^>]*data-wiki-resolved="resolved"[^>]*>/);
     expect(html).toContain("vc-reading-wikilink--resolved");
   });
 
   it("renders unresolved wiki-links with the unresolved class", () => {
     const html = renderMarkdownToHtml("Link: [[Missing]]");
     expect(html).toContain("vc-reading-wikilink--unresolved");
-    expect(html).toMatch(/data-wiki-resolved="false"/);
+    expect(html).toMatch(/data-wiki-resolved="unresolved"/);
   });
 
   it("honours wiki-link aliases for display text", () => {

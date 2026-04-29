@@ -188,7 +188,10 @@ function appendValueWithWikiLinks(parent: HTMLElement, value: string): void {
     const link = document.createElement("span");
     link.className = resolved ? "cm-wikilink-resolved" : "cm-wikilink-unresolved";
     link.setAttribute("data-wiki-target", stem);
-    link.setAttribute("data-wiki-resolved", resolved ? "true" : "false");
+    // #62: three-valued resolution attribute. Template live-preview never
+    // emits anchor info, so a resolved target maps to "resolved" and a
+    // missing one to "unresolved" — there is no anchor-missing case here.
+    link.setAttribute("data-wiki-resolved", resolved ? "resolved" : "unresolved");
     link.textContent = alias !== undefined ? alias : rawTarget;
     parent.appendChild(link);
     cursor = m.index + m[0].length;

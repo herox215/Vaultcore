@@ -19,6 +19,8 @@ pub mod parser;
 pub mod link_graph;
 pub mod tag_index;
 pub mod frontmatter;
+pub mod anchors;
+pub mod anchor_index;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -28,6 +30,8 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use anchor_index::AnchorIndex;
+use anchors::{build_anchor_key_set, extract_anchors, AnchorKeySet};
 use link_graph::{LinkGraph, ParsedLink, StemIndex, extract_links};
 use tag_index::{TagIndex, extract_inline_tag_occurrences};
 use frontmatter::parse_frontmatter;
@@ -172,6 +176,10 @@ pub struct IndexCoordinator {
     link_graph: Arc<Mutex<LinkGraph>>,
     /// In-memory tag index — shared with tag IPC commands.
     tag_index: Arc<Mutex<TagIndex>>,
+    /// In-memory anchor index (#62) — `rel_path -> AnchorTable`. Populated
+    /// during cold-start and on every `UpdateLinks` so block-ref / heading-
+    /// ref resolution works without an extra IPC round-trip.
+    anchor_index: Arc<Mutex<AnchorIndex>>,
     /// #345: registry of locked encrypted roots. When populated, the
     /// cold-start walker prunes their subtrees so ciphertext is neither
     /// tokenized into Tantivy (garbage hits) nor traversed for links /
@@ -258,6 +266,7 @@ impl IndexCoordinator {
         )));
         let link_graph = Arc::new(Mutex::new(LinkGraph::new()));
         let tag_index = Arc::new(Mutex::new(TagIndex::new()));
+        let anchor_index = Arc::new(Mutex::new(AnchorIndex::new()));
 
         let (tx, rx) = mpsc::channel::<IndexCmd>(CHANNEL_CAPACITY);
 
@@ -276,6 +285,7 @@ impl IndexCoordinator {
         let file_index_clone = Arc::clone(&file_index);
         let link_graph_clone = Arc::clone(&link_graph);
         let tag_index_clone = Arc::clone(&tag_index);
+        let anchor_index_clone = Arc::clone(&anchor_index);
         tokio::task::spawn_blocking(move || {
             run_queue_consumer(
                 writer,
@@ -284,6 +294,7 @@ impl IndexCoordinator {
                 file_index_clone,
                 link_graph_clone,
                 tag_index_clone,
+                anchor_index_clone,
                 schema,
                 path_field,
                 title_field,
@@ -305,6 +316,7 @@ impl IndexCoordinator {
             index,
             link_graph,
             tag_index,
+            anchor_index,
             locked_paths: Arc::new(crate::encryption::LockedPathRegistry::new()),
         })
     }
@@ -333,6 +345,11 @@ impl IndexCoordinator {
     /// Clone the tag_index Arc for use in IPC commands.
     pub fn tag_index(&self) -> Arc<Mutex<TagIndex>> {
         Arc::clone(&self.tag_index)
+    }
+
+    /// Clone the anchor_index Arc for use in IPC commands (#62).
+    pub fn anchor_index(&self) -> Arc<Mutex<AnchorIndex>> {
+        Arc::clone(&self.anchor_index)
     }
 
     /// Index all `.md` files in `vault_path` and return a `VaultInfo`.
@@ -385,6 +402,13 @@ impl IndexCoordinator {
         // their first step, so any iteration order yields the same end state.
         let mut link_buffer: Vec<(String, Vec<ParsedLink>)> = Vec::with_capacity(total);
         let mut tag_buffer: Vec<(String, Vec<String>)> = Vec::with_capacity(total);
+        // Anchor buffer (#62). Holds the small wire-format payload, NOT the
+        // raw file content — the latter would balloon the buffer to several
+        // hundred MB on a 100k-note vault and overrun the 250 MB active-RAM
+        // budget. The UTF-16 offsets are computed inline against the
+        // already-borrowed `content` String, which is dropped as soon as
+        // the loop body completes.
+        let mut anchor_buffer: Vec<(String, AnchorKeySet)> = Vec::with_capacity(total);
 
         for (i, abs_path) in md_paths.iter().enumerate() {
             // Read file — skip non-UTF-8 silently (IDX-08). THE ONLY read of
@@ -429,6 +453,9 @@ impl IndexCoordinator {
             link_buffer.push((relative_path.clone(), links));
             let tags = extract_inline_tag_occurrences(&content);
             tag_buffer.push((relative_path.clone(), tags));
+            let anchor_table = extract_anchors(&content);
+            let anchor_payload = build_anchor_key_set(&content, &anchor_table);
+            anchor_buffer.push((relative_path.clone(), anchor_payload));
 
             if !already_current {
                 let body = parser::strip_markdown(&content);
@@ -505,6 +532,11 @@ impl IndexCoordinator {
                     ti.update_file_with_tags(&rel, tags);
                 }
             }
+            if let Ok(mut ai) = self.anchor_index.lock() {
+                for (rel, payload) in anchor_buffer {
+                    ai.update_file_with_payload(&rel, payload);
+                }
+            }
         }
 
         file_list.sort();
@@ -527,6 +559,7 @@ fn run_queue_consumer(
     file_index: Arc<RwLock<FileIndex>>,
     link_graph: Arc<Mutex<LinkGraph>>,
     tag_index: Arc<Mutex<TagIndex>>,
+    anchor_index: Arc<Mutex<AnchorIndex>>,
     _schema: Schema,
     path_field: tantivy::schema::Field,
     title_field: tantivy::schema::Field,
@@ -628,6 +661,13 @@ fn run_queue_consumer(
                 if let Ok(mut fi) = file_index.write() {
                     fi.set_aliases_for_rel(&rel_path, aliases);
                 }
+                // Issue #62: same content read powers anchor extraction —
+                // refresh the anchor index alongside links so block-ref
+                // resolution stays current after every save / external edit.
+                let anchor_table = anchors::extract_anchors(&content);
+                if let Ok(mut ai) = anchor_index.lock() {
+                    ai.update_file(&rel_path, &content, anchor_table);
+                }
             }
             IndexCmd::RemoveLinks { rel_path } => {
                 // Remove link-graph entries for a deleted file (LINK-08).
@@ -639,6 +679,10 @@ fn run_queue_consumer(
                 // clear here. RemoveLinks fires on rename-old too — the rename's
                 // new-side UpdateLinks command repopulates aliases under the new
                 // rel_path.
+                // Issue #62: drop anchor entries with the deleted file.
+                if let Ok(mut ai) = anchor_index.lock() {
+                    ai.remove_file(&rel_path);
+                }
             }
             IndexCmd::UpdateTags { rel_path, content } => {
                 // Incrementally update tag-index entries for a file (TAG-01/02).
