@@ -56,19 +56,16 @@ describe("AsciiSpinner (#358)", () => {
     expect(src).toContain("╱");
   });
 
-  it("source does not use ASCII slashes (\\ U+005C, / U+002F) inside keyframe content", () => {
+  it("source uses no ASCII slashes (\\ U+005C, / U+002F) in any CSS `content:` declaration", () => {
     const src = readFileSync(SOURCE_PATH, "utf8");
-    // Extract the @keyframes block(s) and assert no ASCII slash content
-    // values appear there. ASCII `/` is allowed elsewhere (e.g. JSDoc,
-    // closing tags) but never as a spinner frame.
-    const keyframesMatch = src.match(/@keyframes[^{]+\{[\s\S]*?\n\s*\}/g);
-    expect(keyframesMatch).toBeTruthy();
-    for (const block of keyframesMatch!) {
-      // Look for `content: "..."` payloads inside the keyframes.
-      const contents = block.match(/content:\s*"([^"]*)"/g) ?? [];
-      for (const c of contents) {
-        expect(c).not.toMatch(/[\\/]/);
-      }
+    // Aristotle PR-A review — scan ALL `content:` declarations in the
+    // file (not just inside @keyframes), including the @media
+    // (prefers-reduced-motion) fallback. Any ASCII slash here would be
+    // a regression of the box-drawing-only palette constraint.
+    const declarations = src.match(/content:\s*"([^"]*)"/g) ?? [];
+    expect(declarations.length).toBeGreaterThan(0);
+    for (const decl of declarations) {
+      expect(decl).not.toMatch(/[\\/]/);
     }
   });
 
