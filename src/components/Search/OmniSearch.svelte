@@ -35,7 +35,11 @@
   // "Keine Treffer", "Erneut versuchen", etc.) are intentionally left in
   // place; translation is tracked outside #358.
   import AsciiSpinner from "../ascii/AsciiSpinner.svelte";
-  import AsciiSkeleton from "../ascii/AsciiSkeleton.svelte";
+  // #358 — AsciiWave (animated block-density traveller) replaced the
+  // static AsciiSkeleton at this surface for a clearer "search-in-flight"
+  // cue. AsciiSkeleton stays available for the deferred EditorPane
+  // noteLoading skeleton (#372).
+  import AsciiWave from "../ascii/AsciiWave.svelte";
   import {
     computeRecentFiles,
     recentsSignature,
@@ -491,10 +495,10 @@
           {/if}
         {:else}
           {#if pendingContentSearch && !storeState.isRebuilding && query.trim()}
-            <!-- #358 — content-mode skeleton. Shown from the moment the
+            <!-- #358 — content-mode wave. Shown from the moment the
                  user pauses typing (debounce armed) through the in-flight
                  RPC. Hidden when results land or the query is cleared. -->
-            <AsciiSkeleton lines={3} width={36} seed={2} />
+            <AsciiWave width={36} />
           {:else if activeList.length === 0 && query.trim()}
             <p class="vc-qs-empty">Keine Treffer</p>
           {:else if activeList.length === 0}
