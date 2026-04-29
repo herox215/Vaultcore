@@ -226,70 +226,82 @@ describe("OmniSearch (#174)", () => {
   // The skeleton must mount from the moment the user pauses typing
   // (debounce armed) and stay visible until results land or the query
   // is cleared. Empty queries never render the skeleton.
+  //
+  // Uses Vitest fake timers + a manually-resolved searchFulltext mock so
+  // we can drive the debounce window deterministically without
+  // wall-clock waits (Aristotle PR-D review — flake-prone real timers).
 
-  it("#358 PR D: renders an AsciiSkeleton during the debounce window", async () => {
-    let _resolve!: (v: SearchResult[]) => void;
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise<SearchResult[]>((r) => { _resolve = r; }),
-    );
-    const { container } = mountOpen({ initialMode: "content" });
-    await tick();
+  describe("#358 PR D: content-mode skeleton lifecycle (fake timers)", () => {
+    let resolveFulltext: ((v: SearchResult[]) => void) | undefined;
 
-    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
-    await fireEvent.input(input, { target: { value: "needle" } });
-    await tick();
+    beforeEach(() => {
+      vi.useFakeTimers();
+      resolveFulltext = undefined;
+      (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        () => new Promise<SearchResult[]>((r) => { resolveFulltext = r; }),
+      );
+    });
 
-    // Inside the 200ms debounce window — RPC has not dispatched.
-    expect(searchFulltext).not.toHaveBeenCalled();
-    expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
-  });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-  it("#358 PR D: skeleton stays mounted while the RPC is in flight", async () => {
-    let _resolve!: (v: SearchResult[]) => void;
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise<SearchResult[]>((r) => { _resolve = r; }),
-    );
-    const { container } = mountOpen({ initialMode: "content" });
-    await tick();
+    it("renders an AsciiSkeleton during the debounce window", async () => {
+      const { container } = mountOpen({ initialMode: "content" });
+      await tick();
 
-    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
-    await fireEvent.input(input, { target: { value: "needle" } });
-    // Flush the debounce timer.
-    await new Promise((r) => setTimeout(r, 260));
-    expect(searchFulltext).toHaveBeenCalled();
-    // Skeleton is still in DOM — RPC unresolved.
-    expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
-  });
+      const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+      await fireEvent.input(input, { target: { value: "needle" } });
+      await tick();
 
-  it("#358 PR D: skeleton unmounts once results land", async () => {
-    let _resolve!: (v: SearchResult[]) => void;
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise<SearchResult[]>((r) => { _resolve = r; }),
-    );
-    const { container } = mountOpen({ initialMode: "content" });
-    await tick();
+      // Inside the 200ms debounce window — RPC has not dispatched.
+      expect(searchFulltext).not.toHaveBeenCalled();
+      expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+    });
 
-    const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
-    await fireEvent.input(input, { target: { value: "needle" } });
-    await new Promise((r) => setTimeout(r, 260));
-    expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+    it("skeleton stays mounted while the RPC is in flight", async () => {
+      const { container } = mountOpen({ initialMode: "content" });
+      await tick();
 
-    _resolve([]);
-    await Promise.resolve();
-    await tick();
-    await Promise.resolve();
-    await tick();
+      const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+      await fireEvent.input(input, { target: { value: "needle" } });
+      // Flush the 200 ms debounce via fake timers; await both the
+      // microtask and tick passes so the dispatch has run.
+      await vi.advanceTimersByTimeAsync(250);
+      await tick();
+      expect(searchFulltext).toHaveBeenCalled();
+      // RPC unresolved — skeleton must still be mounted.
+      expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+    });
 
-    expect(container.querySelector(".vc-ascii-skel")).toBeNull();
-  });
+    it("skeleton unmounts once results land", async () => {
+      const { container } = mountOpen({ initialMode: "content" });
+      await tick();
 
-  it("#358 PR D: empty query in content mode does NOT render the skeleton", async () => {
-    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-    const { container } = mountOpen({ initialMode: "content" });
-    await tick();
-    await Promise.resolve();
+      const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+      await fireEvent.input(input, { target: { value: "needle" } });
+      await vi.advanceTimersByTimeAsync(250);
+      await tick();
+      expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+      expect(resolveFulltext).toBeDefined();
 
-    expect(container.querySelector(".vc-ascii-skel")).toBeNull();
+      resolveFulltext!([]);
+      // Drain microtasks so the .then in runContentSearch settles.
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+        await tick();
+      }
+
+      expect(container.querySelector(".vc-ascii-skel")).toBeNull();
+    });
+
+    it("empty query in content mode does NOT render the skeleton", async () => {
+      const { container } = mountOpen({ initialMode: "content" });
+      await tick();
+      await Promise.resolve();
+
+      expect(container.querySelector(".vc-ascii-skel")).toBeNull();
+    });
   });
 
   it("clears the rebuild status line on success and flips indexStale off", async () => {

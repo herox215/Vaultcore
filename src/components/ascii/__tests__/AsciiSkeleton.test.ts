@@ -49,4 +49,25 @@ describe("AsciiSkeleton (#358)", () => {
     const b = render(AsciiSkeleton, { props: { lines: 3, width: 20, seed: 1 } });
     expect(textOf(a.container as HTMLElement)).not.toBe(textOf(b.container as HTMLElement));
   });
+
+  // Aristotle PR-D review — narrow widths used to crash with
+  // `RangeError: Invalid count value` because
+  // `Math.floor(rng() * (width - 8)) + 4` can be negative for small
+  // widths, then `"░".repeat(gapAt)` throws. Mounting at boundary
+  // widths must NEVER throw.
+  it.each([0, 1, 5])("does not throw RangeError when width=%i", (width) => {
+    expect(() => {
+      render(AsciiSkeleton, { props: { lines: 2, width, seed: 0 } });
+    }).not.toThrow();
+  });
+
+  it("renders only ░, space, and newline chars even at narrow widths", () => {
+    for (const width of [1, 3, 5]) {
+      const { container } = render(AsciiSkeleton, {
+        props: { lines: 2, width, seed: 7 },
+      });
+      const text = textOf(container as HTMLElement);
+      expect(text).toMatch(/^[░ \n]*$/);
+    }
+  });
 });
