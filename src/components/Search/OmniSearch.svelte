@@ -439,7 +439,13 @@
 
       {#if statusText}
         <p class="vc-omni-status" role="status" aria-live="polite">
-          <AsciiSpinner />
+          {#if !rebuildError}
+            <!-- Spinner only animates while a rebuild is actively in
+                 flight. In the error state the same <p> shows the
+                 failure copy + retry link, so spinning would imply
+                 progress where there is none. -->
+            <AsciiSpinner />
+          {/if}
           {statusText}
           {#if rebuildError}
             <!-- svelte-ignore a11y_invalid_attribute -->

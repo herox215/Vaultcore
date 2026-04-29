@@ -27,7 +27,7 @@
       <p class="vc-progress-counter" data-testid="progress-counter">
         {formatCount($progressStore.current)} / {formatCount($progressStore.total)}
       </p>
-      <div class="vc-progress-track" role="progressbar"
+      <div role="progressbar"
            aria-valuemin="0"
            aria-valuemax={$progressStore.total}
            aria-valuenow={$progressStore.current}>
@@ -72,13 +72,6 @@
     font-size: 12px;
     color: var(--color-text-muted);
     text-align: right;
-  }
-  /* The progressbar wrapper retains its semantic role + aria-valuemin/max/now;
-     the visual bar inside is now the AsciiProgressBar component. The old
-     coloured div + transition are intentionally gone \u2014 the ASCII pulse on
-     the filled run is the new motion language. */
-  .vc-progress-track {
-    width: 100%;
   }
   .vc-progress-file {
     margin: 8px 0 0 0;
