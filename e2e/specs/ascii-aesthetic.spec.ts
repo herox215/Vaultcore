@@ -51,14 +51,22 @@ describe("ASCII aesthetic smoke (#358)", () => {
 
     // The encryption pill may not exist if no encrypted folder is in
     // the vault — only run the geometry check when both elements are
-    // displayed.
-    const pill = await browser.$(".vc-encryption-statusbar");
+    // displayed. Class is `.vc-encrypt-bar` (the
+    // EncryptionStatusbar.svelte source); a previous selector
+    // `.vc-encryption-statusbar` silently skipped the assertion.
+    const pill = await browser.$(".vc-encrypt-bar");
     if (await pill.isExisting()) {
       const pillBox = await pill.getLocation();
       const pillSize = await pill.getSize();
+      // Both elements must have non-zero height so the geometry check
+      // is meaningful — a 0×0 element trivially "doesn't overlap".
+      expect(accentSize.height).toBeGreaterThan(0);
+      expect(pillSize.height).toBeGreaterThan(0);
       const accentBottom = accentBox.y + accentSize.height;
-      const pillTop = pillBox.y;
-      expect(accentBottom <= pillTop || pillBox.y + pillSize.height <= accentBox.y).toBe(true);
+      const pillBottom = pillBox.y + pillSize.height;
+      // No vertical overlap: either accent ends above pill, or pill
+      // ends above accent.
+      expect(accentBottom <= pillBox.y || pillBottom <= accentBox.y).toBe(true);
     }
   });
 

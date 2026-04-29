@@ -81,7 +81,10 @@
     line-height: 1.2;
     color: var(--color-text-muted);
     white-space: pre;
-    overflow: hidden;
+    /* Reveal — not silently clip — any overflow if the user's mono
+       fallback renders wider than JetBrains Mono. `overflow-x: auto`
+       surfaces the visual regression instead of swallowing it. */
+    overflow-x: auto;
   }
   .vc-welcome-tagline {
     margin: 0 0 32px 0;

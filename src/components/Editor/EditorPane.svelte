@@ -42,9 +42,11 @@
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { formatShortcut } from "../../lib/shortcuts";
 
-  // #358 — open-file shortcut for the empty-state legend. The Quick
-  // Switcher (defaultCommands.ts) is bound to meta+O; formatShortcut
-  // resolves to "⌘+O" on macOS and "Ctrl+O" elsewhere.
+  // #358 — open-file shortcut for the empty-state legend.
+  // formatShortcut resolves to "⌘+O" on macOS and "Ctrl+O" elsewhere.
+  // The bound key in defaultCommands.ts is lowercase "o"; formatShortcut
+  // uppercases the displayed glyph, so passing "O" here matches the
+  // displayed label and is what the helper expects.
   const emptyOpenShortcut = formatShortcut({ meta: true, key: "O" });
 
   let {
