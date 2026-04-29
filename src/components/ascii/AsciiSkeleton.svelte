@@ -24,14 +24,22 @@
 
   const rows = $derived.by(() => {
     const rng = lcg(seed);
+    const safeWidth = Math.max(0, width | 0);
     const out: string[] = [];
     for (let i = 0; i < lines; i++) {
-      // 1–2 small gaps per line, otherwise solid ░.
-      const gapAt = Math.floor(rng() * (width - 8)) + 4;
-      const gapLen = 1 + Math.floor(rng() * 2);
+      // 1–2 small gaps per line, otherwise solid ░. For widths < ~9
+      // the (width - 8) factor goes negative; clamp gapAt to a
+      // non-negative cell index AND cap gapLen so the trailing
+      // segment can never overshoot the line width. Without these
+      // clamps `String.prototype.repeat` throws RangeError on
+      // narrow widths.
+      const rawGapAt = Math.floor(rng() * (safeWidth - 8)) + 4;
+      const gapAt = Math.max(0, Math.min(safeWidth, rawGapAt));
+      const rawGapLen = 1 + Math.floor(rng() * 2);
+      const gapLen = Math.max(0, Math.min(safeWidth - gapAt, rawGapLen));
       const before = "░".repeat(gapAt);
       const gap = " ".repeat(gapLen);
-      const after = "░".repeat(Math.max(0, width - gapAt - gapLen));
+      const after = "░".repeat(Math.max(0, safeWidth - gapAt - gapLen));
       out.push(before + gap + after);
     }
     return out;
