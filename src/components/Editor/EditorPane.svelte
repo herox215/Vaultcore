@@ -826,6 +826,23 @@
     // mount is still in-flight (issue #41).
     tabStore.setLastSavedContent(tabId, content);
 
+    // #62: an anchor click that opened this tab via `tabStore.openTab` will
+    // have queued a `scrollStore.requestScrollToRange` BEFORE the view
+    // existed. The scrollStore subscriber only fires on store changes and
+    // bails when the view isn't in `viewMap`, so without this peek the
+    // request stays pending forever. Consume it now that the view is
+    // ready and the file path matches.
+    {
+      const pending = get(scrollStore).pending;
+      if (pending && pending.filePath === tabFilePath && pending.range) {
+        const docLen = view.state.doc.length;
+        const from = Math.min(pending.range.from, docLen);
+        const to = Math.min(pending.range.to, docLen);
+        if (from < to) scrollToMatch(view, from, to);
+        scrollStore.clearPending();
+      }
+    }
+
     // Attach wiki-link-click listener only on editable markdown tabs —
     // read-only previews don't have the wiki-link plugin loaded so no
     // wiki-link-click events would ever fire from them anyway.
