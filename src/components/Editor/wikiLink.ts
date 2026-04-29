@@ -24,6 +24,7 @@ import type { EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 
 import type { AnchorEntry, AnchorKeySet } from "../../types/links";
+import { slugify } from "../../lib/headingSlug";
 import {
   findTemplateExprRanges,
   isInsideTemplateExpr,
@@ -133,9 +134,13 @@ export function stripKnownExt(target: string): string {
 
 /**
  * Look up the anchor entry for `(relPath, anchor)`, or `null` when the file
- * has no anchors registered or the anchor doesn't match. Slug comparison is
- * case-insensitive for headings; block ids compare byte-for-byte against the
- * lowercased value already produced by `parseLinkTarget`.
+ * has no anchors registered or the anchor doesn't match.
+ *
+ * Block ids compare byte-for-byte against the lowercased value already
+ * produced by `parseLinkTarget`. Heading lookups slugify the raw heading
+ * text first so `[[Note#Multi Word Heading]]` matches the index-time slug
+ * `multi-word-heading`. The slug algorithm is the same on both sides —
+ * see `test-fixtures/slug_parity.json`.
  */
 export function resolveAnchor(relPath: string, anchor: ParsedAnchor): AnchorEntry | null {
   const set = resolvedAnchors.get(relPath);
@@ -143,8 +148,8 @@ export function resolveAnchor(relPath: string, anchor: ParsedAnchor): AnchorEntr
   if (anchor.kind === "block") {
     return set.blocks.find((b) => b.id === anchor.value) ?? null;
   }
-  const target = anchor.value.toLowerCase();
-  return set.headings.find((h) => h.id.toLowerCase() === target) ?? null;
+  const targetSlug = slugify(anchor.value);
+  return set.headings.find((h) => h.id === targetSlug) ?? null;
 }
 
 /** Three-valued resolution state for wiki-links carrying optional anchors (#62). */

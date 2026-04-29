@@ -728,4 +728,38 @@ mod tests {
         assert!(table.blocks.is_empty());
         assert!(table.headings.is_empty());
     }
+
+    // ── Cross-language parity (#62) ────────────────────────────────────────
+    //
+    // Same shape as `template_expr_regex_matches_shared_fixture`: the JSON
+    // fixture lives next to the Rust crate root and is consumed by both
+    // sides. Drift in the slug algorithm would silently break every
+    // multi-word heading anchor — keep them in lockstep.
+
+    #[derive(serde::Deserialize)]
+    struct SlugCase {
+        name: String,
+        input: String,
+        expected: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SlugFixture {
+        cases: Vec<SlugCase>,
+    }
+
+    #[test]
+    fn slugify_parity_fixture() {
+        const FIXTURE: &str = include_str!("../../../test-fixtures/slug_parity.json");
+        let fixture: SlugFixture = serde_json::from_str(FIXTURE)
+            .expect("slug_parity.json is valid JSON");
+        for case in &fixture.cases {
+            assert_eq!(
+                slugify(&case.input),
+                case.expected,
+                "parity mismatch on case {:?}",
+                case.name,
+            );
+        }
+    }
 }

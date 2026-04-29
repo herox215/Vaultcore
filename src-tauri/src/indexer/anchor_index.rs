@@ -13,11 +13,9 @@ use super::anchors::{build_anchor_key_set, AnchorKeySet, AnchorTable};
 
 #[derive(Debug, Default)]
 pub struct AnchorIndex {
-    by_path: HashMap<String, AnchorTable>,
-    /// Pre-built wire-format payload kept in lock-step with `by_path`. The
-    /// hot get_resolved_anchors path returns this without re-walking the
-    /// table on every IPC, mirroring the prebuilt-cache idea behind
-    /// `StemIndex` for the link-resolution path.
+    /// Pre-built wire-format payload — what `get_resolved_anchors` returns.
+    /// We don't keep `AnchorTable` separately: only the payload is read
+    /// downstream, and storing both doubles memory + risks drift.
     payload: HashMap<String, AnchorKeySet>,
 }
 
@@ -26,34 +24,25 @@ impl AnchorIndex {
         Self::default()
     }
 
-    /// Replace the anchor data for a single file. Idempotent: a second call
-    /// for the same path overwrites the first.
+    /// Replace the anchor data for a single file via raw inputs. Idempotent.
+    /// Used by the watcher path (`UpdateLinks`) which holds the AnchorTable
+    /// directly. Cold-start uses `update_file_with_payload` to skip the
+    /// table-keeping that would balloon the cold-start buffer.
     pub fn update_file(&mut self, rel_path: &str, content: &str, table: AnchorTable) {
         let payload = build_anchor_key_set(content, &table);
+        self.update_file_with_payload(rel_path, payload);
+    }
+
+    /// Replace the anchor data for a single file with a precomputed payload.
+    /// Used by the cold-start flush so we never carry raw file contents
+    /// past the per-file loop body.
+    pub fn update_file_with_payload(&mut self, rel_path: &str, payload: AnchorKeySet) {
         self.payload.insert(rel_path.to_string(), payload);
-        self.by_path.insert(rel_path.to_string(), table);
     }
 
     /// Drop every anchor entry for a file (used on delete and rename-old).
     pub fn remove_file(&mut self, rel_path: &str) {
-        self.by_path.remove(rel_path);
         self.payload.remove(rel_path);
-    }
-
-    /// Re-key an existing entry on rename — anchor data is keyed by rel_path
-    /// only (anchor content is independent of filename), so rename does not
-    /// invalidate the table itself. Cheaper than removing + re-extracting.
-    pub fn rename_file(&mut self, old_rel: &str, new_rel: &str) {
-        if let Some(table) = self.by_path.remove(old_rel) {
-            self.by_path.insert(new_rel.to_string(), table);
-        }
-        if let Some(payload) = self.payload.remove(old_rel) {
-            self.payload.insert(new_rel.to_string(), payload);
-        }
-    }
-
-    pub fn anchors_for(&self, rel_path: &str) -> Option<&AnchorTable> {
-        self.by_path.get(rel_path)
     }
 
     /// Snapshot for the wire payload — clones the precomputed map, no
@@ -69,38 +58,36 @@ mod tests {
     use crate::indexer::anchors::extract_anchors;
 
     #[test]
-    fn rename_moves_entry_without_recomputing() {
-        let mut idx = AnchorIndex::new();
-        let md = "para ^id1\n";
-        let table = extract_anchors(md);
-        idx.update_file("old.md", md, table);
-        idx.rename_file("old.md", "new.md");
-        assert!(idx.anchors_for("old.md").is_none());
-        assert!(idx.anchors_for("new.md").is_some());
-        let payload = idx.snapshot_payload();
-        assert!(payload.contains_key("new.md"));
-        assert!(!payload.contains_key("old.md"));
-    }
-
-    #[test]
     fn update_overwrites_previous_entry() {
         let mut idx = AnchorIndex::new();
         let md1 = "first ^a\n";
         let md2 = "second ^b\n";
         idx.update_file("note.md", md1, extract_anchors(md1));
         idx.update_file("note.md", md2, extract_anchors(md2));
-        let table = idx.anchors_for("note.md").unwrap();
-        assert_eq!(table.blocks.len(), 1);
-        assert_eq!(table.blocks[0].id, "b");
+        let payload = idx.snapshot_payload();
+        let entry = payload.get("note.md").expect("entry must exist");
+        assert_eq!(entry.blocks.len(), 1);
+        assert_eq!(entry.blocks[0].id, "b");
     }
 
     #[test]
-    fn remove_drops_both_table_and_payload() {
+    fn remove_drops_payload() {
         let mut idx = AnchorIndex::new();
         let md = "para ^id\n";
         idx.update_file("n.md", md, extract_anchors(md));
         idx.remove_file("n.md");
-        assert!(idx.anchors_for("n.md").is_none());
         assert!(!idx.snapshot_payload().contains_key("n.md"));
+    }
+
+    #[test]
+    fn update_file_with_payload_round_trips() {
+        let mut idx = AnchorIndex::new();
+        let md = "para ^id\n";
+        let table = extract_anchors(md);
+        let payload = super::super::anchors::build_anchor_key_set(md, &table);
+        idx.update_file_with_payload("n.md", payload);
+        let snap = idx.snapshot_payload();
+        assert!(snap.contains_key("n.md"));
+        assert_eq!(snap["n.md"].blocks[0].id, "id");
     }
 }

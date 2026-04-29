@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anchor_index::AnchorIndex;
-use anchors::{extract_anchors, AnchorTable};
+use anchors::{build_anchor_key_set, extract_anchors, AnchorKeySet};
 use link_graph::{LinkGraph, ParsedLink, StemIndex, extract_links};
 use tag_index::{TagIndex, extract_inline_tag_occurrences};
 use frontmatter::parse_frontmatter;
@@ -402,10 +402,13 @@ impl IndexCoordinator {
         // their first step, so any iteration order yields the same end state.
         let mut link_buffer: Vec<(String, Vec<ParsedLink>)> = Vec::with_capacity(total);
         let mut tag_buffer: Vec<(String, Vec<String>)> = Vec::with_capacity(total);
-        // Anchor buffer (#62). Holds `(rel_path, content, AnchorTable)` so the
-        // wire-format payload (UTF-16 offsets) can be precomputed under the
-        // anchor_index mutex without re-reading any file.
-        let mut anchor_buffer: Vec<(String, String, AnchorTable)> = Vec::with_capacity(total);
+        // Anchor buffer (#62). Holds the small wire-format payload, NOT the
+        // raw file content — the latter would balloon the buffer to several
+        // hundred MB on a 100k-note vault and overrun the 250 MB active-RAM
+        // budget. The UTF-16 offsets are computed inline against the
+        // already-borrowed `content` String, which is dropped as soon as
+        // the loop body completes.
+        let mut anchor_buffer: Vec<(String, AnchorKeySet)> = Vec::with_capacity(total);
 
         for (i, abs_path) in md_paths.iter().enumerate() {
             // Read file — skip non-UTF-8 silently (IDX-08). THE ONLY read of
@@ -451,7 +454,8 @@ impl IndexCoordinator {
             let tags = extract_inline_tag_occurrences(&content);
             tag_buffer.push((relative_path.clone(), tags));
             let anchor_table = extract_anchors(&content);
-            anchor_buffer.push((relative_path.clone(), content.clone(), anchor_table));
+            let anchor_payload = build_anchor_key_set(&content, &anchor_table);
+            anchor_buffer.push((relative_path.clone(), anchor_payload));
 
             if !already_current {
                 let body = parser::strip_markdown(&content);
@@ -529,8 +533,8 @@ impl IndexCoordinator {
                 }
             }
             if let Ok(mut ai) = self.anchor_index.lock() {
-                for (rel, content, table) in anchor_buffer {
-                    ai.update_file(&rel, &content, table);
+                for (rel, payload) in anchor_buffer {
+                    ai.update_file_with_payload(&rel, payload);
                 }
             }
         }

@@ -7,8 +7,8 @@
  * so the consumer can compare against Rust's slugged value).
  */
 
-import { describe, it, expect } from "vitest";
-import { parseLinkTarget } from "../wikiLink";
+import { describe, it, expect, beforeEach } from "vitest";
+import { parseLinkTarget, resolveAnchor, setResolvedAnchors } from "../wikiLink";
 
 describe("parseLinkTarget", () => {
   it("returns stem only when there is no anchor", () => {
@@ -78,5 +78,46 @@ describe("parseLinkTarget", () => {
       stem: "Note",
       anchor: { kind: "block", value: "id" },
     });
+  });
+});
+
+describe("resolveAnchor — heading slug parity (#62)", () => {
+  beforeEach(() => {
+    setResolvedAnchors(
+      new Map([
+        [
+          "doc.md",
+          {
+            blocks: [],
+            // `id` is the slug Rust stored at index time.
+            headings: [
+              { id: "multi-word-heading", byteStart: 0, byteEnd: 50, jsStart: 0, jsEnd: 50 },
+              { id: "düsseldorf", byteStart: 60, byteEnd: 100, jsStart: 60, jsEnd: 100 },
+            ],
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("resolves a multi-word heading link via the slug", () => {
+    // The user types `[[doc#Multi Word Heading]]` — the parsed value is
+    // the raw heading text. Without slugify the comparison would compare
+    // `"multi word heading"` to `"multi-word-heading"` and fail.
+    const entry = resolveAnchor("doc.md", { kind: "heading", value: "Multi Word Heading" });
+    expect(entry).not.toBeNull();
+    expect(entry!.id).toBe("multi-word-heading");
+  });
+
+  it("preserves non-ASCII letters during slug lookup", () => {
+    const entry = resolveAnchor("doc.md", { kind: "heading", value: "DÜSSELDORF" });
+    expect(entry).not.toBeNull();
+    expect(entry!.id).toBe("düsseldorf");
+  });
+
+  it("returns null when the heading slug is unknown", () => {
+    expect(
+      resolveAnchor("doc.md", { kind: "heading", value: "Missing Heading" }),
+    ).toBeNull();
   });
 });
