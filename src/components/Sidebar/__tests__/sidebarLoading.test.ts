@@ -96,4 +96,48 @@ describe("Sidebar loading state (#358)", () => {
     expect(status!.getAttribute("role")).toBe("status");
     expect(status!.getAttribute("aria-label")).toBe("Loading vault tree");
   });
+
+  // Aristotle PR-B review — `role="status"` nested inside `role="tree"`
+  // is invalid WAI-ARIA: the live region won't fire AND the tree is
+  // malformed. The loading placeholder must be a sibling of the tree
+  // container, not a child.
+  it("the loading placeholder is OUTSIDE the role=tree container", async () => {
+    (listDirectory as any).mockImplementation(() => new Promise(() => {}));
+    vaultStore.setReady({ currentPath: VAULT, fileList: [], fileCount: 0 });
+
+    const { container } = render(Sidebar, { props: makeProps() });
+    await tick();
+    await Promise.resolve();
+    await tick();
+
+    const tree = container.querySelector('[role="tree"]');
+    const status = container.querySelector('[role="status"]');
+    expect(tree).toBeTruthy();
+    expect(status).toBeTruthy();
+    // The status block must not be a descendant of the tree container.
+    expect(tree!.contains(status)).toBe(false);
+  });
+
+  // Regression: the loading-flag must clear once listDirectory resolves
+  // even when the vault is empty. Previously the loading <p> would stay
+  // mounted indefinitely (loading-flag leak called out by Socrates).
+  it("loader unmounts and the empty-vault message renders once listDirectory resolves with []", async () => {
+    (listDirectory as any).mockResolvedValue([]);
+    vaultStore.setReady({ currentPath: VAULT, fileList: [], fileCount: 0 });
+
+    const { container } = render(Sidebar, { props: makeProps() });
+
+    // Drain the IPC promise + the post-resolve effect chain.
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+      await tick();
+    }
+
+    // The loading status must be gone.
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    // And the empty-vault copy must be visible.
+    const empty = container.querySelector(".vc-sidebar-status");
+    expect(empty).toBeTruthy();
+    expect(empty!.textContent).toMatch(/No files in vault/);
+  });
 });
