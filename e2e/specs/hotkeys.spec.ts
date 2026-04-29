@@ -77,4 +77,52 @@ describe("Keyboard shortcut rebinding", () => {
 
     await closeSettings();
   });
+
+  it("opens the conflict modal when rebinding to a hotkey already in use", async () => {
+    // Cmd/Ctrl+N is the default for `File: New note`. Pick the first row
+    // that is NOT NEW_NOTE and rebind it to Ctrl+N — the conflict-detection
+    // path should surface the alert dialog.
+    await openSettings();
+
+    const targetIndex = await browser.execute(() => {
+      const recordBtns = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-testid="shortcut-record-btn"]'),
+      );
+      for (let i = 0; i < recordBtns.length; i++) {
+        const row = recordBtns[i]!.closest("tr");
+        const action = row?.querySelector(".vc-shortcut-action")?.textContent?.trim() ?? "";
+        if (action && !action.toLowerCase().includes("new note")) return i;
+      }
+      return -1;
+    });
+    expect(targetIndex).toBeGreaterThanOrEqual(0);
+
+    const recordBtn = (await browser.$$('[data-testid="shortcut-record-btn"]'))[targetIndex]!;
+    await recordBtn.click();
+    await browser.$('[data-testid="shortcut-recording"]').waitForDisplayed({ timeout: 2000 });
+
+    // The recording listener sits on `<svelte:window>`. Dispatch a
+    // synthetic keydown that hotkeyFromEvent maps to { meta: true,
+    // key: "n" } — matches NEW_NOTE's default → conflict path is taken.
+    await browser.execute(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "n",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    const conflict = await browser.$('[data-testid="shortcut-conflict"]');
+    await conflict.waitForDisplayed({ timeout: 3000 });
+
+    // Cancel the conflict so NEW_NOTE's binding stays intact for follow-on
+    // specs.
+    await browser.$('[data-testid="shortcut-conflict-cancel"]').click();
+    await conflict.waitForDisplayed({ reverse: true, timeout: 2000 });
+
+    await closeSettings();
+  });
 });

@@ -113,4 +113,67 @@ describe("Outgoing Links panel", () => {
       { timeout: 3000, timeoutMsg: "Active tab never switched to Daily Log" },
     );
   });
+
+  it("creates the missing note at vault root when an unresolved outlink is clicked", async () => {
+    // Wiki Links.md only references [[Welcome]], which exists. Edit the
+    // doc to add a brand-new dangling target so the outgoing panel renders
+    // an unresolved row we can click.
+    await openTreeFile("Wiki Links.md");
+    await browser.waitUntil(
+      async () => {
+        const els = await browser.$$(".cm-content");
+        for (const el of els) if (await el.isDisplayed()) return true;
+        return false;
+      },
+      { timeout: 5000 },
+    );
+
+    const dangling = `Brand New Note ${Date.now()}`;
+    // Type the link via the __e2e__ hook so the doc-change goes through
+    // the same CM6 transaction path the user would; raw `view.dispatch`
+    // requires reaching into CM6 internals that aren't exposed on
+    // `.cm-editor`.
+    await browser.executeAsync(
+      (target: string, done: () => void) => {
+        window.__e2e__!.typeInActiveEditor(`\n[[${target}]]\n`).then(() => done());
+      },
+      dangling,
+    );
+
+    await activateOutgoingSubtab();
+    await browser.waitUntil(
+      async () => {
+        const unresolved = await browser.$$(".vc-outlink-row--unresolved");
+        for (const el of unresolved) {
+          if ((await textOf(el)).includes(dangling)) return true;
+        }
+        return false;
+      },
+      { timeout: 5000, timeoutMsg: "unresolved row never appeared for the new target" },
+    );
+
+    // Click the unresolved row → click-to-create at vault root.
+    await browser.execute((target: string) => {
+      const rows = Array.from(
+        document.querySelectorAll<HTMLElement>(".vc-outlink-row--unresolved"),
+      );
+      const match = rows.find((r) => (r.textContent ?? "").includes(target));
+      match?.click();
+    }, dangling);
+
+    // The new file appears in the tree and a tab opens for it.
+    await browser.waitUntil(
+      async () => {
+        const names = await textsOf(await browser.$$(".vc-tree-name"));
+        return names.includes(`${dangling}.md`);
+      },
+      { timeout: 5000, timeoutMsg: "newly-created note never appeared in tree" },
+    );
+
+    const activeLabel = await browser.$(".vc-tab--active .vc-tab-label");
+    await browser.waitUntil(
+      async () => ((await activeLabel.getProperty("textContent")) as string).includes(dangling),
+      { timeout: 3000, timeoutMsg: "active tab never switched to the new note" },
+    );
+  });
 });

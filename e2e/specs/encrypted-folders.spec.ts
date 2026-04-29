@@ -194,4 +194,56 @@ describe("Encrypted folders (#345)", () => {
       { timeout: 10_000, timeoutMsg: "locked icon never reappeared after manual lock" },
     );
   });
+
+  it("Lock all now — Settings button locks every unlocked folder", async () => {
+    // Re-unlock first so we have something for the button to act on; the
+    // previous test left the folder locked.
+    const row = await findTreeRowByName(folderName);
+    if (!row) throw new Error("locked row missing");
+    await row.click();
+    const promptInput = await browser.$('[data-testid="password-prompt-input"]');
+    await promptInput.waitForDisplayed({ timeout: 3000 });
+    await promptInput.setValue(password);
+    await browser.$('[data-testid="password-prompt-confirm"]').click();
+    await browser.$('[data-testid="password-prompt"]').waitForDisplayed({
+      reverse: true,
+      timeout: 10_000,
+    });
+    await browser.waitUntil(
+      async () => {
+        const r = await findTreeRowByName(folderName);
+        if (!r) return false;
+        return (await r.$(".vc-tree-icon--unlocked").isExisting());
+      },
+      { timeout: 10_000, timeoutMsg: "folder never returned to unlocked" },
+    );
+
+    // Open settings → Lock all now → folder flips back to locked.
+    const settingsBtn = await browser.$('button[aria-label="Einstellungen"]');
+    await settingsBtn.click();
+    await browser.$('[data-testid="settings-modal"]').waitForDisplayed({ timeout: 3000 });
+
+    const lockAll = await browser.$('[data-testid="settings-lock-all"]');
+    await lockAll.waitForDisplayed({ timeout: 3000 });
+    await lockAll.click();
+
+    // Close the modal so the sidebar is observable again. The button is
+    // disabled when no encrypted folders are present, so the lock-all
+    // round-trip must have completed by the time we close.
+    const close = await browser.$(".vc-settings-close");
+    if (await close.isDisplayed().catch(() => false)) await close.click();
+    await browser.$('[data-testid="settings-modal"]').waitForDisplayed({
+      reverse: true,
+      timeout: 3000,
+    });
+
+    await browser.waitUntil(
+      async () => {
+        const r = await findTreeRowByName(folderName);
+        if (!r) return false;
+        return (await r.$(".vc-tree-icon--locked").isExisting());
+      },
+      { timeout: 10_000, timeoutMsg: "Lock all now did not relock the folder" },
+    );
+  });
 });
