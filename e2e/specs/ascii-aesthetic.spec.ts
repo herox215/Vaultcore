@@ -51,9 +51,7 @@ describe("ASCII aesthetic smoke (#358)", () => {
 
     // The encryption pill may not exist if no encrypted folder is in
     // the vault — only run the geometry check when both elements are
-    // displayed. Class is `.vc-encrypt-bar` (the
-    // EncryptionStatusbar.svelte source); a previous selector
-    // `.vc-encryption-statusbar` silently skipped the assertion.
+    // displayed.
     const pill = await browser.$(".vc-encrypt-bar");
     if (await pill.isExisting()) {
       const pillBox = await pill.getLocation();
