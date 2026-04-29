@@ -166,6 +166,38 @@ describe("OmniSearch (#174)", () => {
     expect(container.querySelector(".vc-search-rebuild-btn")).toBeNull();
   });
 
+  // ── #358 — ASCII spinner inside the rebuild status line ────────────
+  // The spinner must live INSIDE the {#if statusText} block (Socrates v1
+  // s6). When neither rebuilding nor erroring, no status line and no
+  // spinner exist anywhere in the modal.
+
+  it("#358 renders an AsciiSpinner inside the rebuild status line while rebuilding", async () => {
+    (rebuildIndex as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}),
+    );
+    searchStore.setIndexStale(true);
+    const { container } = mountOpen({ initialMode: "filename" });
+    await tick();
+    await Promise.resolve();
+
+    const status = container.querySelector(".vc-omni-status");
+    expect(status).toBeTruthy();
+    const spinnerInStatus = status!.querySelector(".vc-ascii-spinner");
+    expect(spinnerInStatus).toBeTruthy();
+  });
+
+  it("#358 does not render an AsciiSpinner when the index is fresh (no rebuild, no error)", async () => {
+    (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    // indexStale starts false; rebuildError starts false.
+    const { container } = mountOpen({ initialMode: "filename" });
+    await tick();
+    await Promise.resolve();
+
+    expect(container.querySelector(".vc-omni-status")).toBeNull();
+    // And no stray spinner outside the conditional.
+    expect(container.querySelector(".vc-ascii-spinner")).toBeNull();
+  });
+
   it("clears the rebuild status line on success and flips indexStale off", async () => {
     (rebuildIndex as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (searchFulltext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
