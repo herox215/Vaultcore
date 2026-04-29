@@ -41,25 +41,9 @@
   }
 
   const frames = $derived(buildFrames(width));
-
-  function buildCentredFrame(w: number): string {
-    const safeW = Math.max(0, w | 0);
-    const start = Math.floor((safeW - CREST.length) / 2);
-    const cells: string[] = [];
-    for (let c = 0; c < safeW; c++) {
-      if (c >= start && c < start + CREST.length) {
-        cells.push(CREST[c - start]!);
-      } else {
-        cells.push("░");
-      }
-    }
-    return cells.join("");
-  }
-
-  // Static fallback for prefers-reduced-motion: crest pinned at the
-  // visual centre of the strip (independent of the 8-frame cycle, whose
-  // discrete steps don't land exactly mid-strip).
-  const restFrame = $derived(buildCentredFrame(width));
+  // Frame 4 is roughly the middle of the cycle — used as the static
+  // fallback for prefers-reduced-motion.
+  const restFrame = $derived(frames[4] ?? "");
 
   // Build the inline style string carrying each frame as a CSS string
   // value. Wrapping in escaped double quotes lets the keyframe's
