@@ -114,23 +114,36 @@ describe("Canvas file-reference nodes (#162)", () => {
     await openTreeFile("Linked.canvas");
     await waitForActiveTab("Linked.canvas");
 
+    // #364: canvas text nodes now route through the shared markdown
+    // renderer, so wiki-links carry the same `.vc-reading-wikilink` class
+    // they do in reading mode — not the legacy `.vc-canvas-link*` classes
+    // (which still have CSS but are no longer emitted).
     await browser.waitUntil(
       async () => {
-        const els = await browser.$$(".vc-canvas-link");
+        const els = await browser.$$(".vc-reading-wikilink");
         return els.length >= 1;
       },
-      { timeout: 5000, timeoutMsg: "no .vc-canvas-link element rendered for [[Welcome]]" },
+      { timeout: 5000, timeoutMsg: "no .vc-reading-wikilink element rendered for [[Welcome]]" },
     );
 
-    // The sidebar tree fixture has `Welcome.md`, so the link should be resolved.
-    const resolved = await browser.$$(".vc-canvas-link-resolved");
+    const resolved = await browser.$$(".vc-reading-wikilink--resolved");
     expect(resolved.length).toBeGreaterThanOrEqual(1);
   });
 
   it("clicking the wiki-link opens the target note in a new tab", async () => {
-    // Still on Linked.canvas from the previous test.
-    const link = await browser.$(".vc-canvas-link-resolved");
-    await link.click();
+    // Still on Linked.canvas from the previous test. Use a real mousedown
+    // — the canvas click delegation listens on `mousedown` paired with the
+    // [data-wiki-target] hit-testing in CanvasRenderer.
+    const clicked = await browser.execute(() => {
+      const link = document.querySelector<HTMLElement>(".vc-reading-wikilink--resolved");
+      if (!link) return false;
+      link.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
+      );
+      link.click();
+      return true;
+    });
+    expect(clicked).toBe(true);
 
     await waitForActiveTab("Welcome.md");
     const editor = await browser.$(".cm-content");

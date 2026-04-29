@@ -54,25 +54,30 @@ describe("Encrypted folders (#345)", () => {
   }
 
   async function openFolderContextMenu(name: string) {
-    const row = await findTreeRowByName(name);
-    if (!row) throw new Error(`Folder row "${name}" not found`);
-    // Simulate right-click via rclick on the row.
-    await row.moveTo();
-    // WDIO's keyboard trigger for contextmenu via browser.performActions.
-    await browser.performActions([
-      {
-        type: "pointer",
-        id: "mouse",
-        parameters: { pointerType: "mouse" },
-        actions: [
-          { type: "pointerMove", duration: 0, origin: row },
-          { type: "pointerDown", button: 2 },
-          { type: "pointerUp", button: 2 },
-        ],
-      },
-    ]);
-    await browser.releaseActions();
-    // Wait for the context menu to render.
+    // WebKitWebDriver rejects `pointerMove { origin: <element> }` actions
+    // ("'x' parameter for the action is missing") — fall back to a JS-level
+    // contextmenu dispatch, the same pattern rename-cascade.spec.ts uses.
+    const dispatched = await browser.execute((target: string) => {
+      const nodes = document.querySelectorAll(".vc-tree-name");
+      for (const n of Array.from(nodes)) {
+        if ((n.textContent ?? "").trim() === target) {
+          const row = (n as Element).closest(".vc-tree-row") ?? n.parentElement;
+          if (!row) return false;
+          row.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: 100,
+              clientY: 100,
+              button: 2,
+            }),
+          );
+          return true;
+        }
+      }
+      return false;
+    }, name);
+    if (!dispatched) throw new Error(`Folder row "${name}" not found`);
     const menu = await browser.$(".vc-context-menu");
     await menu.waitForDisplayed({ timeout: 3000 });
     return menu;
@@ -83,8 +88,10 @@ describe("Encrypted folders (#345)", () => {
     const encryptItem = await browser.$('[data-testid="context-encrypt-folder"]');
     await encryptItem.waitForDisplayed({ timeout: 3000 });
     expect(await textOf(encryptItem)).toContain("Encrypt folder");
-    // Close the menu by clicking elsewhere.
-    await browser.$(".vc-tree").click();
+    // Close the menu by pressing Escape — `.vc-tree` was renamed to
+    // `.vc-tree-root` (#253 virtualization), so the original click-to-
+    // dismiss selector no longer matches.
+    await browser.keys("Escape");
   });
 
   it("encrypts a folder through the EncryptFolderModal", async () => {

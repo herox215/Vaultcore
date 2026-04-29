@@ -136,18 +136,35 @@ describe("Canvas context menus (#164)", () => {
     const menu = await browser.$(".vc-context-menu");
     await menu.waitForDisplayed({ timeout: 3000 });
 
-    // Find "Add text node" entry and click it.
-    const items = await browser.$$(".vc-context-menu .vc-context-item");
-    let clicked = false;
-    for (const it of items) {
-      const label = (await textOf(it)).trim();
-      if (label === "Add text node") {
-        await it.click();
-        clicked = true;
-        break;
+    // #362: "Add text node" opens an inline shape picker — the node is
+    // only created when a shape is then chosen. Two clicks total, both
+    // via JS dispatch (overlay-click guard).
+    const expanded = await browser.execute(() => {
+      const items = document.querySelectorAll<HTMLElement>(
+        ".vc-context-menu .vc-context-item",
+      );
+      for (const el of Array.from(items)) {
+        if ((el.textContent ?? "").trim() === "Add text node") {
+          el.click();
+          return true;
+        }
       }
-    }
-    expect(clicked).toBe(true);
+      return false;
+    });
+    expect(expanded).toBe(true);
+
+    const picked = await browser.waitUntil(
+      async () => {
+        return (await browser.execute(() => {
+          const row = document.querySelector<HTMLElement>(".vc-shape-picker-row");
+          if (!row) return false;
+          row.click();
+          return true;
+        })) as boolean;
+      },
+      { timeout: 3000, timeoutMsg: "shape picker never expanded after Add text node" },
+    );
+    expect(picked).toBe(true);
 
     // A text node should materialise in the active canvas viewport.
     await browser.waitUntil(
@@ -219,19 +236,21 @@ describe("Canvas context menus (#164)", () => {
       );
     });
 
-    // Menu → click "Add file node…".
+    // Menu → click "Add file node…" via JS dispatch (overlay-click guard).
     const menu = await browser.$(".vc-context-menu");
     await menu.waitForDisplayed({ timeout: 3000 });
-    const items = await browser.$$(".vc-context-menu .vc-context-item");
-    let clicked = false;
-    for (const it of items) {
-      const label = (await textOf(it)).trim();
-      if (label === "Add file node…") {
-        await it.click();
-        clicked = true;
-        break;
+    const clicked = await browser.execute((label: string) => {
+      const items = document.querySelectorAll<HTMLElement>(
+        ".vc-context-menu .vc-context-item",
+      );
+      for (const el of Array.from(items)) {
+        if ((el.textContent ?? "").trim() === label) {
+          el.click();
+          return true;
+        }
       }
-    }
+      return false;
+    }, "Add file node…");
     expect(clicked).toBe(true);
 
     // QuickSwitcher opens — type the target file name and press Enter.
