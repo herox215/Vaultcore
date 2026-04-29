@@ -30,11 +30,6 @@
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import QuickSwitcherRow from "./QuickSwitcherRow.svelte";
   import SearchResultRow from "./SearchResultRow.svelte";
-  // #358 — ASCII spinner used inside the rebuild-status line. The German
-  // user-facing strings in this file ("Index wird neu aufgebaut…",
-  // "Keine Treffer", "Erneut versuchen", etc.) are intentionally left in
-  // place; translation is tracked outside #358.
-  import AsciiSpinner from "../ascii/AsciiSpinner.svelte";
   import {
     computeRecentFiles,
     recentsSignature,
@@ -439,13 +434,6 @@
 
       {#if statusText}
         <p class="vc-omni-status" role="status" aria-live="polite">
-          {#if !rebuildError}
-            <!-- Spinner only animates while a rebuild is actively in
-                 flight. In the error state the same <p> shows the
-                 failure copy + retry link, so spinning would imply
-                 progress where there is none. -->
-            <AsciiSpinner />
-          {/if}
           {statusText}
           {#if rebuildError}
             <!-- svelte-ignore a11y_invalid_attribute -->
