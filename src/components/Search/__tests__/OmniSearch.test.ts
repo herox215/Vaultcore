@@ -198,16 +198,20 @@ describe("OmniSearch (#174)", () => {
     expect(container.querySelector(".vc-ascii-spinner")).toBeNull();
   });
 
-  // ── #358 PR D — content-mode search results skeleton ──────────────
-  // The skeleton must mount from the moment the user pauses typing
+  // ── #358 PR D — content-mode search results indicator ─────────────
+  // The indicator must mount from the moment the user pauses typing
   // (debounce armed) and stay visible until results land or the query
-  // is cleared. Empty queries never render the skeleton.
+  // is cleared. Empty queries never render it.
+  //
+  // The indicator is the animated AsciiWave (`.vc-ascii-wave`); it
+  // replaced the static AsciiSkeleton at this surface because users
+  // need a clearer "search-in-flight" cue.
   //
   // Uses Vitest fake timers + a manually-resolved searchFulltext mock so
   // we can drive the debounce window deterministically without
   // wall-clock waits (Aristotle PR-D review — flake-prone real timers).
 
-  describe("#358 PR D: content-mode skeleton lifecycle (fake timers)", () => {
+  describe("#358 PR D: content-mode wave lifecycle (fake timers)", () => {
     let resolveFulltext: ((v: SearchResult[]) => void) | undefined;
 
     beforeEach(() => {
@@ -222,7 +226,7 @@ describe("OmniSearch (#174)", () => {
       vi.useRealTimers();
     });
 
-    it("renders an AsciiSkeleton during the debounce window", async () => {
+    it("renders an AsciiWave during the debounce window", async () => {
       const { container } = mountOpen({ initialMode: "content" });
       await tick();
 
@@ -232,25 +236,22 @@ describe("OmniSearch (#174)", () => {
 
       // Inside the 200ms debounce window — RPC has not dispatched.
       expect(searchFulltext).not.toHaveBeenCalled();
-      expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+      expect(container.querySelector(".vc-ascii-wave")).toBeTruthy();
     });
 
-    it("skeleton stays mounted while the RPC is in flight", async () => {
+    it("wave stays mounted while the RPC is in flight", async () => {
       const { container } = mountOpen({ initialMode: "content" });
       await tick();
 
       const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
       await fireEvent.input(input, { target: { value: "needle" } });
-      // Flush the 200 ms debounce via fake timers; await both the
-      // microtask and tick passes so the dispatch has run.
       await vi.advanceTimersByTimeAsync(250);
       await tick();
       expect(searchFulltext).toHaveBeenCalled();
-      // RPC unresolved — skeleton must still be mounted.
-      expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+      expect(container.querySelector(".vc-ascii-wave")).toBeTruthy();
     });
 
-    it("skeleton unmounts once results land", async () => {
+    it("wave unmounts once results land", async () => {
       const { container } = mountOpen({ initialMode: "content" });
       await tick();
 
@@ -258,23 +259,36 @@ describe("OmniSearch (#174)", () => {
       await fireEvent.input(input, { target: { value: "needle" } });
       await vi.advanceTimersByTimeAsync(250);
       await tick();
-      expect(container.querySelector(".vc-ascii-skel")).toBeTruthy();
+      expect(container.querySelector(".vc-ascii-wave")).toBeTruthy();
       expect(resolveFulltext).toBeDefined();
 
       resolveFulltext!([]);
-      // Drain microtasks so the .then in runContentSearch settles.
       for (let i = 0; i < 5; i++) {
         await Promise.resolve();
         await tick();
       }
 
-      expect(container.querySelector(".vc-ascii-skel")).toBeNull();
+      expect(container.querySelector(".vc-ascii-wave")).toBeNull();
     });
 
-    it("empty query in content mode does NOT render the skeleton", async () => {
+    it("empty query in content mode does NOT render the wave", async () => {
       const { container } = mountOpen({ initialMode: "content" });
       await tick();
       await Promise.resolve();
+
+      expect(container.querySelector(".vc-ascii-wave")).toBeNull();
+    });
+
+    it("the AsciiSkeleton (`.vc-ascii-skel`) is no longer rendered in OmniSearch", async () => {
+      // OmniSearch swapped to AsciiWave; AsciiSkeleton stays available
+      // for the deferred EditorPane noteLoading skeleton (#372).
+      const { container } = mountOpen({ initialMode: "content" });
+      await tick();
+
+      const input = container.querySelector<HTMLInputElement>(".vc-qs-input")!;
+      await fireEvent.input(input, { target: { value: "needle" } });
+      await vi.advanceTimersByTimeAsync(250);
+      await tick();
 
       expect(container.querySelector(".vc-ascii-skel")).toBeNull();
     });
