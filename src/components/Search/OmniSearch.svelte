@@ -30,16 +30,6 @@
   import { extractSnippetMatch } from "../Editor/flashHighlight";
   import QuickSwitcherRow from "./QuickSwitcherRow.svelte";
   import SearchResultRow from "./SearchResultRow.svelte";
-  // #358 — ASCII spinner used inside the rebuild-status line. The German
-  // user-facing strings in this file ("Index wird neu aufgebaut…",
-  // "Keine Treffer", "Erneut versuchen", etc.) are intentionally left in
-  // place; translation is tracked outside #358.
-  import AsciiSpinner from "../ascii/AsciiSpinner.svelte";
-  // #358 — AsciiWave (animated block-density traveller) replaced the
-  // static AsciiSkeleton at this surface for a clearer "search-in-flight"
-  // cue. AsciiSkeleton stays available for the deferred EditorPane
-  // noteLoading skeleton (#372).
-  import AsciiWave from "../ascii/AsciiWave.svelte";
   import {
     computeRecentFiles,
     recentsSignature,
@@ -92,11 +82,6 @@
   // Rebuild lifecycle — separate from isRebuilding in the store so the
   // status line can show a transient error.
   let rebuildError = $state(false);
-
-  // #358 — drives the content-mode results skeleton. Set true the moment
-  // the debounce arms (the user paused mid-typing); stays true through
-  // the in-flight RPC; clears when results land or the query is empty.
-  let pendingContentSearch = $state(false);
 
   // Recent files (filename empty-state). Memoised by a signature of the
   // first-N reversed filePaths — tabStore emits on every per-tab field
@@ -236,7 +221,6 @@
     if (!trimmed) {
       searchStore.clearResults();
       searchStore.setQuery("");
-      pendingContentSearch = false;
       return;
     }
     searchStore.setSearching(true);
@@ -248,12 +232,9 @@
       if (myGen !== contentSearchGen) return;
       const uniqueFiles = new Set(results.map((r) => r.path)).size;
       searchStore.setResults(results, uniqueFiles);
-      // #358 — results landed, clear the skeleton.
-      pendingContentSearch = false;
     } catch (e) {
       if (myGen !== contentSearchGen) return;
       searchStore.setSearching(false);
-      pendingContentSearch = false;
       if (isVaultError(e) && e.kind === "IndexCorrupt") {
         searchStore.setIndexStale(true);
         // Kick an auto-rebuild on corruption, matching the auto-open path.
@@ -289,9 +270,6 @@
       // search uses the small default k, not a previously-expanded k.
       contentK = CONTENT_SEARCH_INITIAL_K;
       if (contentDebounce) clearTimeout(contentDebounce);
-      // #358 — arm the skeleton from the moment debounce starts. Cleared
-      // by runContentSearch when results land or the query goes empty.
-      pendingContentSearch = query.trim().length > 0;
       contentDebounce = setTimeout(() => runContentSearch(query), 200);
     }
   }
@@ -456,13 +434,6 @@
 
       {#if statusText}
         <p class="vc-omni-status" role="status" aria-live="polite">
-          {#if !rebuildError}
-            <!-- Spinner only animates while a rebuild is actively in
-                 flight. In the error state the same <p> shows the
-                 failure copy + retry link, so spinning would imply
-                 progress where there is none. -->
-            <AsciiSpinner />
-          {/if}
           {statusText}
           {#if rebuildError}
             <!-- svelte-ignore a11y_invalid_attribute -->
@@ -500,12 +471,7 @@
             {/each}
           {/if}
         {:else}
-          {#if pendingContentSearch && !storeState.isRebuilding && query.trim()}
-            <!-- #358 — content-mode wave. Shown from the moment the
-                 user pauses typing (debounce armed) through the in-flight
-                 RPC. Hidden when results land or the query is cleared. -->
-            <AsciiWave width={36} />
-          {:else if activeList.length === 0 && query.trim()}
+          {#if activeList.length === 0 && query.trim()}
             <p class="vc-qs-empty">Keine Treffer</p>
           {:else if activeList.length === 0}
             <p class="vc-qs-empty">Tippe, um im Volltext zu suchen</p>
