@@ -123,4 +123,35 @@ describe("Settings — appearance", () => {
 
     await closeSettings();
   });
+
+  it("switches monospace font and updates --vc-font-mono", async () => {
+    // Mirror of the body-font test, but exercises the Monospace dropdown.
+    // CodeMirror's editor surface inherits `--vc-font-mono`, so this also
+    // implicitly verifies the editor will pick the new family on next paint.
+    await openSettings();
+
+    const select = await browser.$("#font-mono-select");
+    await browser.execute((el: HTMLSelectElement) => {
+      el.value = "fira-code";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, select);
+
+    await browser.waitUntil(
+      async () => {
+        const v = await browser.execute(() =>
+          getComputedStyle(document.documentElement).getPropertyValue("--vc-font-mono").trim(),
+        );
+        return v.toLowerCase().includes("fira");
+      },
+      { timeout: 2000, timeoutMsg: "--vc-font-mono never became Fira Code" },
+    );
+
+    // Reset to default so other specs start clean.
+    await browser.execute((el: HTMLSelectElement) => {
+      el.value = "system";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, select);
+
+    await closeSettings();
+  });
 });

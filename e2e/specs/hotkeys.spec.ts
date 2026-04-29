@@ -77,4 +77,59 @@ describe("Keyboard shortcut rebinding", () => {
 
     await closeSettings();
   });
+
+  it("opens the conflict modal when rebinding to a hotkey already in use", async () => {
+    // Cmd/Ctrl+N is the default for `File: New note`. Pick the first row
+    // that is NOT NEW_NOTE and rebind it to Ctrl+N — the conflict-detection
+    // path should surface the alert dialog.
+    await openSettings();
+
+    // Pick + click the first non-NEW_NOTE record button INSIDE a single
+    // `browser.execute` so the DOM lookup and the click happen back-to-back
+    // — using a positional index from one `$$()` call against a separate
+    // later `$$()` call is unstable when the table re-renders between.
+    const clicked = await browser.execute(() => {
+      const recordBtns = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-testid="shortcut-record-btn"]'),
+      );
+      for (const btn of recordBtns) {
+        const row = btn.closest("tr");
+        const action = row?.querySelector(".vc-shortcut-action")?.textContent?.trim() ?? "";
+        if (action && !action.toLowerCase().includes("new note")) {
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    expect(clicked).toBe(true);
+    await browser.$('[data-testid="shortcut-recording"]').waitForDisplayed({ timeout: 2000 });
+
+    // The recording listener sits on `<svelte:window>`. Dispatch a
+    // synthetic keydown that `hotkeyFromEvent` maps to { meta: true,
+    // key: "n" } — matches NEW_NOTE's default → conflict path. Set BOTH
+    // `metaKey` and `ctrlKey` so the test holds across macOS (which keys
+    // off `metaKey`) and Linux (which keys off either).
+    await browser.execute(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "n",
+          metaKey: true,
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    const conflict = await browser.$('[data-testid="shortcut-conflict"]');
+    await conflict.waitForDisplayed({ timeout: 3000 });
+
+    // Cancel the conflict so NEW_NOTE's binding stays intact for follow-on
+    // specs.
+    await browser.$('[data-testid="shortcut-conflict-cancel"]').click();
+    await conflict.waitForDisplayed({ reverse: true, timeout: 2000 });
+
+    await closeSettings();
+  });
 });
