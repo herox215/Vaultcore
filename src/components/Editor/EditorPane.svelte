@@ -40,6 +40,12 @@
   import { decideExternalModifyAction, sha256Hex } from "./externalChangeHandler";
   import { listenFileChange, listenVaultStatus, type FileChangePayload } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { formatShortcut } from "../../lib/shortcuts";
+
+  // #358 — open-file shortcut for the empty-state legend. The Quick
+  // Switcher (defaultCommands.ts) is bound to meta+O; formatShortcut
+  // resolves to "⌘+O" on macOS and "Ctrl+O" elsewhere.
+  const emptyOpenShortcut = formatShortcut({ meta: true, key: "O" });
 
   let {
     paneId,
@@ -923,8 +929,17 @@
   <div class="vc-editor-content" class:has-graph-bg={showGraphBg}>
     {#if paneTabs.length === 0}
       <div class="vc-editor-empty">
-        <p class="vc-editor-empty-heading">No file open</p>
-        <p class="vc-editor-empty-body">Select a file from the sidebar to get started.</p>
+        <h2 class="vc-sr-only">No file open — press {emptyOpenShortcut} to open a file</h2>
+        <pre class="vc-editor-empty-door" aria-hidden="true">{`┌────────────┐
+│  ┌──────┐  │
+│  │  ░░  │  │
+│  │  ░░  │  │
+│  │  ▒▒  │  │
+│  └──────┘  │
+└────────────┘`}</pre>
+        <pre class="vc-editor-empty-legend">{`[ ] = open file   {${emptyOpenShortcut}}
+ ░  = locked
+ ▒  = sealed`}</pre>
       </div>
     {/if}
     <!-- #87: ambient local-graph background behind the editor in edit mode -->
@@ -1066,17 +1081,28 @@
     pointer-events: none;
   }
 
-  .vc-editor-empty-heading {
+  /* #358 — empty-state ASCII vault door (decorative, aria-hidden) plus
+     the symbol-key legend (meaningful). Both share --vc-font-mono;
+     the door uses --color-text-muted, the legend uses --color-text so
+     the keybind reads first against the door's softer outline. */
+  .vc-editor-empty-door {
     margin: 0;
+    padding: 0;
+    font-family: var(--vc-font-mono);
     font-size: 14px;
-    font-weight: 700;
+    line-height: 1.2;
+    color: var(--color-text-muted);
+    white-space: pre;
   }
 
-  .vc-editor-empty-body {
+  .vc-editor-empty-legend {
     margin: 0;
-    font-size: 14px;
-    text-align: center;
-    max-width: 280px;
+    padding: 0;
+    font-family: var(--vc-font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text);
+    white-space: pre;
   }
 
   .vc-editor-readonly-overlay {
