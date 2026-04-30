@@ -13,16 +13,16 @@ backend rewrite.
 - **Android Studio** Hedgehog (2023.1) or newer (or `cmdline-tools` if you do not want the IDE).
 - **Android SDK Platform 34** (matches Tauri's generated `compileSdk = 36` floor; install 34+).
 - **Build Tools** (matching your installed Platform).
-- **NDK r26+** — Tauri 2.10 has been verified against `ndk;28.2.13676358`.
+- **NDK r26** — pinned to `ndk;26.3.11579264` so local and CI builds resolve identical toolchains. Newer NDKs are not what CI exercises.
 - **JDK 17** — Android Studio bundles `jbr` (`/Applications/Android Studio.app/Contents/jbr/Contents/Home` on macOS).
-- **Rust targets:**
+- **Rust targets** (all four — Tauri's `RustPlugin.kt` builds the universal flavor including the x86 ABI, so omitting `i686-linux-android` makes the local build fail):
   ```bash
-  rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+  rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
   ```
 - **Environment variables:**
   ```bash
   export ANDROID_HOME=$HOME/Library/Android/sdk         # macOS default
-  export NDK_HOME=$ANDROID_HOME/ndk/<version>           # e.g. 28.2.13676358
+  export NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264       # match CI
   ```
   `pnpm tauri android` reads `NDK_HOME` (falls back to `ANDROID_NDK_HOME`).
 
