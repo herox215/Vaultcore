@@ -9,6 +9,7 @@
   import { bookmarksStore } from "../../store/bookmarksStore";
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore } from "../../store/tabStore";
+  import { longPress, type LongPressDetail } from "../../lib/actions/longPress";
 
   const BOOKMARKS_COLLAPSED_KEY = "vaultcore-bookmarks-panel-collapsed";
 
@@ -70,6 +71,10 @@
     e.preventDefault();
     e.stopPropagation();
     contextMenu = { path: relPath, x: e.clientX, y: e.clientY };
+  }
+
+  function onRowLongPress(d: LongPressDetail, relPath: string): void {
+    contextMenu = { path: relPath, x: d.clientX, y: d.clientY };
   }
 
   function closeContextMenu(): void {
@@ -176,6 +181,7 @@
           ondragover={(e) => handleDragOver(e, idx)}
           ondrop={(e) => void handleDrop(e, idx)}
           oncontextmenu={(e) => openContextMenu(e, relPath)}
+          use:longPress={{ onLongPress: (d) => onRowLongPress(d, relPath) }}
         >
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <button

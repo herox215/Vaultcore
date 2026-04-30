@@ -24,6 +24,7 @@
   import { insertTemplateExpression } from "./editorContextMenu";
   import TemplateExpressionBuilder from "./TemplateExpressionBuilder.svelte";
   import ContextMenu from "../common/ContextMenu.svelte";
+  import { longPress, type LongPressDetail } from "../../lib/actions/longPress";
   import { parseFrontmatter } from "../../lib/frontmatterIO";
   import EditorGraphBackground from "./EditorGraphBackground.svelte";
   import CountStatusBar from "./CountStatusBar.svelte";
@@ -96,6 +97,19 @@
     contextView = view;
     contextMenuPos = { x, y };
     contextMenuOpen = true;
+  }
+
+  // #387 — touch long-press inside the editor surface forwards to the same
+  // custom context menu the right-click path opens. Resolve this pane's
+  // active EditorView lazily so the long-press lands on whichever tab is
+  // active in this pane at fire-time. No-op when the pane is empty or the
+  // active tab is a non-editor viewer (image, canvas, graph, unsupported).
+  function onEditorLongPress(d: LongPressDetail) {
+    const id = paneActiveTabId;
+    if (!id) return;
+    const view = viewMap.get(id);
+    if (!view) return;
+    handleContextMenuRequest(view, d.clientX, d.clientY);
   }
 
   function closeContextMenu() {
@@ -1096,7 +1110,11 @@
   />
 
   <!-- Editor content area -->
-  <div class="vc-editor-content" class:has-graph-bg={showGraphBg}>
+  <div
+    class="vc-editor-content"
+    class:has-graph-bg={showGraphBg}
+    use:longPress={{ onLongPress: onEditorLongPress }}
+  >
     {#if paneTabs.length === 0}
       <div class="vc-editor-empty">
         <p class="vc-editor-empty-heading">No file open</p>

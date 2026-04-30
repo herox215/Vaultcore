@@ -1,5 +1,5 @@
 // Originally the regression test for issue #50: creating a new file inside an
-// expanded folder via the "New file here" context-menu entry must keep the
+// expanded folder via the "New note here" context-menu entry must keep the
 // folder expanded and show the freshly created child row.
 //
 // With the #253 virtualization refactor, expansion and child-list ownership
@@ -7,7 +7,7 @@
 // expanded flag or children list — it delegates to `onToggleExpand` and
 // `onRefreshFolder` callbacks. This test was updated to verify the equivalent
 // contract at the TreeRow level:
-//   1. Clicking "New file here" calls createFile with the folder path and an
+//   1. Clicking "New note here" calls createFile with the folder path and an
 //      empty seed.
 //   2. It triggers the Sidebar to refresh the folder (so the new row appears
 //      after the next flatten).
@@ -95,7 +95,7 @@ describe("TreeRow 'New file here' on a folder (#50, updated for #253)", () => {
     await tick();
 
     const newFileItem = Array.from(container.querySelectorAll<HTMLButtonElement>(".vc-context-item"))
-      .find((b) => b.textContent?.trim() === "New file here");
+      .find((b) => b.textContent?.trim() === "New note here");
     expect(newFileItem).toBeTruthy();
     await fireEvent.click(newFileItem!);
 
@@ -121,7 +121,7 @@ describe("TreeRow 'New file here' on a folder (#50, updated for #253)", () => {
     await fireEvent.contextMenu(row, { clientX: 0, clientY: 0 });
     await tick();
     const newFileItem = Array.from(container.querySelectorAll<HTMLButtonElement>(".vc-context-item"))
-      .find((b) => b.textContent?.trim() === "New file here");
+      .find((b) => b.textContent?.trim() === "New note here");
     await fireEvent.click(newFileItem!);
 
     for (let i = 0; i < 10; i += 1) { await Promise.resolve(); await tick(); }

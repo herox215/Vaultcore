@@ -101,7 +101,7 @@ describe("TreeRow right-click context menu (#47, updated for #253)", () => {
     expect(getByText("Move to Trash")).toBeTruthy();
   });
 
-  it("contains New file / New folder entries for a directory", async () => {
+  it("contains New note / New folder entries for a directory", async () => {
     const dir = fileRow({
       name: "folder",
       path: `${VAULT}/folder`,
@@ -115,7 +115,7 @@ describe("TreeRow right-click context menu (#47, updated for #253)", () => {
     await fireEvent.contextMenu(row, { clientX: 10, clientY: 20 });
     await tick();
 
-    expect(getByText("New file here")).toBeTruthy();
+    expect(getByText("New note here")).toBeTruthy();
     expect(getByText("New folder here")).toBeTruthy();
   });
 });
