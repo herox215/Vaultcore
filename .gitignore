@@ -27,9 +27,31 @@ coverage
 *.sln
 *.sw?
 
-# Rust / Tauri
+# Rust / Tauri (desktop + mobile)
 src-tauri/target
 src-tauri/gen/schemas
+# Android scaffolding (#390): commit sources, ignore build outputs
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/.idea/
+src-tauri/gen/android/.cxx/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/app/.cxx/
+src-tauri/gen/android/buildSrc/build/
+src-tauri/gen/android/app/release/
+src-tauri/gen/android/app/debug/
+src-tauri/gen/android/.tauri/
+src-tauri/gen/android/tauri.settings.gradle
+src-tauri/gen/android/app/tauri.properties
+src-tauri/gen/android/app/tauri.build.gradle.kts
+src-tauri/gen/android/app/proguard-tauri.pro
+src-tauri/gen/android/app/src/main/assets/tauri.conf.json
+src-tauri/gen/android/app/src/main/jniLibs/
+src-tauri/gen/android/app/src/main/**/generated/
+*.iml
+debug.keystore
+key.properties
 
 # Bench harness (#207) — transient run output; baseline.json stays tracked.
 src-tauri/benches/latest.json
