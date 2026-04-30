@@ -133,6 +133,21 @@ fn vault_error_serialize_crypto_error() {
     assert_eq!(v["data"], Value::Null);
 }
 
+#[test]
+fn vault_error_serialize_picker_failed() {
+    // #391: distinct from Io so the frontend can render a picker-specific
+    // toast ("Could not open the file picker") instead of the generic
+    // file-system error copy. `data` stays Null — the `msg` ships via the
+    // `message` field; cancellation is signalled by `Ok(None)` from the
+    // picker commands, not by an error variant.
+    let v = to_json(VaultError::PickerFailed {
+        msg: "picker channel closed".into(),
+    });
+    assert_eq!(v["kind"], "PickerFailed");
+    assert_eq!(v["message"], "Picker failed: picker channel closed");
+    assert_eq!(v["data"], Value::Null);
+}
+
 // Reference to silence unused-import lint if json! is dropped in the future.
 #[allow(dead_code)]
 fn _unused_json_reference() -> Value {
