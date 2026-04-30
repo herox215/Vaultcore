@@ -610,7 +610,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    min-height: 24px;
+    min-height: var(--vc-hit-target, 24px);
     padding-top: 2px;
     padding-bottom: 2px;
     padding-right: 8px;
@@ -734,6 +734,15 @@
     display: flex;
   }
 
+  /* #385 — touch devices have no hover; the kebab must always be visible
+     so the menu is reachable. (hover: none) is the inverse of (hover: hover)
+     and matches every fine-OR-no-hover-at-all device, including Android/iOS. */
+  @media (hover: none) {
+    .vc-tree-more {
+      display: flex;
+    }
+  }
+
   .vc-tree-more:hover {
     background: var(--color-accent-bg);
     color: var(--color-accent);
@@ -784,6 +793,9 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
+    /* #385 — desktop: token undefined → fallback `auto` → no effect
+       (byte-identical). Coarse: 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-confirm-btn:hover {

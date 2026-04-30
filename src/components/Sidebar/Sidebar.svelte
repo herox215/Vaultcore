@@ -1038,6 +1038,8 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
+    /* #385 — desktop fallback `auto` preserves current padding-only size. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-confirm-btn:hover {

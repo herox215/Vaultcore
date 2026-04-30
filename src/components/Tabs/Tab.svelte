@@ -112,6 +112,9 @@
     max-width: 160px;
     min-width: 80px;
     height: 36px;
+    /* #385 — keep `height` for desktop layout; min-height bumps to 44px
+       on coarse pointer (overrides height per CSS spec). */
+    min-height: var(--vc-hit-target, 36px);
     box-sizing: border-box;
     cursor: pointer;
     flex-shrink: 0;

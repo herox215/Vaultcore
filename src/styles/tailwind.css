@@ -29,6 +29,17 @@
   /* #380 — tab-morph transition duration. User snippets can override to 0ms
      to disable the effect entirely without touching the JS gate. */
   --vc-tab-switch-duration: 240ms;
+
+}
+
+/* #385 — touch hit-target token. The token is intentionally LEFT UNDEFINED
+   on desktop so `var(--vc-hit-target, <px>)` falls back to the literal
+   desktop value at every callsite (byte-identical desktop). Under coarse
+   pointer the token resolves to 44px and overrides the fallback. */
+@media (pointer: coarse) {
+  :root {
+    --vc-hit-target: 44px;
+  }
 }
 
 /* Light theme (explicit) — same values as the bare :root defaults. Allows the HTML

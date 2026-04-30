@@ -632,6 +632,9 @@
   .vc-settings-title { font-size: 14px; font-weight: 600; margin: 0; color: var(--color-text); }
   .vc-settings-close {
     width: 28px; height: 28px;
+    /* #385 — coarse-pointer touch target. */
+    min-width: var(--vc-hit-target, 28px);
+    min-height: var(--vc-hit-target, 28px);
     background: none; border: none; cursor: pointer;
     color: var(--color-text-muted);
     display: flex; align-items: center; justify-content: center;
@@ -655,6 +658,8 @@
   .vc-theme-radio-group { display: flex; gap: 8px; }
   .vc-theme-radio {
     flex: 1; height: 36px;
+    /* #385 — coarse pointer min-height overrides height per CSS spec. */
+    min-height: var(--vc-hit-target, 36px);
     display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--color-border); border-radius: 6px;
     cursor: pointer;
@@ -715,6 +720,8 @@
   .vc-vault-switch-btn {
     flex-shrink: 0;
     height: 32px;
+    /* #385 — coarse pointer touch target. */
+    min-height: var(--vc-hit-target, 32px);
     padding: 0 12px;
     font-size: 13px;
     color: var(--color-text);
@@ -734,6 +741,8 @@
   .vc-settings-btn {
     flex-shrink: 0;
     height: 32px;
+    /* #385 — coarse pointer touch target. */
+    min-height: var(--vc-hit-target, 32px);
     padding: 0 12px;
     font-size: 13px;
     color: var(--color-text);

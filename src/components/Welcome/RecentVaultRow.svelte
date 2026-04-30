@@ -32,7 +32,8 @@
     align-items: center;
     gap: 8px;
     width: 100%;
-    min-height: 32px;
+    /* #385 — desktop fallback preserves the 32px min-height; coarse → 44px. */
+    min-height: var(--vc-hit-target, 32px);
     padding: 8px 16px;
     background: transparent;
     border: none;

@@ -105,6 +105,11 @@
     border: none;
     cursor: pointer;
     color: var(--color-text);
+    /* #385 — desktop: token undefined → fallback `auto` → no min-height
+       (current padding-only ~30px preserved). Coarse: 44px. Block display
+       is intentionally kept; the coarse-pointer text simply sits at the
+       top of the taller hit area until #386 polishes the layout. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   :global(.vc-context-item:hover),

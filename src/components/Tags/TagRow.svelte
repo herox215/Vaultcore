@@ -43,7 +43,8 @@
 </div>
 
 <style>
-  .vc-tag-row { display: flex; align-items: center; min-height: 28px; padding: 0 16px; }
+  /* #385 — desktop fallback preserves the 28px min-height; coarse → 44px. */
+  .vc-tag-row { display: flex; align-items: center; min-height: var(--vc-hit-target, 28px); padding: 0 16px; }
   .vc-tag-row--child { padding-left: 32px; }
   .vc-tag-row:hover { background: var(--color-accent-bg); }
   .vc-tag-chevron, .vc-tag-chevron-spacer { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: var(--color-text-muted); cursor: pointer; transition: transform 120ms ease; }

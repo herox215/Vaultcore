@@ -1064,6 +1064,10 @@
     justify-content: center;
     width: 32px;
     height: 32px;
+    /* #385 — bump to 44x44 on coarse pointer; both axes since the icon
+       button needs a square touch target. */
+    min-width: var(--vc-hit-target, 32px);
+    min-height: var(--vc-hit-target, 32px);
     background: none;
     border: none;
     border-radius: 4px;

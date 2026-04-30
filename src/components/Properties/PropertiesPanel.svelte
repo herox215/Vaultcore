@@ -225,6 +225,9 @@
   .vc-props-add {
     width: 24px;
     height: 24px;
+    /* #385 — square 44px touch target on coarse. */
+    min-width: var(--vc-hit-target, 24px);
+    min-height: var(--vc-hit-target, 24px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -265,6 +268,8 @@
   .vc-props-key,
   .vc-props-value {
     height: 24px;
+    /* #385 — coarse pointer min-height overrides height per CSS spec. */
+    min-height: var(--vc-hit-target, 24px);
     font-size: 13px;
     color: var(--color-text);
     background: var(--color-surface);
@@ -290,7 +295,8 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    min-height: 24px;
+    /* #385 — desktop fallback preserves the 24px min-height. */
+    min-height: var(--vc-hit-target, 24px);
     padding: 2px 4px;
     background: var(--color-surface);
     border: 1px solid var(--color-border);

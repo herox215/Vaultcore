@@ -102,6 +102,9 @@
     flex-direction: row;
     width: 100%;
     height: 36px;
+    /* #385 — coarse pointer promotes to 44px without touching `height` on
+       desktop (var undefined → fallback 36 == height → no change). */
+    min-height: var(--vc-hit-target, 36px);
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
     overflow-x: auto;
