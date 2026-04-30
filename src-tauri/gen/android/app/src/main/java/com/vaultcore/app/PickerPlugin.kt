@@ -1,9 +1,14 @@
 // #391 — Tauri mobile plugin for VaultCore's vault folder + save-as picker.
 //
-// Lives in the `src-tauri/android/` overlay so `tauri android init` /
-// `tauri android build --clean` won't regenerate it away. Tauri copies
-// overlay files into `gen/android/app/src/main/java/...` during the
-// build's prepare step.
+// Placement note: this file lives directly in `gen/android/...` and NOT
+// in a `src-tauri/android/` overlay directory. As of Tauri 2.10 the
+// overlay convention is silently ignored at build time — verified via
+// `dexdump` on a build that placed the file in the overlay path: the
+// resulting APK's `classes*.dex` did not contain `Lcom/vaultcore/app/
+// PickerPlugin;`. The `gen/android/` placement empirically survives a
+// `tauri android init` re-run in this Tauri version. If a future Tauri
+// version changes init behavior this file may need re-applying after
+// init. See `docs/MOBILE_BUILD.md` → "Custom Android plugins".
 //
 // Two commands exposed to the Rust side via Tauri's mobile-plugin FFI:
 //

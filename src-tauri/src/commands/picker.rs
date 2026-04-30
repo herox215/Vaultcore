@@ -170,6 +170,6 @@ async fn pick_save_path_impl(
 }
 
 #[cfg(target_os = "android")]
-pub fn android_init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+pub fn android_init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     android::init()
 }
