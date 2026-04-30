@@ -288,3 +288,194 @@ describe("viewportStore", () => {
     unsub2();
   });
 });
+
+// ── #395: visualViewport-driven keyboardHeight ──────────────────────────────
+//
+// On mobile, the on-screen keyboard shrinks the visual viewport without
+// resizing the layout viewport (iOS Safari behavior; Tauri Android with
+// adjustResize shrinks both, so the formula evaluates to 0 — correct).
+// `viewportStore` exposes the difference as `keyboardHeight` so consumers
+// (EditorPane padding, future bottom sheet) can react.
+//
+// Implementation extends `createViewportStore`'s `start` callback with one
+// `visualViewport.resize` listener (no `scroll` listener — that fires on user
+// pan, not keyboard appearance). Cleanup detaches it alongside matchMedia.
+
+interface FakeVv {
+  height: number;
+  listeners: Set<EventListener>;
+  addCount: number;
+  removeCount: number;
+  addEventListener: (type: string, l: EventListener) => void;
+  removeEventListener: (type: string, l: EventListener) => void;
+}
+
+function makeVv(initialHeight: number): FakeVv {
+  const vv: FakeVv = {
+    height: initialHeight,
+    listeners: new Set(),
+    addCount: 0,
+    removeCount: 0,
+    addEventListener: (type, l) => {
+      if (type !== "resize") return;
+      vv.addCount++;
+      vv.listeners.add(l);
+    },
+    removeEventListener: (type, l) => {
+      if (type !== "resize") return;
+      vv.removeCount++;
+      vv.listeners.delete(l);
+    },
+  };
+  return vv;
+}
+
+function installVv(height: number, innerHeight: number = 800): {
+  vv: FakeVv;
+  emit: () => void;
+} {
+  const vv = makeVv(height);
+  Object.defineProperty(window, "visualViewport", {
+    value: vv,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    value: innerHeight,
+    configurable: true,
+    writable: true,
+  });
+  return {
+    vv,
+    emit: () => {
+      for (const l of vv.listeners) l(new Event("resize"));
+    },
+  };
+}
+
+function uninstallVv(): void {
+  // `delete` requires the descriptor be configurable, which `installVv` set.
+  delete (window as unknown as { visualViewport?: unknown }).visualViewport;
+}
+
+describe("viewportStore — visualViewport / keyboardHeight (#395)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    uninstallVv();
+  });
+
+  it("defaults keyboardHeight to 0 when window.visualViewport is undefined", () => {
+    installHarness({ [Q_MOBILE]: false, [Q_TABLET]: false, [Q_COARSE]: false });
+    // No installVv() — visualViewport stays undefined.
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+    expect(get(store).keyboardHeight).toBe(0);
+    unsub();
+  });
+
+  it("emits keyboardHeight: 0 on initial subscribe when keyboard is closed (vv.height === innerHeight)", () => {
+    installHarness({ [Q_MOBILE]: true, [Q_TABLET]: true, [Q_COARSE]: true });
+    installVv(800, 800);
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+    expect(get(store).keyboardHeight).toBe(0);
+    unsub();
+  });
+
+  it("emits keyboardHeight on visualViewport resize (keyboard opens to 250px)", () => {
+    installHarness({ [Q_MOBILE]: true, [Q_TABLET]: true, [Q_COARSE]: true });
+    const { vv, emit } = installVv(800, 800);
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+
+    expect(get(store).keyboardHeight).toBe(0);
+    vv.height = 550;
+    emit();
+    expect(get(store).keyboardHeight).toBe(250);
+    unsub();
+  });
+
+  it("does NOT re-emit when keyboard height is unchanged (rounded delta = 0)", () => {
+    installHarness({ [Q_MOBILE]: true, [Q_TABLET]: true, [Q_COARSE]: true });
+    const { vv, emit } = installVv(800, 800);
+    const store = createViewportStore();
+    const seen: number[] = [];
+    const unsub = store.subscribe((s) => seen.push(s.keyboardHeight));
+
+    // Initial subscribe → one emission with 0.
+    expect(seen).toEqual([0]);
+
+    vv.height = 550;
+    emit();
+    expect(seen).toEqual([0, 250]);
+
+    // Re-fire same value → no new emission.
+    emit();
+    expect(seen).toEqual([0, 250]);
+
+    unsub();
+  });
+
+  it("clamps to 0 when visualViewport.height exceeds innerHeight (overscroll edge case)", () => {
+    installHarness({ [Q_MOBILE]: false, [Q_TABLET]: false, [Q_COARSE]: false });
+    const { vv, emit } = installVv(800, 800);
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+
+    vv.height = 805; // overscroll: visual viewport "taller" than layout
+    emit();
+    expect(get(store).keyboardHeight).toBe(0);
+    unsub();
+  });
+
+  it("emits keyboardHeight: 0 when keyboard closes (vv.height returns to innerHeight)", () => {
+    installHarness({ [Q_MOBILE]: true, [Q_TABLET]: true, [Q_COARSE]: true });
+    const { vv, emit } = installVv(800, 800);
+    const store = createViewportStore();
+    const seen: number[] = [];
+    const unsub = store.subscribe((s) => seen.push(s.keyboardHeight));
+
+    vv.height = 550;
+    emit();
+    expect(seen[seen.length - 1]).toBe(250);
+
+    vv.height = 800;
+    emit();
+    expect(seen[seen.length - 1]).toBe(0);
+    unsub();
+  });
+
+  it("detaches the visualViewport listener once the last subscriber unsubscribes", () => {
+    installHarness({ [Q_MOBILE]: true, [Q_TABLET]: true, [Q_COARSE]: true });
+    const { vv } = installVv(800, 800);
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+    expect(vv.addCount).toBe(1);
+    expect(vv.removeCount).toBe(0);
+
+    unsub();
+    expect(vv.addCount).toBe(vv.removeCount);
+    expect(vv.listeners.size).toBe(0);
+  });
+
+  it("preserves keyboardHeight across matchMedia (mode/coarse) updates — does not zero on viewport-mode flip", () => {
+    // Regression guard: when the matchMedia listener fires (e.g. orientation
+    // change shifts width across the 700px boundary), the store must
+    // re-emit with the CURRENT keyboardHeight, not reset it to 0.
+    const harness = installHarness({ [Q_MOBILE]: false, [Q_TABLET]: false, [Q_COARSE]: false });
+    const { vv, emit } = installVv(800, 800);
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+
+    vv.height = 550;
+    emit();
+    expect(get(store).keyboardHeight).toBe(250);
+    expect(get(store).mode).toBe("desktop");
+
+    harness.set(Q_MOBILE, true);
+    harness.set(Q_TABLET, true);
+    expect(get(store).mode).toBe("mobile");
+    expect(get(store).keyboardHeight).toBe(250);
+    unsub();
+  });
+});
