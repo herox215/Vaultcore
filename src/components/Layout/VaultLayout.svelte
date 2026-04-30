@@ -247,10 +247,12 @@
   // panel into loading state and fires an IPC round-trip, causing the sidebar
   // to flicker as the user types. Only push through when the resolved rel
   // path actually changes.
-  let unsubBacklinksTab: (() => void) | null = null;
+  // #395 Boy Scout — return-from-onMount pattern matches the mousemove/mouseup
+  // block above (lines 235-242) and removes the cleanup-by-coordination dance
+  // where the onDestroy at the bottom had to know about every subscription.
   let lastDispatchedRelPath: string | null | undefined = undefined;
   onMount(() => {
-    unsubBacklinksTab = tabStore.subscribe((state) => {
+    const unsub = tabStore.subscribe((state) => {
       const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
       // #259: snapshot vault path via get() — tabStore emits on every
       // per-keystroke mutation (setDirty, scroll, cursor) and a throwaway
@@ -272,6 +274,7 @@
       lastDispatchedRelPath = nextRelPath;
       backlinksStore.setActiveFile(nextRelPath);
     });
+    return unsub;
   });
 
   // Issue #50: reveal + select the active editor tab in the sidebar tree.
@@ -280,10 +283,9 @@
   // so a single subscription here covers every entry point. We guard by
   // the computed rel path so per-keystroke mutations (setDirty, scroll)
   // don't re-issue the same reveal on every tabStore emission.
-  let unsubActiveTabReveal: (() => void) | null = null;
   let lastRevealedRelPath: string | null | undefined = undefined;
   onMount(() => {
-    unsubActiveTabReveal = tabStore.subscribe((state) => {
+    const unsub = tabStore.subscribe((state) => {
       const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
       // #259: snapshot vault path via get() — see the backlinks-sync
       // subscription above for the per-keystroke hot-path rationale.
@@ -298,12 +300,15 @@
         treeRevealStore.requestReveal(relPath);
       }
     });
+    return unsub;
   });
 
   onDestroy(() => {
     unsubTab();
-    unsubBacklinksTab?.();
-    unsubActiveTabReveal?.();
+    // #395 Boy Scout — `unsubBacklinks` (line ~782) was previously module-level
+    // and never torn down, leaking a backlinksStore subscriber on every
+    // VaultLayout unmount (vault switch, HMR). Cleaned up here.
+    unsubBacklinks();
     // mousemove/mouseup are torn down by the onMount return above; calling
     // removeEventListener again here is a no-op (handler refs match) but
     // misleads readers into thinking the listeners are owned by both hooks.
@@ -765,6 +770,19 @@
   }
 
   const isSplit = $derived(rightPaneIds.length > 0);
+
+  // #395 — propagate the visualViewport-tracked keyboard height as the
+  // `--vc-keyboard-height` CSS variable. Cleanup removes the property so
+  // a re-mount (vault switch, HMR) starts from a clean slate. Desktop sees
+  // `0px` always (visualViewport.height === innerHeight) so the var is a
+  // no-op on non-mobile.
+  $effect(() => {
+    const kb = $viewportStore.keyboardHeight;
+    document.documentElement.style.setProperty("--vc-keyboard-height", `${kb}px`);
+    return () => {
+      document.documentElement.style.removeProperty("--vc-keyboard-height");
+    };
+  });
 
   // Reactive right sidebar CSS variables derived from store
   let backlinksOpen = $state(false);

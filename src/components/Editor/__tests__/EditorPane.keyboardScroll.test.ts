@@ -187,7 +187,7 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     setKeyboardHeight(250);
     await flushAsync();
 
-    const calls = dispatch.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const calls = dispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(calls.length).toBe(1);
   });
 
@@ -202,7 +202,7 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     setKeyboardHeight(260);
     await flushAsync();
 
-    const calls = dispatch.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const calls = dispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(calls.length).toBe(1);
   });
 
@@ -217,7 +217,7 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     setKeyboardHeight(250);
     await flushAsync();
 
-    const calls = dispatch.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const calls = dispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(calls.length).toBe(2);
   });
 
@@ -227,27 +227,35 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
 
     setKeyboardHeight(250);
     await flushAsync();
-    expect(dispatchA.mock.calls.filter((c) => "effects" in (c[0] as object)).length).toBe(1);
+    expect(dispatchA.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object)).length).toBe(1);
 
-    // Open second tab — becomes active with kb still > 0.
+    // Pre-spy on the second tab's CM6 view BEFORE making it active. We do
+    // this by opening the tab first (which mounts its view but leaves it
+    // inactive briefly — the new tab DOES become active immediately, so
+    // the dispatch may fire synchronously inside the activation effect).
+    // Strategy: open tab, immediately spy on the just-mounted view, THEN
+    // flush so any effect-driven dispatches are observable on dispatchB.
     tabStore.openTab("/vault/other.md", "edit");
+    // Settle one microtask so the new container exists and CM6 mounts.
     await flushAsync();
 
-    // The DOM has two `.cm-editor` nodes now; the freshly-active one is
-    // the second container's CM6 host.
     const cms = document.querySelectorAll(".cm-editor");
     expect(cms.length).toBeGreaterThanOrEqual(2);
     const activeCm = cms[cms.length - 1] as HTMLElement;
-    const { dispatch: dispatchB } = await getActiveView(activeCm);
+    const { EditorView: EV } = await import("@codemirror/view");
+    const viewB = EV.findFromDOM(activeCm);
+    if (!viewB) throw new Error("no view B");
+    Object.defineProperty(viewB, "hasFocus", { configurable: true, get: () => true });
+    const dispatchB = vi.spyOn(viewB, "dispatch");
 
-    // Re-trigger the effect by re-emitting the same kb height — the
-    // tab-id transition gate should fire even though kb didn't change.
-    // (In real flow the tab activation alone is enough because the
-    // $effect has paneActiveTabId in its dependency set; emit just to
-    // make the assertion timing robust under flushAsync.)
+    // Re-emit kb to force the $effect to re-run against the new active
+    // tab id — `lastDispatchTabId !== tabId` should fire dispatchB now.
+    // Per-pixel value is irrelevant; pick a different number to exercise
+    // the change path.
+    setKeyboardHeight(260);
     await flushAsync();
 
-    const dispatchBCalls = dispatchB.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const dispatchBCalls = dispatchB.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(dispatchBCalls.length).toBe(1);
   });
 
@@ -263,7 +271,7 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     setKeyboardHeight(250);
     await flushAsync();
 
-    const calls = dispatch.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const calls = dispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(calls.length).toBe(0);
   });
 
@@ -279,26 +287,34 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     setKeyboardHeight(250);
     await flushAsync();
 
-    const calls = dispatch.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const calls = dispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(calls.length).toBe(0);
   });
 
   it("does NOT dispatch on a non-active pane (left pane stays quiet when right pane is active)", async () => {
-    // Mount BOTH panes; the left pane mounts first and its tab becomes
-    // active. We then move that tab to the right pane via tabStore — both
-    // EditorPane instances subscribe to the same store, but only the
-    // active pane should react.
+    // Setup:
+    //   1. Open tab A (host.md) in left pane.
+    //   2. Mount the right pane.
+    //   3. Open tab B (other.md) — lands in the active pane (left), then we
+    //      move it to the right pane via `moveToPane("right")`, which flips
+    //      `activePane` to "right".
+    //   4. With kb=0 still, attach the left-pane spy AFTER the move so any
+    //      mount-time dispatches don't pollute the count.
+    //   5. Emit kb=250 → only the RIGHT pane (active) should dispatch.
+    //      Left pane's spy stays at 0.
     const { cm: leftCm } = await mountPaneWithMarkdownTab("left");
     render(EditorPane, { props: { paneId: "right" } });
     await flushAsync();
 
-    // Move the active tab to the right pane → activePane flips to "right".
+    tabStore.openTab("/vault/other.md", "edit");
+    await flushAsync();
     tabStore.moveToPane("right");
     await flushAsync();
 
-    // Spy on the left pane's CM6 view (which is now NOT in the active pane).
-    const { EditorView } = await import("@codemirror/view");
-    const leftView = EditorView.findFromDOM(leftCm);
+    // The left pane still holds tab A (host.md). Spy on its CM6 view AFTER
+    // the moveToPane so we don't count any pre-move dispatches.
+    const { EditorView: EV } = await import("@codemirror/view");
+    const leftView = EV.findFromDOM(leftCm);
     if (!leftView) throw new Error("no left view");
     Object.defineProperty(leftView, "hasFocus", { configurable: true, get: () => true });
     const leftDispatch = vi.spyOn(leftView, "dispatch");
@@ -306,7 +322,7 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     setKeyboardHeight(250);
     await flushAsync();
 
-    const leftCalls = leftDispatch.mock.calls.filter((c) => "effects" in (c[0] as object));
+    const leftCalls = leftDispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(leftCalls.length).toBe(0);
   });
 });
