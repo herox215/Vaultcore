@@ -124,6 +124,9 @@
     align-items: center;
     justify-content: center;
     height: 36px;
+    /* #385 — fallback 36 equals `height` (byte-identical); coarse → 44px
+       overrides `height` per CSS spec. */
+    min-height: var(--vc-hit-target, 36px);
     background: transparent;
     border: none;
     cursor: pointer;

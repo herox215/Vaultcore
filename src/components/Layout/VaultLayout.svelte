@@ -1064,6 +1064,10 @@
     justify-content: center;
     width: 32px;
     height: 32px;
+    /* #385 — token undefined on desktop → fallbacks 32/32 equal width/height
+       (byte-identical); coarse → 44px on both axes for square touch target. */
+    min-width: var(--vc-hit-target, 32px);
+    min-height: var(--vc-hit-target, 32px);
     background: none;
     border: none;
     border-radius: 4px;

@@ -112,6 +112,9 @@
     max-width: 160px;
     min-width: 80px;
     height: 36px;
+    /* #385 — token undefined on desktop → fallback 36px equals `height`
+       (byte-identical); coarse → 44px overrides `height`. */
+    min-height: var(--vc-hit-target, 36px);
     box-sizing: border-box;
     cursor: pointer;
     flex-shrink: 0;

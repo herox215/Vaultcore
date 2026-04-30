@@ -610,7 +610,9 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    min-height: 24px;
+    /* #385 — token undefined on desktop → fallback 24px (byte-identical);
+       coarse → 44px overrides. */
+    min-height: var(--vc-hit-target, 24px);
     padding-top: 2px;
     padding-bottom: 2px;
     padding-right: 8px;
@@ -734,6 +736,16 @@
     display: flex;
   }
 
+  /* #385 — touch devices have no hover; the kebab must always be visible
+     so the menu is reachable. (hover: none) matches every device that
+     can't hover, including Android/iOS. Scoped to this component (not
+     :global) per project component-CSS pattern. */
+  @media (hover: none) {
+    .vc-tree-more {
+      display: flex;
+    }
+  }
+
   .vc-tree-more:hover {
     background: var(--color-accent-bg);
     color: var(--color-accent);
@@ -784,6 +796,9 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-confirm-btn:hover {

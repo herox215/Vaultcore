@@ -25,7 +25,9 @@
   .vc-file-row {
     display: block;
     width: 100%;
-    min-height: 32px;
+    /* #385 — fallback 32 preserves the existing min-height (byte-identical);
+       coarse → 44px. */
+    min-height: var(--vc-hit-target, 32px);
     padding: 8px 16px;
     background: transparent;
     border: none;

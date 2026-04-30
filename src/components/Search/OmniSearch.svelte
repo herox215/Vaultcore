@@ -541,6 +541,9 @@
     padding: 6px 12px;
     border-radius: 6px 6px 0 0;
     cursor: pointer;
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing is padding-driven as before; coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-omni-mode:hover {
