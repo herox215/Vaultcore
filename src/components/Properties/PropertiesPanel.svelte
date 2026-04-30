@@ -225,6 +225,9 @@
   .vc-props-add {
     width: 24px;
     height: 24px;
+    /* #385 — fallbacks equal width/height (byte-identical); coarse → 44×44. */
+    min-width: var(--vc-hit-target, 24px);
+    min-height: var(--vc-hit-target, 24px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -265,6 +268,8 @@
   .vc-props-key,
   .vc-props-value {
     height: 24px;
+    /* #385 — fallback 24 equals `height` (byte-identical); coarse → 44px. */
+    min-height: var(--vc-hit-target, 24px);
     font-size: 13px;
     color: var(--color-text);
     background: var(--color-surface);
@@ -290,7 +295,8 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    min-height: 24px;
+    /* #385 — fallback 24 preserves the existing min-height; coarse → 44px. */
+    min-height: var(--vc-hit-target, 24px);
     padding: 2px 4px;
     background: var(--color-surface);
     border: 1px solid var(--color-border);

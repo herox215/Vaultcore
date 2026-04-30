@@ -138,6 +138,8 @@
     align-items: center;
     gap: 6px;
     height: 28px;
+    /* #385 — fallback 28 equals `height` (byte-identical); coarse → 44px. */
+    min-height: var(--vc-hit-target, 28px);
     padding: 0 12px;
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
@@ -172,6 +174,10 @@
     justify-content: center;
     width: 24px;
     height: 22px;
+    /* #385 — fallbacks equal width/height (byte-identical); coarse → 44px
+       on both axes for a square touch target. */
+    min-width: var(--vc-hit-target, 24px);
+    min-height: var(--vc-hit-target, 22px);
     padding: 0;
     flex-shrink: 0;
     background: transparent;

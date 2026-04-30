@@ -102,6 +102,10 @@
     flex-direction: row;
     width: 100%;
     height: 36px;
+    /* #385 — token undefined on desktop → fallback 36px equals `height`
+       (byte-identical); coarse → 44px overrides `height` per CSS spec
+       (min-height wins when larger). */
+    min-height: var(--vc-hit-target, 36px);
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
     overflow-x: auto;

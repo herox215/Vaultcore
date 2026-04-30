@@ -1038,6 +1038,9 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-confirm-btn:hover {
@@ -1121,6 +1124,9 @@
     justify-content: center;
     width: 32px;
     height: 32px;
+    /* #385 — fallbacks equal width/height (byte-identical); coarse → 44×44. */
+    min-width: var(--vc-hit-target, 32px);
+    min-height: var(--vc-hit-target, 32px);
     background: none;
     border: none;
     border-radius: 4px;
@@ -1190,6 +1196,9 @@
     border: none;
     cursor: pointer;
     color: var(--color-text);
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-new-menu-item:hover {

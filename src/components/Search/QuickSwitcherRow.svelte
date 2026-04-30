@@ -72,6 +72,9 @@
     flex-direction: column;
     gap: 2px;
     cursor: pointer;
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-qs-row:hover,

@@ -177,6 +177,9 @@
   }
   .vc-password-modal-input {
     height: 32px;
+    /* #385 — fallback 32 equals `height` (byte-identical); coarse → 44px
+       overrides `height` per CSS spec. */
+    min-height: var(--vc-hit-target, 32px);
     padding: 0 8px;
     border: 1px solid var(--color-border);
     border-radius: 4px;
@@ -208,6 +211,9 @@
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-text);
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
   .vc-password-modal-ok {
     background: var(--color-accent);
