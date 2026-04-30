@@ -712,12 +712,15 @@
   // ─── Header actions ────────────────────────────────────────────────────────
   // Optional `targetFolder` lets the empty-tree-area long-press (#387) skip
   // the selection-based fallback and create the note directly under the
-  // vault root. Existing call sites pass no arg → behavior unchanged.
-  async function handleNewFile(targetFolder?: string) {
+  // vault root. Type-guarded so the existing `onclick={handleNewFile}` wiring
+  // — which passes the MouseEvent as the first arg — keeps treating it as
+  // "no target", same as before.
+  async function handleNewFile(targetFolder?: string | unknown) {
     newMenuOpen = false;
     const vaultPath = $vaultStore.currentPath;
     if (!vaultPath) return;
-    const folder = targetFolder ?? getSelectedFolder() ?? vaultPath;
+    const explicit = typeof targetFolder === "string" ? targetFolder : undefined;
+    const folder = explicit ?? getSelectedFolder() ?? vaultPath;
     try {
       await createFile(folder, "");
       if (folder === vaultPath) await loadRoot();
