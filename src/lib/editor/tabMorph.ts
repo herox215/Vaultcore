@@ -175,7 +175,13 @@ export function snapshotView(view: EditorView): ViewSnapshot | null {
 
   const scrollerRect = scrollerEl.getBoundingClientRect();
   const cs = window.getComputedStyle(contentEl);
-  const font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} / ${cs.lineHeight} ${cs.fontFamily}`;
+  // Build a minimal canvas-parseable font shorthand: weight + size + family.
+  // We deliberately drop fontStyle ("oblique 10deg" in modern UAs is a valid
+  // CSS value but ctx.font silently rejects it and falls back to "10px
+  // sans-serif", which would mis-size every glyph). Lifting weight + size +
+  // family is enough for layout fidelity since the editor's italic/oblique
+  // styling is rare in note bodies and falls back gracefully.
+  const font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
   const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
   const color = cs.color;
 

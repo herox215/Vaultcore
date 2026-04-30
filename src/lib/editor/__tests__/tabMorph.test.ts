@@ -126,8 +126,13 @@ describe("prefersReducedMotion", () => {
 });
 
 describe("resolveMorphDuration", () => {
-  it("falls back to MORPH_DURATION_MS when the CSS variable is missing", () => {
+  // The CSS variable bleeds across tests in jsdom — clean up so each
+  // assertion starts from "no var set".
+  beforeEach(() => {
     document.documentElement.style.removeProperty("--vc-tab-switch-duration");
+  });
+
+  it("falls back to MORPH_DURATION_MS when the CSS variable is missing", () => {
     expect(resolveMorphDuration()).toBe(MORPH_DURATION_MS);
   });
 

@@ -2,16 +2,17 @@
   // #380 — char-morph transition between text-file tabs.
   //
   // Mounted once per EditorPane inside `.vc-editor-content`. The parent
-  // calls `play(outgoing, incoming)` synchronously during a tab switch
-  // (between two tabs whose CM6 EditorView is already mounted). The
-  // overlay snapshots both views, drives a 120ms rAF morph on a canvas
-  // sized to the scroller rect, and tears the canvas down at the end.
+  // captures the outgoing snapshot itself (it has to — by the time this
+  // component would call `snapshotView`, Svelte has already flipped
+  // `display: none` on the outgoing container, making `coordsAtPos`
+  // return null for every position) and hands both pre-built snapshots
+  // to `playFromSnapshots`. The overlay drives a 120ms rAF morph on a
+  // canvas sized to the incoming scroller rect.
   //
   // The CM6 view underneath is never touched — typing during the morph
   // works because `pointer-events: none` is set on the canvas.
 
   import { onDestroy } from "svelte";
-  import type { EditorView } from "@codemirror/view";
   import {
     buildSchedule,
     decideMorph,
@@ -20,14 +21,12 @@
     prefersReducedMotion,
     randomGlyph,
     resolveMorphDuration,
-    snapshotView,
     type ScheduledGlyph,
     type ViewSnapshot,
   } from "../../lib/editor/tabMorph";
 
   let canvasEl = $state<HTMLCanvasElement | null>(null);
   let visible = $state(false);
-  let rect = $state<{ x: number; y: number; width: number; height: number } | null>(null);
 
   const suppression = newSuppressionState();
   let rafId: number | null = null;
@@ -42,7 +41,6 @@
   function tearDown() {
     cancelRaf();
     visible = false;
-    rect = null;
     if (canvasEl) {
       const ctx = canvasEl.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
@@ -51,11 +49,15 @@
   }
 
   /**
-   * Trigger the morph for a tab switch. Returns synchronously after
-   * deciding play vs. instant — the rAF loop runs in the background.
-   * If the suppression window applies, returns without touching the DOM.
+   * Trigger the morph from pre-captured snapshots. The parent owns the
+   * snapshot lifecycle so the outgoing snapshot can be taken before the
+   * outgoing CM6 view is hidden by Svelte's reactive display swap.
+   * Returns synchronously after deciding play vs. instant.
    */
-  export function play(outgoingView: EditorView | null, incomingView: EditorView | null): void {
+  export function playFromSnapshots(
+    outgoing: ViewSnapshot | null,
+    incoming: ViewSnapshot | null,
+  ): void {
     const now = performance.now();
     const decision = decideMorph(suppression, now);
     if (decision === "instant") {
@@ -73,23 +75,17 @@
       markMorphSettled(suppression, now);
       return;
     }
-    if (!outgoingView || !incomingView) {
+    if (!outgoing || !incoming || outgoing.glyphs.length === 0) {
+      // Empty outgoing snapshot means the parent failed to capture in
+      // time — settle the suppression timer so a chord cycle still
+      // behaves and bail without a morph.
       markMorphSettled(suppression, now);
       return;
     }
-
-    const outgoing = snapshotView(outgoingView);
-    const incoming = snapshotView(incomingView);
-    if (!outgoing || !incoming) {
-      markMorphSettled(suppression, now);
-      return;
-    }
-
     runMorph(outgoing, incoming, now, duration);
   }
 
   function runMorph(outgoing: ViewSnapshot, incoming: ViewSnapshot, startedAt: number, duration: number) {
-    rect = incoming.scrollerRect;
     visible = true;
 
     // Defer canvas sizing until the element binds.
@@ -179,13 +175,11 @@
   });
 </script>
 
-{#if visible && rect}
+{#if visible}
   <canvas
     bind:this={canvasEl}
     class="vc-tab-morph-canvas"
     aria-hidden="true"
-    style:left="{0}px"
-    style:top="{0}px"
   ></canvas>
 {/if}
 
