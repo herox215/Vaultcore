@@ -27,6 +27,8 @@
   import { parseFrontmatter } from "../../lib/frontmatterIO";
   import EditorGraphBackground from "./EditorGraphBackground.svelte";
   import CountStatusBar from "./CountStatusBar.svelte";
+  import TabMorphOverlay from "./TabMorphOverlay.svelte";
+  import { snapshotView as snapshotEditorView } from "../../lib/editor/tabMorph";
   import { countsStore } from "../../store/countsStore";
   import { computeCounts } from "../../lib/wordCount";
   import { scrollToMatch } from "./flashHighlight";
@@ -259,6 +261,32 @@
 
   // Subscribe to tabStore for our pane's tabs and active state
   const unsubTab = tabStore.subscribe((state) => {
+    // #380: BEFORE assigning the new activeTabId (which triggers Svelte to
+    // flip style:display on the outgoing container in the next microtask),
+    // snapshot the still-visible outgoing view. Without this, the trigger
+    // effect downstream sees the outgoing CM6 view already hidden and
+    // produces an empty glyph list — the morph would only fade in the
+    // incoming side, never scramble from the outgoing content.
+    const prevActive = activeTabId;
+    const nextActive = state.activeTabId;
+    if (
+      prevActive &&
+      nextActive &&
+      prevActive !== nextActive &&
+      state.splitState[paneId].includes(prevActive) &&
+      state.splitState[paneId].includes(nextActive)
+    ) {
+      const prevView = viewMap.get(prevActive);
+      if (prevView) {
+        try {
+          pendingOutgoingSnapshot = snapshotEditorView(prevView);
+          pendingOutgoingForTabId = prevActive;
+        } catch {
+          pendingOutgoingSnapshot = null;
+          pendingOutgoingForTabId = null;
+        }
+      }
+    }
     paneTabIds = state.splitState[paneId];
     allTabs = state.tabs;
     activeTabId = state.activeTabId;
@@ -547,6 +575,24 @@
     }
   });
 
+  // #380: handle to the per-pane morph overlay. The overlay is mounted
+  // inside .vc-editor-content (so it sits above the editor containers
+  // but below the read-only scrim) and runs a 120ms canvas scramble on
+  // qualifying tab switches. Type derived from the component so the
+  // signature here cannot drift from the export.
+  type MorphOverlayHandle = ReturnType<typeof TabMorphOverlay>;
+  let morphOverlay: MorphOverlayHandle | null = $state(null);
+
+  // #380: outgoing snapshot must be taken BEFORE Svelte re-flips the
+  // `style:display` of the previously-active container — once the old
+  // container is `display: none`, `view.coordsAtPos` returns null and
+  // `getBoundingClientRect` returns a zero rect, so the snapshot would
+  // be empty. The store subscriber below runs synchronously on dispatch,
+  // ahead of the next microtask in which Svelte flushes reactivity, so
+  // we capture the snapshot there and stash it for the trigger effect.
+  let pendingOutgoingSnapshot: import("../../lib/editor/tabMorph").ViewSnapshot | null = null;
+  let pendingOutgoingForTabId: string | null = null;
+
   // Handle scroll save/restore on tab switch — separate effect to avoid
   // coupling with the lifecycle effect above
   $effect(() => {
@@ -563,6 +609,45 @@
               prevView.state.selection.main.head
             );
           } catch (_) { /* view may have been destroyed */ }
+        }
+      }
+      // #380: trigger morph if both sides are already-mounted text editors.
+      // Skipped during async mount (mountingIds), for non-editor tabs
+      // (graph/image/canvas/unsupported), and when either side is in
+      // Reading Mode (no CM6 layout to snapshot). The outgoing snapshot
+      // was captured synchronously in the tabStore subscriber above —
+      // the incoming snapshot is taken here, after Svelte has flipped
+      // the new container to display: block.
+      const outgoingSnapshot = pendingOutgoingForTabId === prevActiveTabId
+        ? pendingOutgoingSnapshot
+        : null;
+      pendingOutgoingSnapshot = null;
+      pendingOutgoingForTabId = null;
+      if (
+        prevActiveTabId &&
+        newActiveId &&
+        morphOverlay &&
+        !mountingIds.has(newActiveId) &&
+        outgoingSnapshot
+      ) {
+        const outTab = allTabs.find((t) => t.id === prevActiveTabId);
+        const inTab = allTabs.find((t) => t.id === newActiveId);
+        const inView = viewMap.get(newActiveId);
+        const bothEdit =
+          (outTab?.viewMode ?? "edit") === "edit" &&
+          (inTab?.viewMode ?? "edit") === "edit";
+        if (
+          inView &&
+          bothEdit &&
+          tabHasEditor(outTab) &&
+          tabHasEditor(inTab)
+        ) {
+          // Defer the incoming snapshot to the next frame so the new
+          // container's display:block has flushed before we measure.
+          requestAnimationFrame(() => {
+            const incomingSnapshot = snapshotEditorView(inView);
+            morphOverlay?.playFromSnapshots(outgoingSnapshot, incomingSnapshot);
+          });
         }
       }
       // Restore scroll/cursor on activated tab
@@ -987,6 +1072,10 @@
     {/if}
     <!-- #87: ambient local-graph background behind the editor in edit mode -->
     <EditorGraphBackground visible={showGraphBg} relPath={bgRelPath} />
+    <!-- #380: 120ms char-morph overlay between text-file tabs. Sits above
+         the editor containers (z-index: 5) but below the readonly scrim
+         (z-index: 10). pointer-events: none so the editor stays interactive. -->
+    <TabMorphOverlay bind:this={morphOverlay} />
     <!-- Svelte renders one container per tab. Visibility is driven by
          style:display reacting to paneActiveTabId — no manual DOM needed.
          Graph tabs render <GraphView /> instead of a CM6 container so the
