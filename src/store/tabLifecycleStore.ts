@@ -32,8 +32,17 @@ export const tabLifecycleStore = {
    * If a tab with the same path already exists, activate it (no duplicate).
    * Otherwise, create a new tab in the currently active pane.
    * Returns the tab ID.
+   *
+   * #388 — `viewMode` is an optional hint applied ONLY when a NEW tab is
+   * created. The dedupe path preserves the existing tab's `viewMode`, so a
+   * user who toggled tab A to edit on mobile and re-opens it later finds
+   * it still in edit. (VaultCore is desktop-only today; if multi-platform
+   * sync is added, revisit whether dedupe should adopt the new hint.)
+   *
+   * The store does NOT read `viewportStore` — viewport awareness lives at
+   * the UI boundary via `defaultViewModeForViewport()` in `lib/tabKind.ts`.
    */
-  openTab(filePath: string): string {
+  openTab(filePath: string, viewMode?: TabViewMode): string {
     let returnId = "";
     _core.update((state) => {
       const existing = state.tabs.find((t) => t.filePath === filePath);
@@ -57,6 +66,7 @@ export const tabLifecycleStore = {
         cursorPos: 0,
         lastSaved: Date.now(),
         lastSavedContent: "",
+        ...(viewMode !== undefined ? { viewMode } : {}),
       };
       const opened = openInActivePane(state, tab);
       return { ...state, ...opened, activeTabId: id };
@@ -68,8 +78,17 @@ export const tabLifecycleStore = {
    * Open a tab with an explicit viewer kind (#49). Used for non-markdown
    * files — images, read-only text previews, and unsupported binaries.
    * Same dedupe-by-filePath semantics as openTab().
+   *
+   * #388 — `viewMode` hint applies on creation only (same rule as `openTab`).
+   * Filtering by viewer kind is the caller's job: `openFileAsTab` does NOT
+   * pass the hint for image / text / unsupported / canvas, since those have
+   * no Reading Mode path.
    */
-  openFileTab(filePath: string, viewer: TabViewer): string {
+  openFileTab(
+    filePath: string,
+    viewer: TabViewer,
+    viewMode?: TabViewMode,
+  ): string {
     let returnId = "";
     _core.update((state) => {
       const existing = state.tabs.find((t) => t.filePath === filePath);
@@ -94,6 +113,7 @@ export const tabLifecycleStore = {
         lastSaved: Date.now(),
         lastSavedContent: "",
         viewer,
+        ...(viewMode !== undefined ? { viewMode } : {}),
       };
       const opened = openInActivePane(state, tab);
       return { ...state, ...opened, activeTabId: id };
