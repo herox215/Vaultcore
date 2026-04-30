@@ -10,3 +10,4 @@ pub mod snippets;
 pub mod templates;
 pub mod export;
 pub mod encryption;
+pub mod picker;
