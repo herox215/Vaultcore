@@ -578,8 +578,10 @@
   // #380: handle to the per-pane morph overlay. The overlay is mounted
   // inside .vc-editor-content (so it sits above the editor containers
   // but below the read-only scrim) and runs a 120ms canvas scramble on
-  // qualifying tab switches.
-  let morphOverlay: { playFromSnapshots: (out: import("../../lib/editor/tabMorph").ViewSnapshot | null, inc: import("../../lib/editor/tabMorph").ViewSnapshot | null) => void } | null = $state(null);
+  // qualifying tab switches. Type derived from the component so the
+  // signature here cannot drift from the export.
+  type MorphOverlayHandle = ReturnType<typeof TabMorphOverlay>;
+  let morphOverlay: MorphOverlayHandle | null = $state(null);
 
   // #380: outgoing snapshot must be taken BEFORE Svelte re-flips the
   // `style:display` of the previously-active container — once the old
