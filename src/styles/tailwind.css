@@ -31,6 +31,16 @@
   --vc-tab-switch-duration: 240ms;
 }
 
+/* #385 — touch hit-target token. The token is intentionally LEFT UNDEFINED
+   on desktop so `var(--vc-hit-target, <px>)` falls back to the literal
+   desktop value at every callsite (byte-identical desktop). Under coarse
+   pointer it resolves to 44px and overrides per-control fallbacks. */
+@media (pointer: coarse) {
+  :root {
+    --vc-hit-target: 44px;
+  }
+}
+
 /* Light theme (explicit) — same values as the bare :root defaults. Allows the HTML
    attribute to be set without clobbering the defaults. */
 :root[data-theme="light"] {

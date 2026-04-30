@@ -1038,6 +1038,9 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
+    /* #385 — token undefined on desktop → fallback `auto` (byte-identical
+       padding-only height); coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-confirm-btn:hover {

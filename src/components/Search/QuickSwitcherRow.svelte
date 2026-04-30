@@ -72,6 +72,9 @@
     flex-direction: column;
     gap: 2px;
     cursor: pointer;
+    /* #385 — token undefined on desktop → fallback `auto` (initial value,
+       byte-identical to current padding-only height); coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-qs-row:hover,

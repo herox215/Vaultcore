@@ -237,6 +237,9 @@
     color: var(--color-text);
     font-size: 14px;
     text-align: left;
+    /* #385 — token undefined on desktop → fallback `auto` (byte-identical
+       to current padding-only height); coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
   .vc-cp-row--selected { background: var(--color-accent-bg); color: var(--color-accent); }
   .vc-cp-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
