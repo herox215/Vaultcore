@@ -23,7 +23,8 @@ import type {
   CanvasNode,
   CanvasTextNode,
 } from "./types";
-import type { ViewSnapshot, GlyphRef } from "../morphTypes";
+import { readShape } from "./types";
+import type { FrameRef, GlyphRef, ViewSnapshot } from "../morphTypes";
 
 /** Bail-out cap for the glyph walk. Off-screen nodes are culled BEFORE
  * being added, so this only kicks in for genuinely dense visible canvases. */
@@ -109,12 +110,10 @@ export function snapshotCanvas(
   const lineH = lineHeight;
 
   const glyphs: GlyphRef[] = [];
+  const frames: FrameRef[] = [];
 
   outer: for (const node of doc.nodes) {
     if (glyphs.length >= maxGlyphs) break;
-
-    const text = nodeText(node);
-    if (!text) continue;
 
     const vx0 = node.x * zoom + camX;
     const vy0 = node.y * zoom + camY;
@@ -127,6 +126,30 @@ export function snapshotCanvas(
     if (vx0 + vw < 0 || vy0 + vh < 0 || vx0 > rect.width || vy0 > rect.height) {
       continue;
     }
+
+    // Capture the card frame so the overlay can scramble dialogs and
+    // group areas, not just their text. Group nodes carry a fill (their
+    // background); other node types render as outline-only cards.
+    if (vw > 0 && vh > 0) {
+      const frame: FrameRef = {
+        x: vx0,
+        y: vy0,
+        width: vw,
+        height: vh,
+        shape: node.type === "text" ? readShape(node) : "rounded-rectangle",
+      };
+      if (node.type === "group") {
+        const bg = (node as CanvasGroupNode).background;
+        if (bg) frame.fill = bg;
+        // Groups sit visually behind everything else — soften the
+        // outline so the morph reads more like an area than a card.
+        frame.strokeAlpha = 0.5;
+      }
+      frames.push(frame);
+    }
+
+    const text = nodeText(node);
+    if (!text) continue;
 
     const colsPerLine = Math.max(1, Math.floor(vw / cellW));
     const maxLines = Math.max(1, Math.floor(vh / lineH));
@@ -159,10 +182,13 @@ export function snapshotCanvas(
     }
   }
 
-  if (glyphs.length === 0) return null;
+  // Bypass only when there's nothing visual to show — frames count too,
+  // so a canvas full of label-less group rectangles still morphs.
+  if (glyphs.length === 0 && frames.length === 0) return null;
 
   return {
     glyphs,
+    frames,
     lineHeight,
     font,
     color,

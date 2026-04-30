@@ -207,13 +207,54 @@ describe("snapshotCanvas", () => {
     expect(snap.scrollerRect.height).toBe(480);
   });
 
-  it("returns null when no node carries readable text", () => {
+  it("includes a card frame for every visible node so dialogs morph too", () => {
     const el = makeViewport();
-    // file node with empty file, group with no label, unknown type
     const doc: CanvasDoc = {
       nodes: [
-        { id: "f", type: "file", x: 0, y: 0, width: 100, height: 100, file: "" },
+        textNode({ id: "t", text: "hi", x: 10, y: 20, width: 100, height: 50 }),
+        {
+          id: "g",
+          type: "group",
+          x: 0,
+          y: 0,
+          width: 200,
+          height: 200,
+          background: "#abc",
+        },
+      ],
+      edges: [],
+    };
+    const snap = snapshotCanvas(el, doc, 0, 0, 1)!;
+    expect(snap.frames).toBeDefined();
+    expect(snap.frames!.length).toBe(2);
+    const text = snap.frames!.find((f) => f.width === 100);
+    expect(text).toBeTruthy();
+    expect(text!.shape).toBe("rounded-rectangle");
+    const group = snap.frames!.find((f) => f.width === 200);
+    expect(group!.fill).toBe("#abc");
+    expect(group!.strokeAlpha).toBeLessThan(1);
+  });
+
+  it("returns a snapshot even for a label-less group (frame, no glyphs)", () => {
+    const el = makeViewport();
+    const doc: CanvasDoc = {
+      nodes: [
         { id: "g", type: "group", x: 0, y: 0, width: 100, height: 100 },
+      ],
+      edges: [],
+    };
+    const snap = snapshotCanvas(el, doc, 0, 0, 1);
+    expect(snap).not.toBeNull();
+    expect(snap!.glyphs).toHaveLength(0);
+    expect(snap!.frames!.length).toBe(1);
+  });
+
+  it("returns null only when neither glyphs nor frames are present", () => {
+    const el = makeViewport();
+    // off-screen group → culled before frame is captured → no visuals
+    const doc: CanvasDoc = {
+      nodes: [
+        { id: "g", type: "group", x: 9999, y: 0, width: 100, height: 100 },
       ],
       edges: [],
     };

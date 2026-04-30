@@ -59,6 +59,15 @@ export interface ScheduledGlyph {
   lockInMs: number;
 }
 
+/** Per-frame entry on the morph timeline. Frames cross-fade from
+ *  `from` → `to` linearly over [0, lockInMs]. */
+export interface ScheduledFrame {
+  from: import("../morphTypes").FrameRef | null;
+  to: import("../morphTypes").FrameRef | null;
+  /** Time, in ms from morph start, at which the frame is fully `to`. */
+  lockInMs: number;
+}
+
 /** Decide whether a tab switch should play the morph or swap instantly. */
 export interface SuppressionState {
   /** Timestamp (ms) of the last morph that completed (or was cancelled). */
@@ -137,6 +146,32 @@ export function buildSchedule(
       to: n ? n.ch : "",
       x: n ? n.x : (o ? o.x : 0),
       y: n ? n.y : (o ? o.y : 0),
+      lockInMs: Math.floor(randomFn() * durationMs),
+    });
+  }
+  return out;
+}
+
+/**
+ * Build the per-frame schedule. Frames are paired by index — surplus on
+ * either side cross-fades to / from null so dialogs disappear and appear
+ * smoothly. Lock-in jitter mirrors the glyph schedule so card and text
+ * animation read as one motion.
+ */
+export function buildFrameSchedule(
+  outgoing: ViewSnapshot,
+  incoming: ViewSnapshot,
+  randomFn: () => number = Math.random,
+  durationMs: number = MORPH_DURATION_MS,
+): ScheduledFrame[] {
+  const out: ScheduledFrame[] = [];
+  const a = outgoing.frames ?? [];
+  const b = incoming.frames ?? [];
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i += 1) {
+    out.push({
+      from: a[i] ?? null,
+      to: b[i] ?? null,
       lockInMs: Math.floor(randomFn() * durationMs),
     });
   }

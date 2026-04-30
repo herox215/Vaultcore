@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   MORPH_DURATION_MS,
   MORPH_SUPPRESSION_MS,
+  buildFrameSchedule,
   buildSchedule,
   decideMorph,
   markMorphSettled,
@@ -14,7 +15,7 @@ import {
   randomGlyph,
   resolveMorphDuration,
 } from "../tabMorph";
-import type { ViewSnapshot } from "../../morphTypes";
+import type { FrameRef, ViewSnapshot } from "../../morphTypes";
 
 function snap(text: string): ViewSnapshot {
   return {
@@ -104,6 +105,48 @@ describe("buildSchedule", () => {
     expect(sched[2]!.x).toBe(2 * 8);
     expect(sched[3]!.x).toBe(3 * 8);
     expect(sched[4]!.x).toBe(4 * 8);
+  });
+});
+
+describe("buildFrameSchedule", () => {
+  function frame(over: Partial<FrameRef> = {}): FrameRef {
+    return { x: 0, y: 0, width: 10, height: 10, shape: "rectangle", ...over };
+  }
+  function snapWithFrames(frames: FrameRef[]): ViewSnapshot {
+    return {
+      glyphs: [],
+      frames,
+      lineHeight: 16,
+      font: "14px sans-serif",
+      color: "#000",
+      scrollerRect: { x: 0, y: 0, width: 100, height: 100 },
+    };
+  }
+
+  it("pairs frames by index and pads the shorter side with null", () => {
+    const a = snapWithFrames([frame({ x: 1 }), frame({ x: 2 }), frame({ x: 3 })]);
+    const b = snapWithFrames([frame({ x: 10 })]);
+    const sched = buildFrameSchedule(a, b, () => 0);
+    expect(sched).toHaveLength(3);
+    expect(sched[0]!.from?.x).toBe(1);
+    expect(sched[0]!.to?.x).toBe(10);
+    expect(sched[1]!.to).toBeNull();
+    expect(sched[2]!.to).toBeNull();
+  });
+
+  it("treats a missing `frames` array as empty", () => {
+    const a: ViewSnapshot = {
+      glyphs: [],
+      lineHeight: 16,
+      font: "14px sans-serif",
+      color: "#000",
+      scrollerRect: { x: 0, y: 0, width: 1, height: 1 },
+    };
+    const b = snapWithFrames([frame()]);
+    const sched = buildFrameSchedule(a, b, () => 0);
+    expect(sched).toHaveLength(1);
+    expect(sched[0]!.from).toBeNull();
+    expect(sched[0]!.to).not.toBeNull();
   });
 });
 
