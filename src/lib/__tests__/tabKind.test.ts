@@ -3,13 +3,13 @@
 // so these tests pin down extension casing, dotfiles, and the unknown-ext
 // fallback to "text" (caller is then responsible for the UTF-8 probe).
 //
-// #388 extended this module with two viewport-aware helpers used by
-// the mobile read-mode flow: `tabSupportsReading` (predicate over a tab
-// shape) and `defaultViewModeForViewport` (read-once viewport hint for
-// new-tab opens).
+// #388 added the pure `tabSupportsReading` predicate to this module.
+// `defaultViewModeForViewport` lives in `lib/viewport.ts` (its own test
+// file) so this module stays free of the `viewportStore` matchMedia
+// listener — every importer of `getExtension`/`getTabKind` would otherwise
+// transitively grab those listeners.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { readable } from "svelte/store";
+import { describe, it, expect } from "vitest";
 import {
   getExtension,
   getTabKind,
@@ -144,45 +144,6 @@ describe("tabSupportsReading (#388)", () => {
   });
 });
 
-// ── #388: defaultViewModeForViewport ────────────────────────────────────────
-//
-// Module-level mock of viewportStore so the helper sees a controlled
-// viewport mode at every call. Each test installs its own readable.
-// Resetting modules between tests forces a fresh import that reads the
-// latest mock — without this, vitest caches the dynamic import and the
-// second test sees the first test's mocked store.
-
-describe("defaultViewModeForViewport (#388)", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.doUnmock("../../store/viewportStore");
-  });
-
-  async function loadHelper(
-    mode: "desktop" | "tablet" | "mobile",
-  ): Promise<() => "edit" | "read"> {
-    vi.doMock("../../store/viewportStore", () => ({
-      viewportStore: readable({ mode, isCoarsePointer: mode === "mobile" }),
-    }));
-    const { defaultViewModeForViewport } = await import("../tabKind");
-    return defaultViewModeForViewport;
-  }
-
-  it("returns 'read' on mobile", async () => {
-    const fn = await loadHelper("mobile");
-    expect(fn()).toBe("read");
-  });
-
-  it("returns 'edit' on desktop", async () => {
-    const fn = await loadHelper("desktop");
-    expect(fn()).toBe("edit");
-  });
-
-  it("returns 'edit' on tablet (tablet keeps the desktop default)", async () => {
-    const fn = await loadHelper("tablet");
-    expect(fn()).toBe("edit");
-  });
-});
+// `defaultViewModeForViewport` tests live in `viewport.test.ts` next to
+// the source module. Keeps `tabKind.ts` and its test file free of the
+// `viewportStore` mock plumbing.

@@ -85,14 +85,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 // #388 — mock `defaultViewModeForViewport` so each test can flip the return
-// value at call time. EditorPane imports this from `../../lib/tabKind`.
-vi.mock("../../../lib/tabKind", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../lib/tabKind")>();
-  return {
-    ...actual,
-    defaultViewModeForViewport,
-  };
-});
+// value at call time. EditorPane imports this from `../../lib/viewport`
+// (extracted out of `tabKind.ts` to keep the classifier module pure /
+// store-free).
+vi.mock("../../../lib/viewport", () => ({
+  defaultViewModeForViewport,
+}));
 
 import { tabStore } from "../../../store/tabStore";
 import { vaultStore } from "../../../store/vaultStore";
