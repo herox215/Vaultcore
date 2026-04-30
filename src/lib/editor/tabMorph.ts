@@ -9,6 +9,7 @@
 // timing rules without a DOM.
 
 import type { EditorView } from "@codemirror/view";
+import type { GlyphRef, ViewSnapshot } from "../morphTypes";
 
 /** Hard cut at the morph duration. Overridable via the
  *  `--vc-tab-switch-duration` CSS custom property (read at trigger time
@@ -46,26 +47,6 @@ export function resolveMorphDuration(): number {
  */
 export const MORPH_SUPPRESSION_MS = 320;
 
-/** A single character at a known viewport pixel position. */
-export interface GlyphRef {
-  ch: string;
-  x: number;
-  y: number;
-}
-
-/** Snapshot of the visible glyphs for one editor view. */
-export interface ViewSnapshot {
-  glyphs: GlyphRef[];
-  /** Line height in CSS pixels — used by the renderer to align baselines. */
-  lineHeight: number;
-  /** Font shorthand suitable for `ctx.font`. */
-  font: string;
-  /** Color resolved from the editor's `--color-text`. */
-  color: string;
-  /** Pixel rect of the editor scroller, viewport-relative. */
-  scrollerRect: { x: number; y: number; width: number; height: number };
-}
-
 /** Per-glyph entry on the morph timeline. */
 export interface ScheduledGlyph {
   /** Outgoing character at this slot. Empty string = no outgoing. */
@@ -75,6 +56,15 @@ export interface ScheduledGlyph {
   x: number;
   y: number;
   /** Time, in ms from morph start, at which this glyph locks onto `to`. */
+  lockInMs: number;
+}
+
+/** Per-frame entry on the morph timeline. Frames cross-fade from
+ *  `from` → `to` linearly over [0, lockInMs]. */
+export interface ScheduledFrame {
+  from: import("../morphTypes").FrameRef | null;
+  to: import("../morphTypes").FrameRef | null;
+  /** Time, in ms from morph start, at which the frame is fully `to`. */
   lockInMs: number;
 }
 
@@ -96,20 +86,29 @@ export type MorphDecision = "play" | "instant";
  * Decide whether the next switch should play or swap instantly. Mutates
  * `state` to record the decision so the caller doesn't have to.
  *
- * Rules (issue #380):
- *  - In-flight morph + new request → cancel + instant. Suppression timer
- *    re-anchors at `now` so subsequent switches inside the window stay
- *    instant.
- *  - No in-flight morph but `now - lastSettledAt < MORPH_SUPPRESSION_MS` →
- *    instant. Re-anchors so a chord cycle stays instant for its duration.
+ * Rules (issue #380, refined for #383):
+ *  - In-flight morph + new request → cancel the current rAF and PLAY a
+ *    fresh morph from the new outgoing snapshot. The user sees a
+ *    continuous scramble rather than a hard cut, which matches the
+ *    intent of the morph (smooth tab transition) better than the
+ *    original instant-cancel behavior. `inFlight` stays true.
+ *  - No in-flight morph but `now - lastSettledAt < MORPH_SUPPRESSION_MS`
+ *    → instant. This is the chord-cycling guard: after a morph has just
+ *    settled, rapid follow-up switches stay instant so Cmd+Shift+]
+ *    through many tabs doesn't queue 240ms of animation per tab. The
+ *    suppression window re-anchors so the cycle stays instant for its
+ *    duration.
  *  - Otherwise → play. `inFlight` is set to true; the caller must call
- *    `markMorphSettled(state, now)` when the morph ends or is cancelled.
+ *    `markMorphSettled(state, now)` when the morph ends.
  */
 export function decideMorph(state: SuppressionState, now: number): MorphDecision {
   if (state.inFlight) {
-    state.lastSettledAt = now;
-    state.inFlight = false;
-    return "instant";
+    // Stay in-flight, but the caller will re-arm rAF with the new
+    // snapshots. lastSettledAt is intentionally NOT updated — the
+    // suppression window is anchored on settled morphs, and an
+    // interrupted-then-replayed morph is still one continuous "play"
+    // from the user's perspective.
+    return "play";
   }
   if (now - state.lastSettledAt < MORPH_SUPPRESSION_MS) {
     state.lastSettledAt = now;
@@ -156,6 +155,32 @@ export function buildSchedule(
       to: n ? n.ch : "",
       x: n ? n.x : (o ? o.x : 0),
       y: n ? n.y : (o ? o.y : 0),
+      lockInMs: Math.floor(randomFn() * durationMs),
+    });
+  }
+  return out;
+}
+
+/**
+ * Build the per-frame schedule. Frames are paired by index — surplus on
+ * either side cross-fades to / from null so dialogs disappear and appear
+ * smoothly. Lock-in jitter mirrors the glyph schedule so card and text
+ * animation read as one motion.
+ */
+export function buildFrameSchedule(
+  outgoing: ViewSnapshot,
+  incoming: ViewSnapshot,
+  randomFn: () => number = Math.random,
+  durationMs: number = MORPH_DURATION_MS,
+): ScheduledFrame[] {
+  const out: ScheduledFrame[] = [];
+  const a = outgoing.frames ?? [];
+  const b = incoming.frames ?? [];
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i += 1) {
+    out.push({
+      from: a[i] ?? null,
+      to: b[i] ?? null,
       lockInMs: Math.floor(randomFn() * durationMs),
     });
   }

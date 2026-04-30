@@ -69,6 +69,11 @@
     resolveVaultAbs,
     toVaultRel,
   } from "../../lib/canvas/embed";
+  import { snapshotCanvas } from "../../lib/canvas/canvasTabMorph";
+  import {
+    registerCanvasSnapshot,
+    unregisterCanvasSnapshot,
+  } from "../../lib/canvas/canvasMorphRegistry";
   import {
     type PointerMode,
     type DraftEdge,
@@ -203,6 +208,14 @@
 
   onMount(() => {
     void load();
+    // #383: expose a snapshot fn so EditorPane's tab-morph overlay can
+    // capture this canvas during canvas↔text and canvas↔canvas switches.
+    // Closure reads `viewportEl`, `doc`, `camX/Y`, `zoom` at snapshot
+    // time — they're plain `let` (DOM ref) and `$state` (camera + doc),
+    // both of which the closure observes at lookup, not at registration.
+    registerCanvasSnapshot(tabId, () =>
+      viewportEl ? snapshotCanvas(viewportEl, doc, camX, camY, zoom) : null,
+    );
   });
 
   onDestroy(() => {
@@ -212,6 +225,11 @@
       void persist();
     }
     cancelLongpressTimer();
+    // #383: unregister BEFORE the rest of the teardown so a tab-switch
+    // racing with this destroy can't read a snapshot fn whose closure
+    // points at `viewportEl` after Svelte has detached it. Ordering is
+    // load-bearing — a stale closure would dereference a null DOM ref.
+    unregisterCanvasSnapshot(tabId);
     // #165: tear down preview-invalidation subscriptions so multi-tab
     // open/close cycles don't leak listeners.
     unsubTab();
