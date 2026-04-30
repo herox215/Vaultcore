@@ -17,7 +17,8 @@
   import { activeViewStore } from "../../store/activeViewStore";
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAnchors, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { openFileAsTab } from "../../lib/openFileAsTab";
-  import { defaultViewModeForViewport, tabSupportsReading } from "../../lib/tabKind";
+  import { tabSupportsReading } from "../../lib/tabKind";
+  import { defaultViewModeForViewport } from "../../lib/viewport";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
   import { searchStore } from "../../store/searchStore";

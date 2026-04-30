@@ -1,17 +1,14 @@
 // Extension-based classifier used when opening a file path as a new tab (#49).
-// Pure helper — no IPC, no filesystem access. The caller is responsible for
-// subsequently loading the file content (or, for "unsupported", skipping it).
+// Pure helper — no IPC, no filesystem access, no store dependencies. The
+// caller is responsible for subsequently loading the file content (or, for
+// "unsupported", skipping it).
 //
-// Also hosts two viewport-aware helpers for the #388 mobile read-mode flow:
-//   - `tabSupportsReading(tab)`: predicate over tab shape, used wherever the
-//     UI needs to know whether Reading Mode applies to the active tab.
-//   - `defaultViewModeForViewport()`: read-once viewport hint passed to
-//     openers when creating a new tab. The store remains environment-agnostic
-//     — viewport awareness lives at this UI boundary.
+// Also hosts the pure `tabSupportsReading(tab)` predicate used by every
+// site that needs to know whether Reading Mode applies. The viewport-aware
+// `defaultViewModeForViewport()` lives in `lib/viewport.ts` so importing
+// the classifier never drags `viewportStore`'s matchMedia listeners.
 
-import { get } from "svelte/store";
-import { viewportStore } from "../store/viewportStore";
-import type { Tab, TabViewMode } from "../store/tabStoreCore";
+import type { Tab } from "../store/tabStoreCore";
 
 /** Image extensions that render via `<img src={convertFileSrc(abs)} />`. */
 export const IMAGE_EXTS = new Set([
@@ -89,24 +86,4 @@ export function tabSupportsReading(tab: Tab): boolean {
   if (tab.viewer === "text") return false;
   if (tab.viewer === "canvas") return false;
   return true;
-}
-
-/**
- * #388 — viewport-aware default `viewMode` for newly-opened markdown tabs.
- *
- * Mobile users get notes in Reading Mode by default to avoid accidental
- * edits while scrolling. Desktop and tablet keep the existing edit default.
- *
- * Always returns a `TabViewMode` — callers may pass it directly to
- * `tabStore.openTab(path, defaultViewModeForViewport())` without
- * conditional checks. Returning `"edit"` on desktop is byte-identical
- * in effect to omitting the hint, since every reader coalesces
- * `viewMode ?? "edit"`.
- *
- * The store layer never reads `viewportStore`; this helper is the single
- * UI seam where viewport state crosses into tab metadata. Tests stub
- * `viewportStore` here and nowhere else.
- */
-export function defaultViewModeForViewport(): TabViewMode {
-  return get(viewportStore).mode === "mobile" ? "read" : "edit";
 }

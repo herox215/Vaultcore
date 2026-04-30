@@ -99,15 +99,24 @@ describe("openFileAsTab", () => {
 
 describe("openFileAsTab + viewMode (#388)", () => {
   beforeEach(() => {
-    tabStore._reset();
     readFile.mockReset();
     vi.resetModules();
     vi.doUnmock("../../store/viewportStore");
+    // NOTE: do NOT reset `tabStore` here — `vi.resetModules()` makes every
+    // subsequent dynamic `import("../../store/tabStore")` return a FRESH
+    // module whose `_core` writable is distinct from the top-level
+    // import. Calling `tabStore._reset()` on the stale top-level instance
+    // would silently no-op against the stores the tests actually use.
+    // The reset moved into `loadDispatcher` below — runs after the dynamic
+    // import, against the fresh singleton.
   });
 
   async function loadDispatcher(
     mode: "desktop" | "tablet" | "mobile",
-  ): Promise<typeof openFileAsTab> {
+  ): Promise<{
+    dispatch: typeof openFileAsTab;
+    ts: typeof import("../../store/tabStore").tabStore;
+  }> {
     const { readable } = await import("svelte/store");
     vi.doMock("../../store/viewportStore", () => ({
       viewportStore: readable({ mode, isCoarsePointer: mode === "mobile" }),
@@ -116,13 +125,13 @@ describe("openFileAsTab + viewMode (#388)", () => {
     // module graph after `vi.resetModules()` shares the same readFile spy.
     vi.doMock("../../ipc/commands", () => ({ readFile }));
     const mod = await import("../openFileAsTab");
-    return mod.openFileAsTab;
+    const { tabStore: ts } = await import("../../store/tabStore");
+    ts._reset();
+    return { dispatch: mod.openFileAsTab, ts };
   }
 
   it("opens markdown with viewMode='read' on mobile", async () => {
-    const dispatch = await loadDispatcher("mobile");
-    const { tabStore: ts } = await import("../../store/tabStore");
-    ts._reset();
+    const { dispatch, ts } = await loadDispatcher("mobile");
     await dispatch("/vault/note.md");
     const state = get(ts);
     expect(state.tabs).toHaveLength(1);
@@ -130,18 +139,14 @@ describe("openFileAsTab + viewMode (#388)", () => {
   });
 
   it("opens markdown with viewMode='edit' on desktop", async () => {
-    const dispatch = await loadDispatcher("desktop");
-    const { tabStore: ts } = await import("../../store/tabStore");
-    ts._reset();
+    const { dispatch, ts } = await loadDispatcher("desktop");
     await dispatch("/vault/note.md");
     const state = get(ts);
     expect(state.tabs[0]!.viewMode).toBe("edit");
   });
 
   it("does not pass the hint for image viewers (image has no Reading Mode)", async () => {
-    const dispatch = await loadDispatcher("mobile");
-    const { tabStore: ts } = await import("../../store/tabStore");
-    ts._reset();
+    const { dispatch, ts } = await loadDispatcher("mobile");
     await dispatch("/vault/photo.png");
     const state = get(ts);
     expect(state.tabs[0]!.viewer).toBe("image");
@@ -149,9 +154,7 @@ describe("openFileAsTab + viewMode (#388)", () => {
   });
 
   it("does not pass the hint for text viewers (.txt / .json / etc.)", async () => {
-    const dispatch = await loadDispatcher("mobile");
-    const { tabStore: ts } = await import("../../store/tabStore");
-    ts._reset();
+    const { dispatch, ts } = await loadDispatcher("mobile");
     await dispatch("/vault/notes.txt");
     const state = get(ts);
     expect(state.tabs[0]!.viewer).toBe("text");

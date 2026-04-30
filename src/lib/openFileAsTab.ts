@@ -7,13 +7,8 @@
 import { tabStore } from "../store/tabStore";
 import { readFile } from "../ipc/commands";
 import { isVaultError } from "../types/errors";
-import {
-  defaultViewModeForViewport,
-  getExtension,
-  getTabKind,
-  IMAGE_EXTS,
-  TEXT_EXTS,
-} from "./tabKind";
+import { getExtension, getTabKind, IMAGE_EXTS, TEXT_EXTS } from "./tabKind";
+import { defaultViewModeForViewport } from "./viewport";
 import { encryptedFolders } from "../store/encryptedFoldersStore";
 import { vaultStore } from "../store/vaultStore";
 import { openUnlockModal } from "../store/encryptionModalStore";

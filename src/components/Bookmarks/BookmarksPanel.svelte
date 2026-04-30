@@ -95,11 +95,10 @@
   function handleOpenInSplit(relPath: string): void {
     closeContextMenu();
     const absPath = toAbsPath(relPath);
-    // #388 — kept synchronous on purpose: openFileAsTab is async and would
-    // race with the synchronous moveToPane("right") below, which would
-    // potentially move the wrong tab. Split view is desktop-only via the
-    // viewport gating in #386, so the lost mobile-read hint here doesn't
-    // affect the mobile flow.
+    // #388 — stays sync: handleOpenInSplit is a synchronous event handler
+    // and cannot `await openFileAsTab` without restructuring the call site.
+    // The mobile-aware viewMode hint is lost on the split path; split is
+    // desktop-only via viewport gating, so this is moot in practice.
     tabStore.openTab(absPath);
     tabStore.moveToPane("right");
   }
