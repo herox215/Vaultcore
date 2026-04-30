@@ -91,3 +91,70 @@ describe("openFileAsTab", () => {
     expect(get(tabStore).tabs).toHaveLength(1);
   });
 });
+
+// #388 — viewport-aware default viewMode. Mobile users get markdown opens in
+// read mode; non-markdown viewers (image / text / unsupported) ignore the
+// hint because they have no Reading Mode path. The dispatcher reads the
+// helper from `tabKind.ts`, which itself reads `viewportStore` once per call.
+
+describe("openFileAsTab + viewMode (#388)", () => {
+  beforeEach(() => {
+    tabStore._reset();
+    readFile.mockReset();
+    vi.resetModules();
+    vi.doUnmock("../../store/viewportStore");
+  });
+
+  async function loadDispatcher(
+    mode: "desktop" | "tablet" | "mobile",
+  ): Promise<typeof openFileAsTab> {
+    const { readable } = await import("svelte/store");
+    vi.doMock("../../store/viewportStore", () => ({
+      viewportStore: readable({ mode, isCoarsePointer: mode === "mobile" }),
+    }));
+    // Re-mock the IPC layer for the freshly-imported dispatcher so the
+    // module graph after `vi.resetModules()` shares the same readFile spy.
+    vi.doMock("../../ipc/commands", () => ({ readFile }));
+    const mod = await import("../openFileAsTab");
+    return mod.openFileAsTab;
+  }
+
+  it("opens markdown with viewMode='read' on mobile", async () => {
+    const dispatch = await loadDispatcher("mobile");
+    const { tabStore: ts } = await import("../../store/tabStore");
+    ts._reset();
+    await dispatch("/vault/note.md");
+    const state = get(ts);
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]!.viewMode).toBe("read");
+  });
+
+  it("opens markdown with viewMode='edit' on desktop", async () => {
+    const dispatch = await loadDispatcher("desktop");
+    const { tabStore: ts } = await import("../../store/tabStore");
+    ts._reset();
+    await dispatch("/vault/note.md");
+    const state = get(ts);
+    expect(state.tabs[0]!.viewMode).toBe("edit");
+  });
+
+  it("does not pass the hint for image viewers (image has no Reading Mode)", async () => {
+    const dispatch = await loadDispatcher("mobile");
+    const { tabStore: ts } = await import("../../store/tabStore");
+    ts._reset();
+    await dispatch("/vault/photo.png");
+    const state = get(ts);
+    expect(state.tabs[0]!.viewer).toBe("image");
+    expect(state.tabs[0]!.viewMode).toBeUndefined();
+  });
+
+  it("does not pass the hint for text viewers (.txt / .json / etc.)", async () => {
+    const dispatch = await loadDispatcher("mobile");
+    const { tabStore: ts } = await import("../../store/tabStore");
+    ts._reset();
+    await dispatch("/vault/notes.txt");
+    const state = get(ts);
+    expect(state.tabs[0]!.viewer).toBe("text");
+    expect(state.tabs[0]!.viewMode).toBeUndefined();
+  });
+});
