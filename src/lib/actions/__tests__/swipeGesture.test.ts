@@ -172,4 +172,55 @@ describe("swipeGesture action", () => {
     node.dispatchEvent(pointer("pointerup", 70, 110));
     expect(onSwipe).not.toHaveBeenCalled();
   });
+
+  it("nested instances coexist — child's left swipe fires without being stolen by the parent", () => {
+    // Regression for the WebKit-only bug: an earlier setPointerCapture on
+    // pointerdown made the layout-root listener (right + edge=left) steal
+    // every subsequent pointermove/up from the drawer's nested left-swipe
+    // listener, breaking swipe-to-close.
+    //
+    // The geometry below mirrors the production wiring: drawer is a 240px
+    // child of the layout root, the user starts inside the drawer (x=200),
+    // and swipes left by 60px to close it. The parent's right + edge=left
+    // gate must NOT fire on this gesture, and the child's left listener
+    // MUST fire — both events bubble to both listeners, and the child's
+    // listener sees the move first (capture+bubble order is identical
+    // when both are bubble-phase, but DOM ordering puts the inner target
+    // first via ancestor traversal).
+    const parentOnSwipe = vi.fn();
+    const childOnSwipe = vi.fn();
+
+    const parent = makeHost(800);
+    const child = document.createElement("div");
+    Object.defineProperty(child, "getBoundingClientRect", {
+      value: () => ({
+        left: 0, right: 240, top: 0, bottom: 800,
+        width: 240, height: 800, x: 0, y: 0, toJSON: () => ({}),
+      }),
+    });
+    parent.appendChild(child);
+
+    const parentAction = swipeGesture(parent, {
+      direction: "right",
+      edge: "left",
+      edgeSize: 24,
+      onSwipe: parentOnSwipe,
+    });
+    const childAction = swipeGesture(child, {
+      direction: "left",
+      onSwipe: childOnSwipe,
+    });
+
+    try {
+      child.dispatchEvent(pointer("pointerdown", 200, 100));
+      child.dispatchEvent(pointer("pointermove", 140, 110));
+      child.dispatchEvent(pointer("pointerup", 140, 110));
+      expect(childOnSwipe).toHaveBeenCalledTimes(1);
+      expect(parentOnSwipe).not.toHaveBeenCalled();
+    } finally {
+      childAction.destroy?.();
+      parentAction.destroy?.();
+      child.remove();
+    }
+  });
 });
