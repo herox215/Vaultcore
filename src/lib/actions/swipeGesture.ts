@@ -14,8 +14,17 @@
  *     of the host (host width comes from getBoundingClientRect()).
  *
  * Pointer Events are used (not Touch) so the same code path covers stylus,
- * touch, and mouse on Tauri's webview. `setPointerCapture` keeps tracking
- * alive after the pointer leaves the host bounds.
+ * touch, and mouse on Tauri's webview.
+ *
+ * No `setPointerCapture`. The 50px-in-300ms gesture geometry stays well
+ * within both consumer host bounds (240px-wide drawer, full-viewport
+ * layout root), so capture isn't needed to keep tracking alive. More
+ * importantly, capture would steal events from nested swipeGesture
+ * instances — the layout-root listener would override the drawer's,
+ * breaking swipe-to-close — and would hold pointer capture across the
+ * editor for any touch lasting longer than the budget, corrupting
+ * CodeMirror's selection drag. Pointer Events bubble correctly without
+ * explicit capture.
  *
  * `__pickSwipe` is exported separately as a pure decision function so unit
  * tests don't depend on jsdom's PointerEvent fidelity.
@@ -86,16 +95,6 @@ export function swipeGesture(node: HTMLElement, options: SwipeGestureOptions): S
   function onPointerDown(e: PointerEvent) {
     start = { x: e.clientX, y: e.clientY, t: performance.now() };
     activePointerId = e.pointerId;
-    if (typeof node.setPointerCapture === "function") {
-      try {
-        node.setPointerCapture(e.pointerId);
-      } catch {
-        // setPointerCapture can throw if the pointer was already released
-        // (rare; jsdom in particular doesn't always permit capture). The
-        // fallback is the bubble-phase pointermove/up handlers — they still
-        // fire on the host.
-      }
-    }
   }
 
   function onPointerMove(e: PointerEvent) {

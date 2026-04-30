@@ -37,11 +37,7 @@ describe("Mobile layout (#386)", () => {
     return cls.includes("vc-layout-sidebar--mobile-open");
   }
 
-  it("hides the drawer on initial mobile load", async () => {
-    expect(await isDrawerOpen()).toBe(false);
-  });
-
-  it("opens the drawer when the hamburger trigger is clicked", async () => {
+  async function openDrawer(): Promise<void> {
     const trigger = await browser.$('button[aria-controls="vc-mobile-drawer"]');
     await trigger.waitForDisplayed({ timeout: 3000 });
     await browser.execute(() => {
@@ -51,9 +47,29 @@ describe("Mobile layout (#386)", () => {
       timeout: 3000,
       timeoutMsg: "Drawer never opened after hamburger click",
     });
+  }
+
+  // Each test starts and ends with the drawer closed. afterEach cleans up
+  // any drawer state the test left behind so tests stay independent.
+  afterEach(async () => {
+    if (await isDrawerOpen()) {
+      await browser.keys(["Escape"]);
+      await browser.waitUntil(async () => !(await isDrawerOpen()), { timeout: 3000 }).catch(() => {});
+    }
+  });
+
+  it("hides the drawer on initial mobile load", async () => {
+    expect(await isDrawerOpen()).toBe(false);
+  });
+
+  it("opens the drawer when the hamburger trigger is clicked", async () => {
+    expect(await isDrawerOpen()).toBe(false);
+    await openDrawer();
+    expect(await isDrawerOpen()).toBe(true);
   });
 
   it("closes the drawer when the scrim is clicked", async () => {
+    await openDrawer();
     expect(await isDrawerOpen()).toBe(true);
     await browser.execute(() => {
       (document.querySelector(".vc-mobile-scrim") as HTMLElement | null)?.click();
@@ -65,10 +81,8 @@ describe("Mobile layout (#386)", () => {
   });
 
   it("Escape closes an open drawer", async () => {
-    await browser.execute(() => {
-      (document.querySelector('button[aria-controls="vc-mobile-drawer"]') as HTMLElement | null)?.click();
-    });
-    await browser.waitUntil(isDrawerOpen, { timeout: 3000 });
+    await openDrawer();
+    expect(await isDrawerOpen()).toBe(true);
     await browser.keys(["Escape"]);
     await browser.waitUntil(async () => !(await isDrawerOpen()), {
       timeout: 3000,
