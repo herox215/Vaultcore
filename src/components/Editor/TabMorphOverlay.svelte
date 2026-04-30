@@ -63,10 +63,18 @@
     const now = performance.now();
     const decision = decideMorph(suppression, now);
     if (decision === "instant") {
+      // Chord-cycle suppression after a settled morph — cancel any
+      // (defensive, shouldn't happen) leftover rAF and skip.
       cancelRaf();
       visible = false;
       return;
     }
+    // decision === "play". If a morph is already in flight, cancel its
+    // rAF cleanly so we can re-arm with the new schedule below; the
+    // canvas surface stays mounted (visible=true) so there's no flash
+    // between the interrupted frame and the first frame of the new
+    // morph.
+    cancelRaf();
     if (prefersReducedMotion()) {
       markMorphSettled(suppression, now);
       return;

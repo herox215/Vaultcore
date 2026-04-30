@@ -86,20 +86,29 @@ export type MorphDecision = "play" | "instant";
  * Decide whether the next switch should play or swap instantly. Mutates
  * `state` to record the decision so the caller doesn't have to.
  *
- * Rules (issue #380):
- *  - In-flight morph + new request → cancel + instant. Suppression timer
- *    re-anchors at `now` so subsequent switches inside the window stay
- *    instant.
- *  - No in-flight morph but `now - lastSettledAt < MORPH_SUPPRESSION_MS` →
- *    instant. Re-anchors so a chord cycle stays instant for its duration.
+ * Rules (issue #380, refined for #383):
+ *  - In-flight morph + new request → cancel the current rAF and PLAY a
+ *    fresh morph from the new outgoing snapshot. The user sees a
+ *    continuous scramble rather than a hard cut, which matches the
+ *    intent of the morph (smooth tab transition) better than the
+ *    original instant-cancel behavior. `inFlight` stays true.
+ *  - No in-flight morph but `now - lastSettledAt < MORPH_SUPPRESSION_MS`
+ *    → instant. This is the chord-cycling guard: after a morph has just
+ *    settled, rapid follow-up switches stay instant so Cmd+Shift+]
+ *    through many tabs doesn't queue 240ms of animation per tab. The
+ *    suppression window re-anchors so the cycle stays instant for its
+ *    duration.
  *  - Otherwise → play. `inFlight` is set to true; the caller must call
- *    `markMorphSettled(state, now)` when the morph ends or is cancelled.
+ *    `markMorphSettled(state, now)` when the morph ends.
  */
 export function decideMorph(state: SuppressionState, now: number): MorphDecision {
   if (state.inFlight) {
-    state.lastSettledAt = now;
-    state.inFlight = false;
-    return "instant";
+    // Stay in-flight, but the caller will re-arm rAF with the new
+    // snapshots. lastSettledAt is intentionally NOT updated — the
+    // suppression window is anchored on settled morphs, and an
+    // interrupted-then-replayed morph is still one continuous "play"
+    // from the user's perspective.
+    return "play";
   }
   if (now - state.lastSettledAt < MORPH_SUPPRESSION_MS) {
     state.lastSettledAt = now;

@@ -67,11 +67,25 @@ describe("decideMorph — suppression window (#380)", () => {
     expect(decideMorph(state, t)).toBe("play");
   });
 
-  it("a switch arriving while a morph is in flight cancels it (instant)", () => {
-    decideMorph(state, 0); // play; inFlight=true
+  it("a switch arriving while a morph is in flight replays (does NOT cancel to instant)", () => {
+    // Regression for the UAT bug: switching mid-animation used to swap
+    // instantly with no morph. The new contract is that the in-flight
+    // morph is replaced with a fresh play so the user sees continuous
+    // motion. inFlight stays true; lastSettledAt is unchanged so the
+    // chord-cycling suppression window only kicks in AFTER a settle.
+    decideMorph(state, 0);
     expect(state.inFlight).toBe(true);
-    expect(decideMorph(state, 50)).toBe("instant");
-    expect(state.inFlight).toBe(false);
+    const before = state.lastSettledAt;
+    expect(decideMorph(state, 50)).toBe("play");
+    expect(state.inFlight).toBe(true);
+    expect(state.lastSettledAt).toBe(before);
+  });
+
+  it("after a mid-flight replay settles, the chord-cycling suppression still applies", () => {
+    decideMorph(state, 0);
+    decideMorph(state, 50); // mid-flight replay; still play
+    markMorphSettled(state, 50 + MORPH_DURATION_MS);
+    expect(decideMorph(state, 50 + MORPH_DURATION_MS + 10)).toBe("instant");
   });
 });
 
