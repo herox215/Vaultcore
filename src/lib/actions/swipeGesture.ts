@@ -105,8 +105,8 @@ export function swipeGesture(node: HTMLElement, options: SwipeGestureOptions): S
     if (
       __pickSwipe(start, end, {
         direction: opts.direction,
-        edge: opts.edge,
-        edgeSize: opts.edgeSize,
+        ...(opts.edge !== undefined ? { edge: opts.edge } : {}),
+        ...(opts.edgeSize !== undefined ? { edgeSize: opts.edgeSize } : {}),
         hostWidth: rect.width,
       })
     ) {
@@ -125,8 +125,8 @@ export function swipeGesture(node: HTMLElement, options: SwipeGestureOptions): S
     if (
       __pickSwipe(start, end, {
         direction: opts.direction,
-        edge: opts.edge,
-        edgeSize: opts.edgeSize,
+        ...(opts.edge !== undefined ? { edge: opts.edge } : {}),
+        ...(opts.edgeSize !== undefined ? { edgeSize: opts.edgeSize } : {}),
         hostWidth: rect.width,
       })
     ) {

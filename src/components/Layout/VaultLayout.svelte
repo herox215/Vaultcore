@@ -58,6 +58,8 @@
   import { resolveRevealRelPath } from "../../lib/activeTabReveal";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import { settingsStore } from "../../store/settingsStore";
+  import { viewportStore } from "../../store/viewportStore";
+  import { swipeGesture } from "../../lib/actions/swipeGesture";
   import {
     DEFAULT_DAILY_DATE_FORMAT,
     dailyNoteFilename,
@@ -100,6 +102,41 @@
   // Sidebar selection state
   let selectedPath = $state<string | null>(null);
 
+  // #386 mobile shell — drawer state. The drawer reuses the existing
+  // `.vc-layout-sidebar` container (width-driven on desktop, transform-driven
+  // via `.vc-layout-sidebar--mobile-open` on mobile via the @media block).
+  let mobileDrawerOpen = $state(false);
+  let triggerRef: HTMLButtonElement | undefined = $state(undefined);
+  let drawerEl: HTMLDivElement | undefined = $state(undefined);
+  const isMobile = $derived($viewportStore.mode === "mobile");
+
+  // Resize-to-desktop forces the drawer closed so re-entering mobile starts
+  // from a known state.
+  $effect(() => {
+    if (!isMobile) mobileDrawerOpen = false;
+  });
+
+  // Focus management: when the drawer opens, focus the first focusable inside
+  // (sidebar action buttons are bumped to 44px on coarse pointers — they are
+  // the empty-vault fallback). On close, return focus to the trigger.
+  // The `wasOpen` latch keeps the spurious mount-time focus dispatch from
+  // firing when the drawer starts closed.
+  let wasOpen = $state(false);
+  $effect(() => {
+    if (mobileDrawerOpen) {
+      wasOpen = true;
+      queueMicrotask(() => {
+        const first = drawerEl?.querySelector<HTMLElement>(
+          '[tabindex="0"], button:not([tabindex="-1"]), a:not([tabindex="-1"]), input:not([tabindex="-1"])'
+        );
+        first?.focus();
+      });
+    } else if (wasOpen) {
+      triggerRef?.focus();
+      wasOpen = false;
+    }
+  });
+
   const unsubTab = tabStore.subscribe((state) => {
     rightPaneIds = state.splitState.right;
   });
@@ -120,6 +157,7 @@
 
   // Sidebar divider drag-to-resize
   function handleDividerMousedown(e: MouseEvent) {
+    if (isMobile) return;
     e.preventDefault();
     isDragging = true;
     dragStartX = e.clientX;
@@ -127,6 +165,7 @@
   }
 
   function handleMousemove(e: MouseEvent) {
+    if (isMobile) return;
     if (isDragging) {
       const delta = e.clientX - dragStartX;
       const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, dragStartWidth + delta));
@@ -143,6 +182,7 @@
   }
 
   function handleMouseup() {
+    if (isMobile) return;
     if (isDragging) {
       isDragging = false;
       persistWidth(sidebarWidth);
@@ -156,6 +196,7 @@
   }
 
   function handleRightDividerMousedown(e: MouseEvent) {
+    if (isMobile) return;
     e.preventDefault();
     isRightDragging = true;
     rightDragStartX = e.clientX;
@@ -166,6 +207,7 @@
 
   // Split pane divider drag
   function handleSplitDividerMousedown(e: MouseEvent) {
+    if (isMobile) return;
     e.preventDefault();
     isSplitDragging = true;
     splitDragStartX = e.clientX;
@@ -173,6 +215,7 @@
   }
 
   function handleSplitDragMove(e: MouseEvent) {
+    if (isMobile) return;
     if (!isSplitDragging) return;
     const editorAreaEl = document.querySelector(".vc-layout-editor") as HTMLElement;
     if (!editorAreaEl) return;
@@ -553,7 +596,14 @@
         omniSearchOpen = true;
       },
       toggleSidebar: () => { toggleSidebar(); },
-      openBacklinks: () => { backlinksStore.toggle(); },
+      openBacklinks: () => {
+        // #386 — right sidebar is suppressed entirely on mobile (its content
+        // routes through #397's burger sheet). Snapshot the store with `get`
+        // because commands are imperative — `$viewportStore` reactive sugar
+        // isn't available inside this callback.
+        if (get(viewportStore).mode === "mobile") return;
+        backlinksStore.toggle();
+      },
       activateSearchTab: () => {
         omniSearchMode = "content";
         omniSearchPrefill = undefined;
@@ -679,6 +729,16 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    // #386 — drawer-Escape branch sits ABOVE the modal-open guard so a
+    // simultaneously open settings/palette doesn't swallow Escape that should
+    // ALSO close the drawer. The chosen ordering (drawer first, modal next)
+    // matches user intent: pressing Escape on a phone unstacks the drawer
+    // without forcing the user to dismiss whatever happens to be on top.
+    if (e.key === "Escape" && isMobile && mobileDrawerOpen) {
+      e.preventDefault();
+      mobileDrawerOpen = false;
+      return;
+    }
     if (settingsOpen || inlineRenameActive()) return;
     if (commandPaletteOpen) return; // palette handles its own keys
     if (omniSearchOpen) return; // omni-search handles its own keys
@@ -713,12 +773,33 @@
   class="vc-vault-layout"
   class:vc-vault-layout--dragging={isDragging || isSplitDragging || isRightDragging}
   style="--sidebar-width: {sidebarCollapsed ? 0 : sidebarWidth}px; --right-sidebar-width: {backlinksOpen ? backlinksWidth : 0}px; --vc-editor-max-width: {sidebarCollapsed ? 1100 : 720}px"
+  use:swipeGesture={{
+    direction: "right",
+    edge: "left",
+    edgeSize: 24,
+    onSwipe: () => { if (isMobile) mobileDrawerOpen = true; }
+  }}
 >
-  <!-- Sidebar column -->
+  <!-- Sidebar column.
+       On desktop this is a regular grid column (width-driven). On mobile
+       (@media max-width: 699px) it becomes a fixed-position drawer that
+       slides in from the left via `transform: translateX(...)`. The
+       `aria-hidden` ternary keeps off-screen content out of the AT tree on
+       both axes. -->
   <div
     class="vc-layout-sidebar"
     class:vc-layout-sidebar--collapsed={sidebarCollapsed}
-    aria-hidden={sidebarCollapsed}
+    class:vc-layout-sidebar--mobile-open={isMobile && mobileDrawerOpen}
+    id="vc-mobile-drawer"
+    bind:this={drawerEl}
+    aria-hidden={isMobile ? !mobileDrawerOpen : sidebarCollapsed}
+    role={isMobile && mobileDrawerOpen ? "dialog" : undefined}
+    aria-modal={isMobile && mobileDrawerOpen ? "true" : undefined}
+    aria-label={isMobile && mobileDrawerOpen ? "File tree" : undefined}
+    use:swipeGesture={{
+      direction: "left",
+      onSwipe: () => { if (mobileDrawerOpen) mobileDrawerOpen = false; }
+    }}
   >
     <Sidebar
       {selectedPath}
@@ -727,6 +808,21 @@
       onOpenContentSearch={openContentSearchWith}
     />
   </div>
+
+  {#if isMobile && mobileDrawerOpen}
+    <!-- Drawer scrim. `vc-modal-scrim` provides the backdrop colour and
+         `inset: 0`; `vc-mobile-scrim` overrides z-index so it stacks
+         BELOW all real modals (drawer 50, modals ≥199) — see Socrates v2
+         z-index audit in #386. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="vc-modal-scrim vc-mobile-scrim"
+      aria-hidden="true"
+      tabindex="-1"
+      onclick={() => (mobileDrawerOpen = false)}
+    ></div>
+  {/if}
 
   <!-- Resize divider (column 2). Always rendered — a missing element would
        let CSS grid auto-placement slide every subsequent child one column
@@ -756,26 +852,42 @@
          settings) don't vanish together with the sidebar (issue #112). The
          sidebar toggle morphs between collapse / expand based on state. -->
     <div class="vc-editor-topbar">
-      <button
-        class="vc-sidebar-toggle-btn"
-        onclick={toggleSidebar}
-        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        aria-expanded={!sidebarCollapsed}
-        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        {#if sidebarCollapsed}&#9654;{:else}&#9664;{/if}
-      </button>
+      {#if isMobile}
+        <button
+          bind:this={triggerRef}
+          class="vc-sidebar-toggle-btn"
+          onclick={() => (mobileDrawerOpen = !mobileDrawerOpen)}
+          aria-label={mobileDrawerOpen ? "Close file tree" : "Open file tree"}
+          aria-expanded={mobileDrawerOpen}
+          aria-controls="vc-mobile-drawer"
+          title={mobileDrawerOpen ? "Close file tree" : "Open file tree"}
+        >
+          &#9776;
+        </button>
+      {:else}
+        <button
+          class="vc-sidebar-toggle-btn"
+          onclick={toggleSidebar}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!sidebarCollapsed}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {#if sidebarCollapsed}&#9654;{:else}&#9664;{/if}
+        </button>
+      {/if}
       <div class="vc-editor-topbar-spacer"></div>
-      <button
-        class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
-        class:vc-backlinks-toggle-btn--active={backlinksOpen}
-        onclick={() => backlinksStore.toggle()}
-        aria-label="Backlinks-Panel umschalten"
-        aria-pressed={backlinksOpen}
-        title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
-      >
-        <PanelRight size={16} />
-      </button>
+      {#if !isMobile}
+        <button
+          class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"
+          class:vc-backlinks-toggle-btn--active={backlinksOpen}
+          onclick={() => backlinksStore.toggle()}
+          aria-label="Backlinks-Panel umschalten"
+          aria-pressed={backlinksOpen}
+          title="Backlinks-Panel umschalten (Cmd/Ctrl+Shift+B)"
+        >
+          <PanelRight size={16} />
+        </button>
+      {/if}
       <button
         class="vc-sidebar-toggle-btn"
         class:vc-backlinks-toggle-btn--active={settingsOpen}
@@ -831,28 +943,33 @@
   <!-- Right resize divider (4th column).
        role="separator" is the correct ARIA pattern for a drag-to-resize
        handle; no standard keyboard activation applies to mouse-drag
-       resizing. -->
-  {#if backlinksOpen}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="vc-layout-divider-right"
-      class:vc-layout-divider-right--active={isRightDragging}
-      role="separator"
-      aria-label="Resize backlinks sidebar"
-      aria-orientation="vertical"
-      onmousedown={handleRightDividerMousedown}
-    ></div>
-  {:else}
-    <div class="vc-layout-divider-right-hidden"></div>
-  {/if}
+       resizing.
+       #386: on mobile, both the divider and the right sidebar drop out of
+       the DOM entirely — backlinks content routes through the mobile burger
+       sheet (#397). -->
+  {#if !isMobile}
+    {#if backlinksOpen}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="vc-layout-divider-right"
+        class:vc-layout-divider-right--active={isRightDragging}
+        role="separator"
+        aria-label="Resize backlinks sidebar"
+        aria-orientation="vertical"
+        onmousedown={handleRightDividerMousedown}
+      ></div>
+    {:else}
+      <div class="vc-layout-divider-right-hidden"></div>
+    {/if}
 
-  <!-- Right sidebar (5th column) -->
-  <div
-    class="vc-layout-right-sidebar"
-    class:vc-layout-right-sidebar--hidden={!backlinksOpen}
-  >
-    <RightSidebar />
-  </div>
+    <!-- Right sidebar (5th column) -->
+    <div
+      class="vc-layout-right-sidebar"
+      class:vc-layout-right-sidebar--hidden={!backlinksOpen}
+    >
+      <RightSidebar />
+    </div>
+  {/if}
 </div>
 
 <!-- #174 — Omni-search (Spotlight-style) rendered outside the grid at body level -->
@@ -1109,5 +1226,43 @@
     width: 0;
     border-left: none;
     overflow: hidden;
+  }
+
+  /* #386 — mobile shell. Below 700px the layout collapses to a single
+     editor pane; the left sidebar becomes a drawer that slides in from the
+     left edge. The right sidebar / backlinks toggle drop out of the DOM
+     entirely (see {#if !isMobile} above) — its content routes through the
+     mobile burger sheet (#397). */
+  @media (max-width: 699px) {
+    .vc-vault-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .vc-layout-sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(var(--sidebar-width-mobile, 240px), 85vw);
+      transform: translateX(-100%);
+      /* Vitruvius spec: 240ms cubic-bezier(0.25, 0.46, 0.45, 0.94).
+         Overrides the desktop 200ms ease — different breakpoints, no
+         desync between the two. */
+      transition: transform 240ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      z-index: 50;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+    }
+
+    .vc-layout-sidebar--mobile-open {
+      transform: translateX(0);
+    }
+
+    .vc-layout-divider,
+    .vc-layout-divider-right,
+    .vc-layout-divider-hidden,
+    .vc-layout-divider-right-hidden,
+    .vc-split-divider {
+      display: none;
+    }
   }
 </style>

@@ -11,13 +11,19 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tick } from "svelte";
-import { writable } from "svelte/store";
 
 // ---- viewportStore mock ----------------------------------------------------
-// A writable so tests can flip the mode mid-render.
-const viewportWritable = writable<{ mode: "mobile" | "desktop" | "tablet"; isCoarsePointer: boolean }>({
-  mode: "mobile",
-  isCoarsePointer: true,
+// A writable so tests can flip the mode mid-render. The `await` form of
+// `vi.hoisted` lets us pull `writable` from svelte/store before any test-file
+// imports run — `vi.mock` factories are hoisted to the very top.
+const { viewportWritable } = await vi.hoisted(async () => {
+  const { writable } = await import("svelte/store");
+  return {
+    viewportWritable: writable<{ mode: "mobile" | "desktop" | "tablet"; isCoarsePointer: boolean }>({
+      mode: "mobile",
+      isCoarsePointer: true,
+    }),
+  };
 });
 vi.mock("../../../store/viewportStore", () => ({
   viewportStore: viewportWritable,
