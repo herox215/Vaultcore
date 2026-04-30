@@ -26,7 +26,6 @@
     createFolder,
     deleteFile,
     moveFile,
-    updateLinksAfterRename,
     getBacklinks,
     writeFile,
     exportDecryptedFile,
@@ -39,7 +38,6 @@
   import InlineRename from "./InlineRename.svelte";
   import ContextMenu from "../common/ContextMenu.svelte";
   import { vaultStore } from "../../store/vaultStore";
-  import { tabReloadStore } from "../../store/tabReloadStore";
   import { tabStore } from "../../store/tabStore";
   import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import { bookmarksStore } from "../../store/bookmarksStore";
@@ -50,6 +48,7 @@
   import { disarmAutoLock } from "../../store/autoLockStore";
   import { lockFolder } from "../../ipc/commands";
   import type { FlatRow } from "../../lib/flattenTree";
+  import type { RenameCascadeRequest, MoveCascadeRequest } from "../../types/sidebar";
 
   interface Props {
     row: FlatRow;
@@ -72,6 +71,19 @@
     onPathChanged: (oldPath: string, newPath: string) => void;
     /** Called when the user opens/closes inline rename on this row. */
     onRenameStateChange?: (path: string, renaming: boolean) => void;
+    /**
+     * Hand a rename-with-backlinks request up to Sidebar (#378). The cascade
+     * dialog state lives on Sidebar so it survives the watcher-driven tree
+     * re-flatten that destroys this row's component instance the moment the
+     * disk rename lands.
+     */
+    onRequestRenameCascade: (req: RenameCascadeRequest) => void;
+    /**
+     * Hand a move-with-backlinks request up to Sidebar (#378). Same lifetime
+     * problem as rename — the source row dies on drop when the watcher
+     * fires the synthetic delete+add for the moved file.
+     */
+    onRequestMoveCascade: (req: MoveCascadeRequest) => void;
   }
 
   let {
@@ -84,6 +96,8 @@
     onRefreshFolder,
     onPathChanged,
     onRenameStateChange,
+    onRequestRenameCascade,
+    onRequestMoveCascade,
   }: Props = $props();
 
   // Reactive — the Sidebar recomputes row objects on every flatten, so Svelte
@@ -101,21 +115,6 @@
   let showContextMenu = $state(false);
   let menuPos = $state<{ x: number; y: number }>({ x: 0, y: 0 });
   let showDeleteConfirm = $state(false);
-  let pendingRename = $state<{
-    newPath: string;
-    oldRelPath: string;
-    newRelPath: string;
-    linkCount: number;
-    fileCount: number;
-  } | null>(null);
-  let pendingMove = $state<{
-    sourcePath: string;
-    targetDirPath: string;
-    sourceRelPath: string;
-    newRelPath: string;
-    linkCount: number;
-    fileCount: number;
-  } | null>(null);
 
   let isDragSource = $state(false);
   let isDragTarget = $state(false);
@@ -230,7 +229,14 @@
     await bookmarksStore.toggle(rel, vault);
   }
 
-  async function handleRenameConfirm(newPath: string, linkCount: number) {
+  function handleRenameConfirm(newPath: string, linkCount: number) {
+    // #378: this function MUST stay synchronous after the IPC await resolves
+    // in InlineRename. The watcher fires a synthetic rename event that
+    // re-flattens the tree and destroys this TreeRow under the old path.
+    // Any `await` between here and the cascade-request callback would cross
+    // the unmount and lose the reference. The callback itself is a closure
+    // captured at component construction — calling it from a destroyed
+    // component is fine because Sidebar (the receiver) is always mounted.
     setRenaming(false);
     const vault = getVaultRoot();
     const oldRelPath = vault ? toRelPath(row.path, vault) : row.path;
@@ -239,14 +245,13 @@
       void bookmarksStore.renamePath(oldRelPath, newRelPath, vault);
     }
     if (linkCount > 0) {
-      let fileCount = 1;
-      try {
-        const backlinks = await getBacklinks(oldRelPath);
-        fileCount = new Set(backlinks.map((b) => b.sourcePath)).size || 1;
-      } catch {
-        /* fallback to 1 */
-      }
-      pendingRename = { newPath, oldRelPath, newRelPath, linkCount, fileCount };
+      onRequestRenameCascade({
+        oldPath: row.path,
+        newPath,
+        oldRelPath,
+        newRelPath,
+        linkCount,
+      });
     } else {
       onPathChanged(row.path, newPath);
       resolvedLinksStore.requestReload();
@@ -255,36 +260,6 @@
 
   function handleRenameCancel() {
     setRenaming(false);
-  }
-
-  async function confirmRenameWithLinks() {
-    if (!pendingRename) return;
-    const { newPath, oldRelPath, newRelPath } = pendingRename;
-    pendingRename = null;
-    onPathChanged(row.path, newPath);
-    resolvedLinksStore.requestReload();
-    try {
-      const result = await updateLinksAfterRename(oldRelPath, newRelPath);
-      if (result.updatedPaths.length > 0) {
-        tabReloadStore.request(result.updatedPaths);
-      }
-      if (result.failedFiles.length > 0) {
-        const total = result.updatedLinks + result.failedFiles.length;
-        toastStore.push({
-          variant: "error",
-          message: `${result.updatedLinks} von ${total} Links aktualisiert. ${result.failedFiles.length} Dateien konnten nicht geändert werden.`,
-        });
-      }
-    } catch {
-      toastStore.push({
-        variant: "error",
-        message: "Links konnten nicht aktualisiert werden.",
-      });
-    }
-  }
-
-  function cancelRenameWithLinks() {
-    pendingRename = null;
   }
 
   function openDeleteConfirm() {
@@ -444,14 +419,14 @@
     }
 
     if (linkCount > 0) {
-      pendingMove = {
+      onRequestMoveCascade({
         sourcePath,
         targetDirPath: row.path,
         sourceRelPath,
         newRelPath,
         linkCount,
         fileCount,
-      };
+      });
       return;
     }
 
@@ -470,40 +445,6 @@
     }
   }
 
-  async function confirmMoveWithLinks() {
-    if (!pendingMove) return;
-    const { sourcePath, targetDirPath, sourceRelPath, newRelPath } = pendingMove;
-    pendingMove = null;
-    try {
-      await moveFile(sourcePath, targetDirPath);
-      const vaultForBookmarks = getVaultRoot();
-      if (vaultForBookmarks) {
-        void bookmarksStore.renamePath(sourceRelPath, newRelPath, vaultForBookmarks);
-      }
-      await onRefreshFolder(targetDirPath);
-      const parent = parentOf(sourcePath);
-      if (parent) await onRefreshFolder(parent);
-      resolvedLinksStore.requestReload();
-      const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
-      if (result.updatedPaths.length > 0) {
-        tabReloadStore.request(result.updatedPaths);
-      }
-      if (result.failedFiles.length > 0) {
-        const total = result.updatedLinks + result.failedFiles.length;
-        toastStore.push({
-          variant: "error",
-          message: `${result.updatedLinks} von ${total} Links aktualisiert. ${result.failedFiles.length} Dateien konnten nicht geändert werden.`,
-        });
-      }
-    } catch (err) {
-      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
-      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
-    }
-  }
-
-  function cancelMoveWithLinks() {
-    pendingMove = null;
-  }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -687,43 +628,6 @@
     </div>
   {/if}
 
-  {#if pendingRename}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="vc-confirm-overlay vc-modal-scrim"
-      onclick={cancelRenameWithLinks}
-      role="presentation"
-    ></div>
-    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="rename-heading-{row.path}">
-      <h2 id="rename-heading-{row.path}" class="vc-confirm-heading">Links aktualisieren?</h2>
-      <p class="vc-confirm-body">
-        {pendingRename.linkCount} Links in {pendingRename.fileCount} Dateien werden aktualisiert. Fortfahren?
-      </p>
-      <div class="vc-confirm-actions">
-        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelRenameWithLinks}>Abbrechen</button>
-        <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmRenameWithLinks()}>Aktualisieren</button>
-      </div>
-    </div>
-  {/if}
-
-  {#if pendingMove}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="vc-confirm-overlay vc-modal-scrim"
-      onclick={cancelMoveWithLinks}
-      role="presentation"
-    ></div>
-    <div class="vc-confirm-dialog vc-modal-surface" role="dialog" aria-modal="true" aria-labelledby="move-heading-{row.path}">
-      <h2 id="move-heading-{row.path}" class="vc-confirm-heading">Links aktualisieren?</h2>
-      <p class="vc-confirm-body">
-        {pendingMove.linkCount} Links in {pendingMove.fileCount} Dateien werden aktualisiert. Fortfahren?
-      </p>
-      <div class="vc-confirm-actions">
-        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelMoveWithLinks}>Abbrechen</button>
-        <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmMoveWithLinks()}>Aktualisieren</button>
-      </div>
-    </div>
-  {/if}
 </li>
 
 <style>
@@ -937,17 +841,5 @@
 
   .vc-confirm-btn--danger:hover {
     opacity: 0.9;
-  }
-
-  .vc-confirm-btn--accent {
-    min-width: 80px;
-    padding: 4px 8px;
-    border: 1px solid var(--color-accent);
-    color: var(--color-accent);
-    background: transparent;
-  }
-
-  .vc-confirm-btn--accent:hover {
-    background: var(--color-accent-bg);
   }
 </style>

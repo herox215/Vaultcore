@@ -1,7 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
   import { FilePlus, FolderPlus, Network, ChevronDown, FileText, LayoutDashboard, BookOpen } from "lucide-svelte";
-  import { listDirectory, createFile, createFolder, writeFile } from "../../ipc/commands";
+  import {
+    listDirectory,
+    createFile,
+    createFolder,
+    writeFile,
+    getBacklinks,
+    moveFile,
+    updateLinksAfterRename,
+  } from "../../ipc/commands";
   import { serializeCanvas, emptyCanvas } from "../../lib/canvas/parse";
   import { commandRegistry } from "../../lib/commands/registry";
   import { CMD_IDS } from "../../lib/commands/defaultCommands";
@@ -26,6 +34,14 @@
   } from "../../ipc/events";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { tabStore } from "../../store/tabStore";
+  import { tabReloadStore } from "../../store/tabReloadStore";
+  import { resolvedLinksStore } from "../../store/resolvedLinksStore";
+  import type {
+    RenameCascadeRequest,
+    MoveCascadeRequest,
+    PendingRename,
+    PendingMove,
+  } from "../../types/sidebar";
   import { openHomeCanvas } from "../../lib/homeCanvas";
   import { openDocsPage } from "../../lib/docsPage";
   import { searchStore } from "../../store/searchStore";
@@ -106,6 +122,12 @@
   // The row currently inline-renaming. We always keep it inside the window so
   // the InlineRename input never recycles out.
   let renamingPath = $state<string | null>(null);
+
+  // #378 — cascade-confirm dialog state. Owned by Sidebar so it survives the
+  // watcher-driven re-flatten that destroys the source TreeRow during rename
+  // or move. Per-row ownership was the original defect.
+  let pendingRename = $state<PendingRename | null>(null);
+  let pendingMove = $state<PendingMove | null>(null);
 
   const startIdx = $derived.by(() => {
     const first = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
@@ -519,6 +541,96 @@
     else void loadRoot();
   }
 
+  // #378 — cascade-request handlers from TreeRow. The row hands the request
+  // up the moment the IPC await resolves (synchronously, no further await),
+  // so the closure capture cannot race the row's unmount. Sidebar then runs
+  // any post-IPC work (getBacklinks for fileCount, dialog rendering,
+  // updateLinksAfterRename on confirm) on its own always-mounted lifetime.
+  async function handleRequestRenameCascade(req: RenameCascadeRequest) {
+    // Modal precedence: ignore overlapping cascade requests. Only one dialog
+    // open at a time. The user can re-trigger the suppressed action after
+    // resolving the first dialog.
+    if (pendingRename || pendingMove) return;
+    let fileCount = 1;
+    try {
+      const backlinks = await getBacklinks(req.oldRelPath);
+      fileCount = new Set(backlinks.map((b) => b.sourcePath)).size || 1;
+    } catch {
+      /* fall back to the linkCount/1 default */
+    }
+    pendingRename = { ...req, fileCount };
+  }
+
+  function handleRequestMoveCascade(req: MoveCascadeRequest) {
+    if (pendingRename || pendingMove) return;
+    pendingMove = req;
+  }
+
+  async function confirmRenameWithLinks() {
+    if (!pendingRename) return;
+    const { oldPath, newPath, oldRelPath, newRelPath } = pendingRename;
+    pendingRename = null;
+    handlePathChanged(oldPath, newPath);
+    resolvedLinksStore.requestReload();
+    try {
+      const result = await updateLinksAfterRename(oldRelPath, newRelPath);
+      if (result.updatedPaths.length > 0) {
+        tabReloadStore.request(result.updatedPaths);
+      }
+      if (result.failedFiles.length > 0) {
+        const total = result.updatedLinks + result.failedFiles.length;
+        toastStore.push({
+          variant: "error",
+          message: `${result.updatedLinks} von ${total} Links aktualisiert. ${result.failedFiles.length} Dateien konnten nicht geändert werden.`,
+        });
+      }
+    } catch {
+      toastStore.push({
+        variant: "error",
+        message: "Links konnten nicht aktualisiert werden.",
+      });
+    }
+  }
+
+  function cancelRenameWithLinks() {
+    pendingRename = null;
+  }
+
+  async function confirmMoveWithLinks() {
+    if (!pendingMove) return;
+    const { sourcePath, targetDirPath, sourceRelPath, newRelPath } = pendingMove;
+    pendingMove = null;
+    try {
+      await moveFile(sourcePath, targetDirPath);
+      const vaultForBookmarks = $vaultStore.currentPath;
+      if (vaultForBookmarks) {
+        void bookmarksStore.renamePath(sourceRelPath, newRelPath, vaultForBookmarks);
+      }
+      await refreshFolder(targetDirPath);
+      const parent = parentOf(sourcePath);
+      if (parent) await refreshFolder(parent);
+      resolvedLinksStore.requestReload();
+      const result = await updateLinksAfterRename(sourceRelPath, newRelPath);
+      if (result.updatedPaths.length > 0) {
+        tabReloadStore.request(result.updatedPaths);
+      }
+      if (result.failedFiles.length > 0) {
+        const total = result.updatedLinks + result.failedFiles.length;
+        toastStore.push({
+          variant: "error",
+          message: `${result.updatedLinks} von ${total} Links aktualisiert. ${result.failedFiles.length} Dateien konnten nicht geändert werden.`,
+        });
+      }
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
+  }
+
+  function cancelMoveWithLinks() {
+    pendingMove = null;
+  }
+
   function parentOf(absPath: string): string | null {
     const i = absPath.lastIndexOf("/");
     if (i <= 0) return null;
@@ -747,15 +859,136 @@
             onRefreshFolder={refreshFolder}
             onPathChanged={handlePathChanged}
             {onRenameStateChange}
+            onRequestRenameCascade={handleRequestRenameCascade}
+            onRequestMoveCascade={handleRequestMoveCascade}
           />
         {/each}
       </ul>
     {/if}
   </div>
+
+  {#if pendingRename}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="vc-confirm-overlay vc-modal-scrim"
+      onclick={cancelRenameWithLinks}
+      role="presentation"
+    ></div>
+    <div
+      class="vc-confirm-dialog vc-modal-surface"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="rename-heading"
+    >
+      <h2 id="rename-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
+      <p class="vc-confirm-body">
+        {pendingRename.linkCount} Links in {pendingRename.fileCount} Dateien werden aktualisiert. Fortfahren?
+      </p>
+      <div class="vc-confirm-actions">
+        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelRenameWithLinks}>Abbrechen</button>
+        <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmRenameWithLinks()}>Aktualisieren</button>
+      </div>
+    </div>
+  {/if}
+
+  {#if pendingMove}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="vc-confirm-overlay vc-modal-scrim"
+      onclick={cancelMoveWithLinks}
+      role="presentation"
+    ></div>
+    <div
+      class="vc-confirm-dialog vc-modal-surface"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="move-heading"
+    >
+      <h2 id="move-heading" class="vc-confirm-heading">Links aktualisieren?</h2>
+      <p class="vc-confirm-body">
+        {pendingMove.linkCount} Links in {pendingMove.fileCount} Dateien werden aktualisiert. Fortfahren?
+      </p>
+      <div class="vc-confirm-actions">
+        <button class="vc-confirm-btn vc-confirm-btn--cancel" onclick={cancelMoveWithLinks}>Abbrechen</button>
+        <button class="vc-confirm-btn vc-confirm-btn--accent" onclick={() => void confirmMoveWithLinks()}>Aktualisieren</button>
+      </div>
+    </div>
+  {/if}
   {/if}
 </aside>
 
 <style>
+  /* #378 — cascade-confirm dialog styles. Lifted from TreeRow alongside the
+     pendingRename / pendingMove state so the dialog's CSS scope follows its
+     owning component. TreeRow keeps the same selectors for its delete-confirm
+     dialog — Svelte's scoped-style hashing keeps the two copies isolated. */
+  .vc-confirm-overlay {
+    z-index: 199;
+  }
+
+  .vc-confirm-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 200;
+    width: 280px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+    padding: 16px;
+  }
+
+  .vc-confirm-heading {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+    color: var(--color-text);
+  }
+
+  .vc-confirm-body {
+    font-size: 14px;
+    color: var(--color-text);
+    margin: 0 0 16px 0;
+    line-height: 1.5;
+  }
+
+  .vc-confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .vc-confirm-btn {
+    padding: 6px 14px;
+    font-size: 14px;
+    border-radius: 4px;
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .vc-confirm-btn:hover {
+    background: var(--color-accent-bg);
+  }
+
+  .vc-confirm-btn--cancel {
+    background: var(--color-surface);
+  }
+
+  .vc-confirm-btn--accent {
+    min-width: 80px;
+    padding: 4px 8px;
+    border: 1px solid var(--color-accent);
+    color: var(--color-accent);
+    background: transparent;
+  }
+
+  .vc-confirm-btn--accent:hover {
+    background: var(--color-accent-bg);
+  }
+
   .vc-sidebar {
     display: flex;
     flex-direction: column;
