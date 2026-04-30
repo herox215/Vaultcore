@@ -122,6 +122,14 @@ html, body, #app {
   background: var(--color-modal-scrim);
 }
 
+/* #386 — mobile drawer scrim. Stacks BELOW all real modals (≥199) so an
+   open OmniSearch / CommandPalette / Settings always covers the drawer.
+   Lives in the global sheet because component-scoped Svelte styles can't
+   reach this utility class. */
+.vc-mobile-scrim {
+  z-index: 49;
+}
+
 .vc-modal-surface {
   background: var(--color-modal-surface);
   backdrop-filter: blur(var(--modal-blur-radius)) saturate(140%);
