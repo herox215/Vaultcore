@@ -5,7 +5,6 @@
 //      component calling `invoke` directly with an arbitrary path (T-02-01).
 
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { VaultError } from "../types/errors";
 import { isVaultError } from "../types/errors";
 import type { VaultInfo, VaultStats, RecentVault } from "../types/vault";
@@ -35,16 +34,20 @@ function normalizeError(err: unknown): VaultError {
   };
 }
 
-/** VAULT-01: native folder dialog. Returns `null` when the user cancels. */
+/**
+ * VAULT-01: native folder dialog. Returns `null` when the user cancels.
+ *
+ * Routes through the Rust `pick_vault_folder` command (#391) so the same
+ * frontend code path works on macOS / Windows / Linux (NSOpenPanel / GTK
+ * file chooser via `tauri-plugin-dialog`) and Android (Storage Access
+ * Framework `ACTION_OPEN_DOCUMENT_TREE`, returning a `content://` URI).
+ *
+ * The returned string is treated as an opaque vault handle by callers —
+ * desktop sees a POSIX path, Android sees a content URI. The Rust file
+ * layer (#392) consumes either form.
+ */
 export async function pickVaultFolder(): Promise<string | null> {
-  const picked = await openDialog({
-    directory: true,
-    multiple: false,
-    title: "Open vault",
-  });
-  if (picked === null) return null;
-  if (Array.isArray(picked)) return picked[0] ?? null;
-  return picked;
+  return await invoke<string | null>("pick_vault_folder");
 }
 
 export async function openVault(path: string): Promise<VaultInfo> {
@@ -565,15 +568,21 @@ export async function readTemplate(vaultPath: string, filename: string): Promise
 // ── HTML export (#61) ─────────────────────────────────────────────────────────
 
 /**
- * Native save-as dialog. Returns the user-chosen absolute path, or `null` when
- * the dialog is cancelled. `defaultPath` suggests the starting filename.
+ * Native save-as dialog. Returns the user-chosen absolute path, or `null`
+ * when the dialog is cancelled. `defaultName` is the suggested filename.
+ *
+ * Routes through the Rust `pick_save_path` command (#391). Desktop uses
+ * `tauri-plugin-dialog`'s `save_file` (NSSavePanel / GTK FileChooser) and
+ * applies the filter list as extension hints. Android uses the Storage
+ * Access Framework `ACTION_CREATE_DOCUMENT` intent with a hardcoded
+ * `application/octet-stream` MIME — filters are dropped on Android since
+ * SAF accepts only one MIME type per intent.
  */
 export async function pickSavePath(
-  defaultPath: string,
+  defaultName: string,
   filters: { name: string; extensions: string[] }[] = [],
 ): Promise<string | null> {
-  const picked = await saveDialog({ defaultPath, filters });
-  return picked ?? null;
+  return await invoke<string | null>("pick_save_path", { defaultName, filters });
 }
 
 /**
