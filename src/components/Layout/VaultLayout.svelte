@@ -302,8 +302,9 @@
     unsubTab();
     unsubBacklinksTab?.();
     unsubActiveTabReveal?.();
-    document.removeEventListener("mousemove", handleMousemove);
-    document.removeEventListener("mouseup", handleMouseup);
+    // mousemove/mouseup are torn down by the onMount return above; calling
+    // removeEventListener again here is a no-op (handler refs match) but
+    // misleads readers into thinking the listeners are owned by both hooks.
     // #345: tear down timers + activity listeners + visibility
     // listener so a subsequent mount starts clean (vault switch,
     // HMR, etc.).
