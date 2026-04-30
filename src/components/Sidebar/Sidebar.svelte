@@ -54,6 +54,7 @@
   import TagsPanel from "../Tags/TagsPanel.svelte";
   import BookmarksPanel from "../Bookmarks/BookmarksPanel.svelte";
   import { bookmarksStore } from "../../store/bookmarksStore";
+  import { longPress, type LongPressDetail } from "../../lib/actions/longPress";
   import {
     flattenTree,
     ancestorRelPaths,
@@ -709,19 +710,45 @@
   }
 
   // ─── Header actions ────────────────────────────────────────────────────────
-  async function handleNewFile() {
+  // Optional `targetFolder` lets the empty-tree-area long-press (#387) skip
+  // the selection-based fallback and create the note directly under the
+  // vault root. Type-guarded so the existing `onclick={handleNewFile}` wiring
+  // — which passes the MouseEvent as the first arg — keeps treating it as
+  // "no target", same as before.
+  async function handleNewFile(targetFolder?: string | unknown) {
     newMenuOpen = false;
     const vaultPath = $vaultStore.currentPath;
     if (!vaultPath) return;
-    const targetFolder = getSelectedFolder() ?? vaultPath;
+    const explicit = typeof targetFolder === "string" ? targetFolder : undefined;
+    const folder = explicit ?? getSelectedFolder() ?? vaultPath;
     try {
-      await createFile(targetFolder, "");
-      if (targetFolder === vaultPath) await loadRoot();
-      else await refreshFolder(targetFolder);
+      await createFile(folder, "");
+      if (folder === vaultPath) await loadRoot();
+      else await refreshFolder(folder);
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
+  }
+
+  // Empty-tree-area long-press → vault-root "New note here" menu (#387).
+  let emptyMenuOpen = $state(false);
+  let emptyMenuPos = $state<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  function onTreeLongPress(d: LongPressDetail) {
+    emptyMenuPos = { x: d.clientX, y: d.clientY };
+    emptyMenuOpen = true;
+  }
+
+  async function handleEmptyAreaNewNote() {
+    emptyMenuOpen = false;
+    const vaultPath = $vaultStore.currentPath;
+    if (!vaultPath) return;
+    await handleNewFile(vaultPath);
+  }
+
+  function closeEmptyMenu() {
+    emptyMenuOpen = false;
   }
 
   async function handleNewCanvas() {
@@ -906,6 +933,7 @@
     aria-label="Vault file tree"
     bind:this={scrollerEl}
     onscroll={onScroll}
+    use:longPress={{ onLongPress: onTreeLongPress, strict: true }}
   >
     {#if loading}
       <p class="vc-sidebar-status">Loading...</p>
@@ -985,6 +1013,29 @@
       </div>
     </div>
   {/if}
+
+  <!-- #387 empty-tree-area long-press menu. Stays mounted for the
+       Files tab; absent in the Tags tab. -->
+  {#if emptyMenuOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="vc-sidebar-empty-overlay"
+      onclick={closeEmptyMenu}
+      role="presentation"
+    ></div>
+    <div
+      class="vc-sidebar-empty-menu"
+      role="menu"
+      style="top: {emptyMenuPos.y}px; left: {emptyMenuPos.x}px"
+    >
+      <button
+        type="button"
+        class="vc-sidebar-empty-menu-item"
+        role="menuitem"
+        onclick={() => void handleEmptyAreaNewNote()}
+      >New note here</button>
+    </div>
+  {/if}
   {/if}
 </aside>
 
@@ -995,6 +1046,39 @@
      dialog — Svelte's scoped-style hashing keeps the two copies isolated. */
   .vc-confirm-overlay {
     z-index: 199;
+  }
+
+  /* #387 empty-tree-area long-press menu — same visual language as the
+     row context menu so the affordance feels consistent across surfaces. */
+  .vc-sidebar-empty-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 399;
+  }
+  .vc-sidebar-empty-menu {
+    position: fixed;
+    z-index: 400;
+    min-width: 160px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+    padding: 4px 0;
+  }
+  .vc-sidebar-empty-menu-item {
+    display: block;
+    width: 100%;
+    padding: 6px 12px;
+    font-size: 13px;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text);
+    min-height: var(--vc-hit-target, auto);
+  }
+  .vc-sidebar-empty-menu-item:hover {
+    background: var(--color-accent-bg);
   }
 
   .vc-confirm-dialog {

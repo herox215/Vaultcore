@@ -21,6 +21,7 @@
     Lock,
     LockOpen,
   } from "lucide-svelte";
+  import { get } from "svelte/store";
   import {
     createFile,
     createFolder,
@@ -35,6 +36,7 @@
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
   import InlineRename from "./InlineRename.svelte";
   import ContextMenu from "../common/ContextMenu.svelte";
+  import { longPress, type LongPressDetail } from "../../lib/actions/longPress";
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore } from "../../store/tabStore";
   import { resolvedLinksStore } from "../../store/resolvedLinksStore";
@@ -119,15 +121,6 @@
   let isDragSource = $state(false);
   let isDragTarget = $state(false);
 
-  function getVaultRoot(): string | null {
-    let v: string | null = null;
-    const u = vaultStore.subscribe((s) => {
-      v = s.currentPath;
-    });
-    u();
-    return v;
-  }
-
   function toRelPath(absPath: string, vaultRoot: string): string {
     return absPath.startsWith(vaultRoot + "/")
       ? absPath.slice(vaultRoot.length + 1)
@@ -166,7 +159,7 @@
       //      a second click to re-open it.
       if (isLocked) {
         openUnlockModal(row.path, row.name, async () => {
-          const parent = parentOf(row.path) ?? getVaultRoot();
+          const parent = parentOf(row.path) ?? get(vaultStore).currentPath;
           if (parent) await onRefreshFolder(parent);
           await onEnsureExpanded(row);
         });
@@ -223,7 +216,7 @@
 
   async function toggleBookmark() {
     closeContextMenu();
-    const vault = getVaultRoot();
+    const vault = get(vaultStore).currentPath;
     if (!vault || row.isDir) return;
     const rel = toRelPath(row.path, vault);
     await bookmarksStore.toggle(rel, vault);
@@ -238,7 +231,7 @@
     // captured at component construction — calling it from a destroyed
     // component is fine because Sidebar (the receiver) is always mounted.
     setRenaming(false);
-    const vault = getVaultRoot();
+    const vault = get(vaultStore).currentPath;
     const oldRelPath = vault ? toRelPath(row.path, vault) : row.path;
     const newRelPath = vault ? toRelPath(newPath, vault) : newPath;
     if (vault) {
@@ -271,12 +264,8 @@
     showDeleteConfirm = false;
     try {
       await deleteFile(row.path);
-      // Refresh the containing folder so the flat list updates.
-      const vault = getVaultRoot();
-      const parentDir = vault && row.path.startsWith(vault + "/")
-        ? parentOf(row.path)
-        : parentOf(row.path);
-      await onRefreshFolder(parentDir ?? vault ?? "");
+      const vault = get(vaultStore).currentPath;
+      await onRefreshFolder(parentOf(row.path) ?? vault ?? "");
     } catch (e) {
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
@@ -298,7 +287,7 @@
     return absPath.slice(0, lastSep);
   }
 
-  async function handleNewFileHere() {
+  async function handleNewNoteHere() {
     closeContextMenu();
     try {
       const newPath = await createFile(row.path, "");
@@ -309,6 +298,11 @@
       const ve = isVaultError(e) ? e : { kind: "Io" as const, message: String(e), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
+  }
+
+  function onLongPress(d: LongPressDetail) {
+    menuPos = { x: d.clientX, y: d.clientY };
+    showContextMenu = true;
   }
 
   async function handleNewCanvasHere() {
@@ -434,6 +428,7 @@
     style="padding-left: calc({row.depth} * 16px + 8px)"
     onclick={handleClick}
     oncontextmenu={handleRowContextMenu}
+    use:longPress={{ onLongPress }}
     role="button"
     tabindex="-1"
     title={row.path}
@@ -532,7 +527,7 @@
     {/if}
     <button class="vc-context-item vc-context-item--danger" onclick={openDeleteConfirm}>Move to Trash</button>
     {#if row.isDir}
-      <button class="vc-context-item" onclick={handleNewFileHere}>New file here</button>
+      <button class="vc-context-item" onclick={handleNewNoteHere}>New note here</button>
       <button class="vc-context-item" onclick={handleNewCanvasHere}>New canvas here</button>
       <button class="vc-context-item" onclick={handleNewFolderHere}>New folder here</button>
       <!-- #345: encryption actions. Three mutually-exclusive states. -->
