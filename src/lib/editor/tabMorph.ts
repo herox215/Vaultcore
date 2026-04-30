@@ -10,11 +10,11 @@
 
 import type { EditorView } from "@codemirror/view";
 
-/** Hard cut at 120ms — see issue #380 spec. Overridable via the
+/** Hard cut at the morph duration. Overridable via the
  *  `--vc-tab-switch-duration` CSS custom property (read at trigger time
- *  by `resolveMorphDuration`); this constant is the spec default and the
+ *  by `resolveMorphDuration`); this constant is the default and the
  *  fallback used by tests / non-DOM callers. */
-export const MORPH_DURATION_MS = 120;
+export const MORPH_DURATION_MS = 240;
 
 /**
  * Resolve the morph duration from `--vc-tab-switch-duration` on the document
@@ -40,9 +40,11 @@ export function resolveMorphDuration(): number {
 /**
  * If a second qualifying switch arrives within this window of the previous
  * one, skip animation and swap instantly. The window guards against
- * Cmd+Shift+] cycling through many tabs in rapid succession.
+ * Cmd+Shift+] cycling through many tabs in rapid succession. Sized just
+ * above the morph duration so a chord cycling faster than one morph per
+ * tab always falls through to the instant path.
  */
-export const MORPH_SUPPRESSION_MS = 200;
+export const MORPH_SUPPRESSION_MS = 320;
 
 /** A single character at a known viewport pixel position. */
 export interface GlyphRef {

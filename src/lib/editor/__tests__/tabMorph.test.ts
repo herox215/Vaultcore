@@ -91,8 +91,8 @@ describe("buildSchedule", () => {
     let i = 0;
     const sched = buildSchedule(a, b, () => calls[i++]!);
     expect(sched[0]!.lockInMs).toBe(0);
-    expect(sched[1]!.lockInMs).toBe(60);
-    expect(sched[2]!.lockInMs).toBe(119);
+    expect(sched[1]!.lockInMs).toBe(Math.floor(0.5 * MORPH_DURATION_MS));
+    expect(sched[2]!.lockInMs).toBe(Math.floor(0.999 * MORPH_DURATION_MS));
   });
 
   it("falls back to outgoing position when incoming has no glyph at that slot", () => {
