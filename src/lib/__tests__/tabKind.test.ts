@@ -2,9 +2,22 @@
 // authoritative dispatcher for "what viewer should this file open in?",
 // so these tests pin down extension casing, dotfiles, and the unknown-ext
 // fallback to "text" (caller is then responsible for the UTF-8 probe).
+//
+// #388 added the pure `tabSupportsReading` predicate to this module.
+// `defaultViewModeForViewport` lives in `lib/viewport.ts` (its own test
+// file) so this module stays free of the `viewportStore` matchMedia
+// listener — every importer of `getExtension`/`getTabKind` would otherwise
+// transitively grab those listeners.
 
 import { describe, it, expect } from "vitest";
-import { getExtension, getTabKind, IMAGE_EXTS, TEXT_EXTS } from "../tabKind";
+import {
+  getExtension,
+  getTabKind,
+  IMAGE_EXTS,
+  TEXT_EXTS,
+  tabSupportsReading,
+} from "../tabKind";
+import type { Tab } from "../../store/tabStoreCore";
 
 describe("getExtension", () => {
   it("returns the extension lowercased", () => {
@@ -81,3 +94,56 @@ describe("getTabKind", () => {
     expect(getTabKind("binary.bin")).not.toBe("unsupported");
   });
 });
+
+// ── #388: tabSupportsReading ────────────────────────────────────────────────
+
+function makeTab(over: Partial<Tab> = {}): Tab {
+  return {
+    id: "t1",
+    filePath: "/v/note.md",
+    isDirty: false,
+    scrollPos: 0,
+    cursorPos: 0,
+    lastSaved: 0,
+    lastSavedContent: "",
+    ...over,
+  };
+}
+
+describe("tabSupportsReading (#388)", () => {
+  it("returns false for graph tabs", () => {
+    expect(tabSupportsReading(makeTab({ type: "graph" }))).toBe(false);
+  });
+
+  it("returns false for image viewer", () => {
+    expect(tabSupportsReading(makeTab({ viewer: "image" }))).toBe(false);
+  });
+
+  it("returns false for unsupported viewer", () => {
+    expect(tabSupportsReading(makeTab({ viewer: "unsupported" }))).toBe(false);
+  });
+
+  it("returns false for text viewer", () => {
+    // A `.json` / `.txt` tab opens read-only via CM6 but has no Reading Mode
+    // path — the renderer is markdown-specific.
+    expect(tabSupportsReading(makeTab({ viewer: "text" }))).toBe(false);
+  });
+
+  it("returns false for canvas viewer", () => {
+    // Canvas tabs render their own surface; ReadingView would have nothing
+    // to render. Pre-existing bug at EditorPane.svelte:236 missed this case.
+    expect(tabSupportsReading(makeTab({ viewer: "canvas" }))).toBe(false);
+  });
+
+  it("returns true for explicit markdown viewer", () => {
+    expect(tabSupportsReading(makeTab({ viewer: "markdown" }))).toBe(true);
+  });
+
+  it("returns true when viewer is undefined (default markdown)", () => {
+    expect(tabSupportsReading(makeTab({}))).toBe(true);
+  });
+});
+
+// `defaultViewModeForViewport` tests live in `viewport.test.ts` next to
+// the source module. Keeps `tabKind.ts` and its test file free of the
+// `viewportStore` mock plumbing.

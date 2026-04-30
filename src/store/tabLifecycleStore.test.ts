@@ -489,4 +489,56 @@ describe("tabLifecycleStore", () => {
       expect(get(tabLifecycleStore).tabs.find((t) => t.id === id)?.readingScrollPos).toBe(420);
     });
   });
+
+  // #388 — optional `viewMode` hint on the openers so UI-boundary callers
+  // can opt new tabs into Reading Mode (mobile default) without the store
+  // itself reading viewportStore. Hint applies on tab CREATION only;
+  // existing-tab dedupe preserves the user's last explicit mode.
+  describe("Issue #388: viewMode hint on openTab / openFileTab", () => {
+    it("openTab with no second arg leaves viewMode undefined (no behavior change)", () => {
+      const id = tabLifecycleStore.openTab("/vault/a.md");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBeUndefined();
+    });
+
+    it("openTab with viewMode='read' sets the new tab to Reading Mode", () => {
+      const id = tabLifecycleStore.openTab("/vault/a.md", "read");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBe("read");
+    });
+
+    it("openTab with viewMode='edit' writes the field explicitly", () => {
+      const id = tabLifecycleStore.openTab("/vault/a.md", "edit");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBe("edit");
+    });
+
+    it("openFileTab with viewMode='read' sets the new tab to Reading Mode", () => {
+      const id = tabLifecycleStore.openFileTab("/vault/a.md", "markdown", "read");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBe("read");
+    });
+
+    it("openFileTab passes viewMode through verbatim — store does not filter by viewer kind", () => {
+      // The store is environment-agnostic and viewer-agnostic. It writes the
+      // hint as given. Filtering is the caller's responsibility (openFileAsTab
+      // never passes the hint for image / canvas / text viewers).
+      const id = tabLifecycleStore.openFileTab("/vault/img.png", "image", "read");
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id);
+      expect(tab?.viewMode).toBe("read");
+    });
+
+    it("dedupe path preserves the existing tab's viewMode (hint ignored on re-open)", () => {
+      // VaultCore is desktop-only today (no roaming between platforms), so an
+      // existing tab's mode reflects the user's last explicit choice. Re-open
+      // hints from a different viewport must NOT clobber it. If multi-platform
+      // sync is added later, revisit this rule.
+      const id1 = tabLifecycleStore.openTab("/vault/a.md", "read");
+      tabLifecycleStore.setViewMode(id1, "edit");
+      const id2 = tabLifecycleStore.openTab("/vault/a.md", "read");
+      expect(id2).toBe(id1);
+      const tab = get(tabLifecycleStore).tabs.find((t) => t.id === id1);
+      expect(tab?.viewMode).toBe("edit");
+    });
+  });
 });

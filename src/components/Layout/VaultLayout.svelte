@@ -10,6 +10,8 @@
   import RightSidebar from "./RightSidebar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
+  import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
+  import { tabSupportsReading } from "../../lib/tabKind";
   import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
   import EncryptFolderModal from "../common/EncryptFolderModal.svelte";
   import {
@@ -540,14 +542,19 @@
     }
   }
 
-  /** Issue #63: toggle Reading vs Edit mode on the active markdown tab. */
+  /**
+   * Issue #63 / #388: toggle Reading vs Edit mode on the active markdown tab.
+   *
+   * Pre-#388: this guard inlined a check missing two viewer kinds (text +
+   * canvas). A `.json` tab or canvas tab pressing Cmd/Ctrl+E would receive
+   * `viewMode === "read"` despite having no Reading Mode path. The
+   * `tabSupportsReading` predicate is the single source of truth shared with
+   * `EditorPane.paneActiveTabSupportsReading` and the topbar toggle.
+   */
   function toggleActiveReadingMode() {
     const active = tabStore.getActiveTab();
     if (!active) return;
-    // Only markdown file tabs support reading mode — graph tabs and non-
-    // markdown viewers (image / unsupported / text-preview) stay as-is.
-    if (active.type === "graph") return;
-    if (active.viewer === "image" || active.viewer === "unsupported") return;
+    if (!tabSupportsReading(active)) return;
     tabStore.toggleViewMode(active.id);
   }
 
@@ -877,6 +884,14 @@
         </button>
       {/if}
       <div class="vc-editor-topbar-spacer"></div>
+      <!-- #388: mobile-only Reading Mode toggle. Self-hides on
+           desktop/tablet and on tab kinds without a Reading Mode path
+           (graph / image / unsupported / text / canvas). On mobile the
+           backlinks button is hidden (see #386 `{#if !isMobile}` gate
+           below), so the pencil and the backlinks button never co-render
+           — the topbar's right cluster is exactly one of them at any
+           given viewport. -->
+      <TopbarReadingToggle />
       {#if !isMobile}
         <button
           class="vc-sidebar-toggle-btn vc-backlinks-toggle-btn"

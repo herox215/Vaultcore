@@ -7,6 +7,7 @@
   import { treeRefreshStore } from "../../store/treeRefreshStore";
   import { createFile } from "../../ipc/commands";
   import { resolveTarget } from "../Editor/wikiLink";
+  import { openFileAsTab } from "../../lib/openFileAsTab";
   import {
     extractOutgoingLinks,
     type OutgoingLink,
@@ -66,7 +67,9 @@
     if (!vault) return;
 
     if (entry.resolvedPath !== null) {
-      tabStore.openTab(`${vault}/${entry.resolvedPath}`);
+      // #388 — route through openFileAsTab so the dispatcher applies the
+      // viewport-aware viewMode default (mobile → read, desktop → edit).
+      void openFileAsTab(`${vault}/${entry.resolvedPath}`);
       return;
     }
 
@@ -78,7 +81,9 @@
       : `${entry.target}.md`;
     createFile(vault, filename)
       .then((newAbsPath) => {
-        tabStore.openTab(newAbsPath);
+        // #388 — NEW notes default to edit on every viewport (matching
+        // createNewNote / openTodayNote / Sidebar new-file convention).
+        tabStore.openTab(newAbsPath, "edit");
         // Trigger a sidebar tree reload so the newly-created file appears.
         // EditorPane's vaultStore/FILE_CHANGE subscribers will refresh the
         // wiki-link resolution map so the target resolves on subsequent

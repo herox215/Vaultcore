@@ -17,6 +17,8 @@
   import { activeViewStore } from "../../store/activeViewStore";
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAnchors, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { openFileAsTab } from "../../lib/openFileAsTab";
+  import { tabSupportsReading } from "../../lib/tabKind";
+  import { defaultViewModeForViewport } from "../../lib/viewport";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
   import { searchStore } from "../../store/searchStore";
@@ -242,12 +244,13 @@
   const paneActiveTab = $derived<Tab | null>(
     paneActiveTabId !== null ? paneTabs.find((t) => t.id === paneActiveTabId) ?? null : null,
   );
+  // #388 — `tabSupportsReading` is the single source of truth for "does
+  // this tab kind have a Reading Mode path?". The previous inline check
+  // here had drifted from `VaultLayout.toggleActiveReadingMode` (image +
+  // unsupported only) and was missing the `canvas` exclusion. The shared
+  // predicate fixes both bugs in one place.
   const paneActiveTabSupportsReading = $derived(
-    paneActiveTab !== null &&
-    paneActiveTab.type !== "graph" &&
-    paneActiveTab.viewer !== "image" &&
-    paneActiveTab.viewer !== "unsupported" &&
-    paneActiveTab.viewer !== "text",
+    paneActiveTab !== null && tabSupportsReading(paneActiveTab),
   );
 
   // #87: show ambient local-graph background in edit mode on markdown tabs.
@@ -403,7 +406,10 @@
         tabStore.openFileTab(absPath, "canvas");
         return;
       }
-      tabStore.openTab(absPath);
+      // #388 — pass viewport-aware viewMode so a wiki-link tap on mobile
+      // opens the target in read mode. Desktop returns "edit" (byte-identical
+      // to the no-arg call this replaces, since readers coalesce viewMode ?? "edit").
+      tabStore.openTab(absPath, defaultViewModeForViewport());
       if (detail.anchor) {
         // #62: prefer a fresh anchor lookup over the decoration-time
         // `resolution` so an anchor newly indexed between render and click
@@ -443,7 +449,10 @@
     const vaultPath = vault as string;
     createFile(vaultPath, filename)
       .then(async (newAbsPath) => {
-        tabStore.openTab(newAbsPath);
+        // #388 — NEW notes default to edit on every viewport. The user
+        // clicking an unresolved [[Foo]] is creating a note, matching
+        // the createNewNote / openTodayNote / Sidebar new-file convention.
+        tabStore.openTab(newAbsPath, "edit");
         await reloadResolvedLinks();
         treeRefreshStore.requestRefresh();
       })
