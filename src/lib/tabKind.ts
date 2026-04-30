@@ -1,6 +1,14 @@
 // Extension-based classifier used when opening a file path as a new tab (#49).
-// Pure helper — no IPC, no filesystem access. The caller is responsible for
-// subsequently loading the file content (or, for "unsupported", skipping it).
+// Pure helper — no IPC, no filesystem access, no store dependencies. The
+// caller is responsible for subsequently loading the file content (or, for
+// "unsupported", skipping it).
+//
+// Also hosts the pure `tabSupportsReading(tab)` predicate used by every
+// site that needs to know whether Reading Mode applies. The viewport-aware
+// `defaultViewModeForViewport()` lives in `lib/viewport.ts` so importing
+// the classifier never drags `viewportStore`'s matchMedia listeners.
+
+import type { Tab } from "../store/tabStoreCore";
 
 /** Image extensions that render via `<img src={convertFileSrc(abs)} />`. */
 export const IMAGE_EXTS = new Set([
@@ -56,4 +64,26 @@ export function getTabKind(path: string): TabKind {
   // Unknown extension — caller should try UTF-8 read and fall back
   // to "unsupported" if decoding fails.
   return "text";
+}
+
+/**
+ * #388 — does this tab kind have a Reading Mode path?
+ *
+ * Reading Mode renders rendered Markdown via `ReadingView.svelte`. Tab kinds
+ * with their own dedicated surface (graph) or a non-markdown viewer
+ * (image / unsupported / text / canvas) have no ReadingView path and must
+ * never receive `viewMode === "read"`.
+ *
+ * Single source of truth: previously inlined in `EditorPane.svelte`'s
+ * `paneActiveTabSupportsReading` and `VaultLayout.toggleActiveReadingMode`,
+ * the two had drifted (canvas exclusion missing in EditorPane, both text
+ * and canvas missing in VaultLayout). Extracting here fixes both.
+ */
+export function tabSupportsReading(tab: Tab): boolean {
+  if (tab.type === "graph") return false;
+  if (tab.viewer === "image") return false;
+  if (tab.viewer === "unsupported") return false;
+  if (tab.viewer === "text") return false;
+  if (tab.viewer === "canvas") return false;
+  return true;
 }

@@ -49,7 +49,14 @@ describe("BookmarksPanel (#12)", () => {
     await tick();
     const label = screen.getByText("a.md");
     await fireEvent.click(label);
-    expect(spy).toHaveBeenCalledWith(`${VAULT}/notes/a.md`);
+    // #388 — clicks now route through openFileAsTab, which passes the
+    // viewport-aware viewMode hint to tabStore.openTab. In jsdom (no
+    // matchMedia overrides) the viewport reports desktop, so the hint
+    // resolves to "edit". Assert the absolute path explicitly via the
+    // first call argument; the second arg is the viewMode hint.
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[0]).toBe(`${VAULT}/notes/a.md`);
+    expect(spy.mock.calls[0]?.[1]).toBe("edit");
   });
 
   it("renders a broken bookmark dimmed and shows a remove button", async () => {

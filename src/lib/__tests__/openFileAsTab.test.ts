@@ -91,3 +91,73 @@ describe("openFileAsTab", () => {
     expect(get(tabStore).tabs).toHaveLength(1);
   });
 });
+
+// #388 — viewport-aware default viewMode. Mobile users get markdown opens in
+// read mode; non-markdown viewers (image / text / unsupported) ignore the
+// hint because they have no Reading Mode path. The dispatcher reads the
+// helper from `tabKind.ts`, which itself reads `viewportStore` once per call.
+
+describe("openFileAsTab + viewMode (#388)", () => {
+  beforeEach(() => {
+    readFile.mockReset();
+    vi.resetModules();
+    vi.doUnmock("../../store/viewportStore");
+    // NOTE: do NOT reset `tabStore` here — `vi.resetModules()` makes every
+    // subsequent dynamic `import("../../store/tabStore")` return a FRESH
+    // module whose `_core` writable is distinct from the top-level
+    // import. Calling `tabStore._reset()` on the stale top-level instance
+    // would silently no-op against the stores the tests actually use.
+    // The reset moved into `loadDispatcher` below — runs after the dynamic
+    // import, against the fresh singleton.
+  });
+
+  async function loadDispatcher(
+    mode: "desktop" | "tablet" | "mobile",
+  ): Promise<{
+    dispatch: typeof openFileAsTab;
+    ts: typeof import("../../store/tabStore").tabStore;
+  }> {
+    const { readable } = await import("svelte/store");
+    vi.doMock("../../store/viewportStore", () => ({
+      viewportStore: readable({ mode, isCoarsePointer: mode === "mobile" }),
+    }));
+    // Re-mock the IPC layer for the freshly-imported dispatcher so the
+    // module graph after `vi.resetModules()` shares the same readFile spy.
+    vi.doMock("../../ipc/commands", () => ({ readFile }));
+    const mod = await import("../openFileAsTab");
+    const { tabStore: ts } = await import("../../store/tabStore");
+    ts._reset();
+    return { dispatch: mod.openFileAsTab, ts };
+  }
+
+  it("opens markdown with viewMode='read' on mobile", async () => {
+    const { dispatch, ts } = await loadDispatcher("mobile");
+    await dispatch("/vault/note.md");
+    const state = get(ts);
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]!.viewMode).toBe("read");
+  });
+
+  it("opens markdown with viewMode='edit' on desktop", async () => {
+    const { dispatch, ts } = await loadDispatcher("desktop");
+    await dispatch("/vault/note.md");
+    const state = get(ts);
+    expect(state.tabs[0]!.viewMode).toBe("edit");
+  });
+
+  it("does not pass the hint for image viewers (image has no Reading Mode)", async () => {
+    const { dispatch, ts } = await loadDispatcher("mobile");
+    await dispatch("/vault/photo.png");
+    const state = get(ts);
+    expect(state.tabs[0]!.viewer).toBe("image");
+    expect(state.tabs[0]!.viewMode).toBeUndefined();
+  });
+
+  it("does not pass the hint for text viewers (.txt / .json / etc.)", async () => {
+    const { dispatch, ts } = await loadDispatcher("mobile");
+    await dispatch("/vault/notes.txt");
+    const state = get(ts);
+    expect(state.tabs[0]!.viewer).toBe("text");
+    expect(state.tabs[0]!.viewMode).toBeUndefined();
+  });
+});

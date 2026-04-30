@@ -1,14 +1,16 @@
 <script lang="ts">
   import { backlinksStore } from "../../store/backlinksStore";
-  import { tabStore } from "../../store/tabStore";
   import BacklinkRow from "./BacklinkRow.svelte";
   import { vaultStore } from "../../store/vaultStore";
+  import { openFileAsTab } from "../../lib/openFileAsTab";
 
   function handleBacklinkClick(relPath: string): void {
     const vault = $vaultStore.currentPath;
     if (!vault) return;
     const absPath = `${vault}/${relPath}`;
-    tabStore.openTab(absPath);
+    // #388 — route through openFileAsTab so the dispatcher applies the
+    // viewport-aware viewMode default (mobile → read, desktop → edit).
+    void openFileAsTab(absPath);
   }
 </script>
 
