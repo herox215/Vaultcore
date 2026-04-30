@@ -10,6 +10,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { tabStore } from "../../store/tabStore";
   import { longPress, type LongPressDetail } from "../../lib/actions/longPress";
+  import { openFileAsTab } from "../../lib/openFileAsTab";
 
   const BOOKMARKS_COLLAPSED_KEY = "vaultcore-bookmarks-panel-collapsed";
 
@@ -57,7 +58,9 @@
   }
 
   function handleRowClick(relPath: string): void {
-    tabStore.openTab(toAbsPath(relPath));
+    // #388 — route through openFileAsTab so the dispatcher applies the
+    // viewport-aware viewMode default (mobile → read, desktop → edit).
+    void openFileAsTab(toAbsPath(relPath));
   }
 
   function handleRowKeydown(e: KeyboardEvent, relPath: string): void {
@@ -83,14 +86,20 @@
 
   function handleOpenInNewTab(relPath: string): void {
     closeContextMenu();
-    // tabStore.openTab dedupes by filePath and focuses existing — call it to
-    // open/focus the note in the active pane.
-    tabStore.openTab(toAbsPath(relPath));
+    // #388 — route through openFileAsTab so the dispatcher applies the
+    // viewport-aware viewMode default. Dedupe semantics (focus existing tab)
+    // are preserved by the underlying tabStore.openTab call.
+    void openFileAsTab(toAbsPath(relPath));
   }
 
   function handleOpenInSplit(relPath: string): void {
     closeContextMenu();
     const absPath = toAbsPath(relPath);
+    // #388 — kept synchronous on purpose: openFileAsTab is async and would
+    // race with the synchronous moveToPane("right") below, which would
+    // potentially move the wrong tab. Split view is desktop-only via the
+    // viewport gating in #386, so the lost mobile-read hint here doesn't
+    // affect the mobile flow.
     tabStore.openTab(absPath);
     tabStore.moveToPane("right");
   }

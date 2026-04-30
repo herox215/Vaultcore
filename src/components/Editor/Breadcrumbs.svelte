@@ -16,6 +16,7 @@
   import { vaultStore } from "../../store/vaultStore";
   import { treeRevealStore } from "../../store/treeRevealStore";
   import { tabStore } from "../../store/tabStore";
+  import { viewportStore } from "../../store/viewportStore";
   import type { TabViewMode } from "../../store/tabStore";
 
   interface Props {
@@ -108,7 +109,11 @@
         {/each}
       </div>
     </div>
-    {#if tabId && viewMode !== undefined}
+    {#if tabId && viewMode !== undefined && $viewportStore.mode !== "mobile"}
+      <!-- #388: mobile uses the dedicated topbar pencil instead. The
+           gating clause is strictly more restrictive than the original
+           `tabId && viewMode !== undefined`, so desktop and tablet
+           behavior is unchanged. -->
       <button
         type="button"
         class="vc-breadcrumbs-mode-toggle"
