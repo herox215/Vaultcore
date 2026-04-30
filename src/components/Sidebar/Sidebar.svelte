@@ -544,71 +544,88 @@
   // #378 — cascade-request handlers from TreeRow. The row hands the request
   // up the moment the IPC await resolves (synchronously, no further await),
   // so the closure capture cannot race the row's unmount. Sidebar then runs
-  // any post-IPC work (getBacklinks for fileCount, dialog rendering,
-  // updateLinksAfterRename on confirm) on its own always-mounted lifetime.
+  // any post-IPC work on its own always-mounted lifetime.
+  //
+  // `cascadeClaiming` is a synchronous slot reservation. The handler does an
+  // `await getBacklinks(...)` before it can populate the full `pendingRename`
+  // / `pendingMove` shape; checking only those state fields would let a second
+  // request pass the guard and race for the slot during that await window.
+  // `cascadeClaiming` is set before the await and the synthetic guard reads
+  // it, closing the re-entrancy window without flashing a half-populated
+  // dialog.
+  let cascadeClaiming = $state(false);
+
+  function cascadeBusy(): boolean {
+    return cascadeClaiming || pendingRename !== null || pendingMove !== null;
+  }
+
   async function handleRequestRenameCascade(req: RenameCascadeRequest) {
-    // Modal precedence: ignore overlapping cascade requests. Only one dialog
-    // open at a time. The user can re-trigger the suppressed action after
-    // resolving the first dialog.
-    if (pendingRename || pendingMove) return;
+    if (cascadeBusy()) return;
+    cascadeClaiming = true;
     let fileCount = 1;
     try {
       const backlinks = await getBacklinks(req.oldRelPath);
       fileCount = new Set(backlinks.map((b) => b.sourcePath)).size || 1;
     } catch {
       /* fall back to the linkCount/1 default */
+    } finally {
+      pendingRename = { ...req, fileCount };
+      cascadeClaiming = false;
     }
-    pendingRename = { ...req, fileCount };
   }
 
   async function handleRequestMoveCascade(req: MoveDropRequest) {
-    // Modal precedence — same rule as rename cascade.
-    if (pendingRename || pendingMove) return;
-    const vault = $vaultStore.currentPath;
-    if (!vault) return;
-    const { sourcePath, targetDirPath } = req;
-    const sourceRelPath = sourcePath.startsWith(vault + "/")
-      ? sourcePath.slice(vault.length + 1)
-      : sourcePath;
-    const sourceFilename = sourcePath.split("/").pop() ?? sourcePath;
-    const newAbsPath = targetDirPath + "/" + sourceFilename;
-    const newRelPath = newAbsPath.startsWith(vault + "/")
-      ? newAbsPath.slice(vault.length + 1)
-      : newAbsPath;
-
-    let linkCount = 0;
-    let fileCount = 0;
+    if (cascadeBusy()) return;
+    cascadeClaiming = true;
     try {
-      const backlinks = await getBacklinks(sourceRelPath);
-      linkCount = backlinks.length;
-      fileCount = new Set(backlinks.map((b) => b.sourcePath)).size;
-    } catch {
-      /* proceed without cascade */
-    }
+      const vault = $vaultStore.currentPath;
+      if (!vault) return;
+      const { sourcePath, targetDirPath } = req;
+      const sourceRelPath = sourcePath.startsWith(vault + "/")
+        ? sourcePath.slice(vault.length + 1)
+        : sourcePath;
+      const sourceFilename = sourcePath.split("/").pop() ?? sourcePath;
+      const newAbsPath = targetDirPath + "/" + sourceFilename;
+      const newRelPath = newAbsPath.startsWith(vault + "/")
+        ? newAbsPath.slice(vault.length + 1)
+        : newAbsPath;
 
-    if (linkCount > 0) {
-      pendingMove = {
-        sourcePath,
-        targetDirPath,
-        sourceRelPath,
-        newRelPath,
-        linkCount,
-        fileCount,
-      };
-      return;
-    }
+      let linkCount = 0;
+      let fileCount = 0;
+      try {
+        const backlinks = await getBacklinks(sourceRelPath);
+        linkCount = backlinks.length;
+        fileCount = new Set(backlinks.map((b) => b.sourcePath)).size;
+      } catch {
+        /* proceed without cascade */
+      }
 
-    // No-cascade direct move — was previously inside TreeRow.handleDrop.
-    try {
-      await moveFile(sourcePath, targetDirPath);
-      void bookmarksStore.renamePath(sourceRelPath, newRelPath, vault);
-      await refreshFolder(targetDirPath);
-      const parent = parentOf(sourcePath);
-      if (parent) await refreshFolder(parent);
-      resolvedLinksStore.requestReload();
-    } catch (err) {
-      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
-      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+      if (linkCount > 0) {
+        pendingMove = {
+          sourcePath,
+          targetDirPath,
+          sourceRelPath,
+          newRelPath,
+          linkCount,
+          fileCount,
+        };
+        return;
+      }
+
+      // No-cascade direct move — was previously inside TreeRow.handleDrop.
+      try {
+        await moveFile(sourcePath, targetDirPath);
+        void bookmarksStore.renamePath(sourceRelPath, newRelPath, vault);
+        await refreshFolder(targetDirPath);
+        const parent = parentOf(sourcePath);
+        if (parent) await refreshFolder(parent);
+        resolvedLinksStore.requestReload();
+      } catch (err) {
+        const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+        toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+      }
+    } finally {
+      cascadeClaiming = false;
     }
   }
 

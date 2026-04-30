@@ -207,4 +207,54 @@ describe("Sidebar rename cascade survives tree re-flatten (#378)", () => {
     const newRow = container.querySelector(`[data-tree-row="${VAULT}/Welcome Renamed.md"]`);
     expect(newRow).toBeTruthy();
   });
+
+  it("clears pendingRename only after updateLinksAfterRename settles, blocking re-entrancy", async () => {
+    // Hold the IPC open so we can observe the in-flight state.
+    let resolveUpdate: (value: any) => void = () => {};
+    const updatePromise = new Promise<any>((resolve) => {
+      resolveUpdate = resolve;
+    });
+    (updateLinksAfterRename as any).mockImplementationOnce(() => updatePromise);
+
+    (listDirectory as any).mockResolvedValueOnce([md("Welcome.md")]);
+
+    const { container } = render(Sidebar, { props: makeProps() });
+    await drainMicrotasks();
+
+    const row = container.querySelector(".vc-tree-row") as HTMLElement;
+    await fireEvent.contextMenu(row, { clientX: 10, clientY: 20 });
+    await tick();
+
+    const renameItem = Array.from(
+      container.querySelectorAll(".vc-context-item"),
+    ).find((el) => (el.textContent ?? "").trim() === "Rename") as HTMLElement;
+    renameItem.click();
+    await tick();
+
+    const input = container.querySelector(".vc-rename-input") as HTMLInputElement;
+    input.value = "Welcome Renamed.md";
+    await fireEvent.input(input);
+    await fireEvent.keyDown(input, { key: "Enter" });
+    await drainMicrotasks();
+
+    // Click the confirm button. updateLinksAfterRename is unresolved, so the
+    // pendingRename slot must stay claimed.
+    const confirmBtn = container.querySelector(".vc-confirm-btn--accent") as HTMLButtonElement;
+    expect(confirmBtn).toBeTruthy();
+    confirmBtn.click();
+    await drainMicrotasks();
+
+    // While the IPC is in flight: dialog still mounted (modal guard armed),
+    // updateLinksAfterRename was called.
+    expect(updateLinksAfterRename).toHaveBeenCalledTimes(1);
+    const inFlightDialog = container.querySelector('[role="dialog"][aria-labelledby^="rename-heading"]');
+    expect(inFlightDialog).toBeTruthy();
+
+    // Resolve the IPC; pendingRename should clear in the finally block.
+    resolveUpdate({ updatedFiles: 2, updatedLinks: 3, failedFiles: [], updatedPaths: [] });
+    await drainMicrotasks();
+
+    const settledDialog = container.querySelector('[role="dialog"][aria-labelledby^="rename-heading"]');
+    expect(settledDialog).toBeNull();
+  });
 });
