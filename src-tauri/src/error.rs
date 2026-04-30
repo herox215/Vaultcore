@@ -71,6 +71,14 @@ pub enum VaultError {
          Move it outside the encrypted folder or use manual encryption."
     )]
     PayloadTooLarge { path: String, size: u64, cap: u64 },
+
+    /// #391: native picker (NSOpenPanel / GTK file chooser /
+    /// ACTION_OPEN_DOCUMENT_TREE) failed in a way that is not user
+    /// cancellation. Cancellation is signalled via `Ok(None)` from the
+    /// picker commands; this variant carries genuine errors only —
+    /// channel closed, mobile-plugin-bridge deserialize failure, etc.
+    #[error("Picker failed: {msg}")]
+    PickerFailed { msg: String },
 }
 
 impl VaultError {
@@ -90,6 +98,7 @@ impl VaultError {
             Self::WrongPassword => "WrongPassword",
             Self::CryptoError { .. } => "CryptoError",
             Self::PayloadTooLarge { .. } => "PayloadTooLarge",
+            Self::PickerFailed { .. } => "PickerFailed",
         }
     }
 
@@ -103,11 +112,13 @@ impl VaultError {
             | Self::PathLocked { path }
             | Self::PayloadTooLarge { path, .. } => Some(path.clone()),
             // `extra_data` is the IPC `data` field, reserved for a path
-            // so frontend callers can `navigate(err.data)`. CryptoError
-            // carries a human message, not a path — surfacing it here
-            // would break that contract. The message still ships via
-            // `Display` (the IPC `message` field); nothing is lost.
-            Self::CryptoError { .. } | Self::WrongPassword => None,
+            // so frontend callers can `navigate(err.data)`. CryptoError /
+            // PickerFailed carry a human message, not a path — surfacing
+            // it here would break that contract. The message still ships
+            // via `Display` (the IPC `message` field); nothing is lost.
+            Self::CryptoError { .. }
+            | Self::WrongPassword
+            | Self::PickerFailed { .. } => None,
             _ => None,
         }
     }
