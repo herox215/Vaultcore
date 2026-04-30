@@ -47,9 +47,19 @@ export function createViewportStore(): Readable<ViewportState> {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return;
     }
-    const mqlMobile = window.matchMedia(Q_MOBILE);
-    const mqlTablet = window.matchMedia(Q_TABLET);
-    const mqlCoarse = window.matchMedia(Q_COARSE);
+    // Some sandboxed WebView configs expose `matchMedia` as a function but
+    // throw on invocation. Fall through to the SSR default instead of
+    // crashing — the typeof check above only filters the missing case.
+    let mqlMobile: MediaQueryList;
+    let mqlTablet: MediaQueryList;
+    let mqlCoarse: MediaQueryList;
+    try {
+      mqlMobile = window.matchMedia(Q_MOBILE);
+      mqlTablet = window.matchMedia(Q_TABLET);
+      mqlCoarse = window.matchMedia(Q_COARSE);
+    } catch {
+      return;
+    }
 
     const read = () => {
       set({

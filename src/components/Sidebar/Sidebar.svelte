@@ -1124,6 +1124,9 @@
     justify-content: center;
     width: 32px;
     height: 32px;
+    /* #385 — fallbacks equal width/height (byte-identical); coarse → 44×44. */
+    min-width: var(--vc-hit-target, 32px);
+    min-height: var(--vc-hit-target, 32px);
     background: none;
     border: none;
     border-radius: 4px;
@@ -1193,6 +1196,9 @@
     border: none;
     cursor: pointer;
     color: var(--color-text);
+    /* #385 — token undefined on desktop → fallback `auto` (byte-identical
+       to current padding-only height); coarse → 44px. */
+    min-height: var(--vc-hit-target, auto);
   }
 
   .vc-new-menu-item:hover {
