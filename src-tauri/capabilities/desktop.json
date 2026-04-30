@@ -1,7 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "main-capability",
-  "description": "VaultCore Phase 1 capabilities",
+  "identifier": "desktop-capability",
+  "description": "VaultCore desktop capabilities",
+  "platforms": ["macOS", "windows", "linux"],
   "windows": ["main"],
   "permissions": [
     "core:default",

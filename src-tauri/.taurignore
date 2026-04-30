@@ -11,3 +11,4 @@
 # defense-in-depth.
 resources/
 target/
+gen/android/
