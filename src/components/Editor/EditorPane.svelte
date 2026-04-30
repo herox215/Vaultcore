@@ -27,6 +27,7 @@
   import { parseFrontmatter } from "../../lib/frontmatterIO";
   import EditorGraphBackground from "./EditorGraphBackground.svelte";
   import CountStatusBar from "./CountStatusBar.svelte";
+  import TabMorphOverlay from "./TabMorphOverlay.svelte";
   import { countsStore } from "../../store/countsStore";
   import { computeCounts } from "../../lib/wordCount";
   import { scrollToMatch } from "./flashHighlight";
@@ -547,6 +548,12 @@
     }
   });
 
+  // #380: handle to the per-pane morph overlay. The overlay is mounted
+  // inside .vc-editor-content (so it sits above the editor containers
+  // but below the read-only scrim) and runs a 120ms canvas scramble on
+  // qualifying tab switches.
+  let morphOverlay: { play: (out: EditorView | null, inc: EditorView | null) => void } | null = $state(null);
+
   // Handle scroll save/restore on tab switch — separate effect to avoid
   // coupling with the lifecycle effect above
   $effect(() => {
@@ -563,6 +570,33 @@
               prevView.state.selection.main.head
             );
           } catch (_) { /* view may have been destroyed */ }
+        }
+      }
+      // #380: trigger morph if both sides are already-mounted text editors.
+      // Skipped during async mount (mountingIds), for non-editor tabs
+      // (graph/image/canvas/unsupported), and when either side is in
+      // Reading Mode (no CM6 layout to snapshot).
+      if (
+        prevActiveTabId &&
+        newActiveId &&
+        morphOverlay &&
+        !mountingIds.has(newActiveId)
+      ) {
+        const outTab = allTabs.find((t) => t.id === prevActiveTabId);
+        const inTab = allTabs.find((t) => t.id === newActiveId);
+        const outView = viewMap.get(prevActiveTabId);
+        const inView = viewMap.get(newActiveId);
+        const bothEdit =
+          (outTab?.viewMode ?? "edit") === "edit" &&
+          (inTab?.viewMode ?? "edit") === "edit";
+        if (
+          outView &&
+          inView &&
+          bothEdit &&
+          tabHasEditor(outTab) &&
+          tabHasEditor(inTab)
+        ) {
+          morphOverlay.play(outView, inView);
         }
       }
       // Restore scroll/cursor on activated tab
@@ -987,6 +1021,10 @@
     {/if}
     <!-- #87: ambient local-graph background behind the editor in edit mode -->
     <EditorGraphBackground visible={showGraphBg} relPath={bgRelPath} />
+    <!-- #380: 120ms char-morph overlay between text-file tabs. Sits above
+         the editor containers (z-index: 5) but below the readonly scrim
+         (z-index: 10). pointer-events: none so the editor stays interactive. -->
+    <TabMorphOverlay bind:this={morphOverlay} />
     <!-- Svelte renders one container per tab. Visibility is driven by
          style:display reacting to paneActiveTabId — no manual DOM needed.
          Graph tabs render <GraphView /> instead of a CM6 container so the

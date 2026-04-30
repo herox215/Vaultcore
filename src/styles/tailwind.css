@@ -25,6 +25,10 @@
   --vc-font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --vc-font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
   --vc-font-size: 14px;
+
+  /* #380 — tab-morph transition duration. User snippets can override to 0ms
+     to disable the effect entirely without touching the JS gate. */
+  --vc-tab-switch-duration: 120ms;
 }
 
 /* Light theme (explicit) — same values as the bare :root defaults. Allows the HTML
