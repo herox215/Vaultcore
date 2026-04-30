@@ -12,15 +12,7 @@ import { textOf, textsOf } from "../helpers/text.js";
  * WebKitWebDriver reports pointer clicks on .vc-context-item as intercepted
  * by the overlay (same pattern as inline-rename.spec.ts).
  */
-// SKIP: pre-existing race between `renameFile` completion and the watcher
-// event that re-flattens the virtualized tree (#336). The original TreeRow
-// instance unmounts before its `onConfirm` callback can mount the cascade
-// dialog, so `pendingRename` is set on a stale component and the dialog
-// never paints. Tracked in #378. Direct IPC probing confirms `rename_file`
-// correctly returns `linkCount: 3` for this fixture — the backend is fine.
-// The Vitest unit tests in `commands/links::tests` still cover the
-// rename-rewrite regex contract (#62 anchor preservation included).
-describe.skip("Rename cascade dialog", () => {
+describe("Rename cascade dialog", () => {
   let vault: TestVault;
 
   before(async () => {
@@ -83,10 +75,10 @@ describe.skip("Rename cascade dialog", () => {
     await setRenameValue("Welcome Renamed.md");
     await browser.keys(["Enter"]);
 
-    // Rename-input unmounts, cascade dialog appears. The dialog's
-    // `aria-labelledby` is suffixed with the row's path (per-row uniqueness)
-    // so a prefix match is the right selector — the bare-string variant has
-    // never matched since the tree virtualization landed.
+    // Rename-input unmounts, cascade dialog appears. After the #378 lift the
+    // dialog lives on the Sidebar (single owner, survives the watcher
+    // re-flatten that destroys the per-row TreeRow). The aria-labelledby is
+    // now a stable string; the prefix selector still matches.
     await input.waitForDisplayed({ timeout: 5000, reverse: true });
     const dialog = await browser.$('[aria-labelledby^="rename-heading"]');
     await dialog.waitForDisplayed({ timeout: 3000 });
