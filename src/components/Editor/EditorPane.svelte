@@ -29,6 +29,7 @@
   import CountStatusBar from "./CountStatusBar.svelte";
   import TabMorphOverlay from "./TabMorphOverlay.svelte";
   import { snapshotView as snapshotEditorView } from "../../lib/editor/tabMorph";
+  import { snapshotCanvasTab } from "../../lib/canvas/canvasMorphRegistry";
   import { countsStore } from "../../store/countsStore";
   import { computeCounts } from "../../lib/wordCount";
   import { scrollToMatch } from "./flashHighlight";
@@ -259,14 +260,38 @@
     return true;
   }
 
+  // #383: tabs that participate in the char-morph tab transition. Superset
+  // of `tabHasEditor` — adds canvas tabs, which are snapshotted via the
+  // canvasMorphRegistry rather than from a CM6 view. Graph / image /
+  // unsupported / PDF still bypass to instant-swap.
+  function tabSupportsMorph(t: Tab | undefined): boolean {
+    if (!t) return false;
+    if (t.type === "graph") return false;
+    if (t.viewer === "image" || t.viewer === "unsupported") return false;
+    return true;
+  }
+
+  // #383: produce a `ViewSnapshot` for the morph overlay regardless of the
+  // tab's viewer kind. Returns null for non-morphable tabs or when the
+  // underlying view (CM6 / canvas) hasn't mounted yet — the overlay
+  // bypasses on null.
+  function snapshotForTab(tab: Tab | undefined, view: EditorView | undefined) {
+    if (!tab) return null;
+    if (tab.viewer === "canvas") return snapshotCanvasTab(tab.id);
+    if (tabHasEditor(tab) && view) return snapshotEditorView(view);
+    return null;
+  }
+
   // Subscribe to tabStore for our pane's tabs and active state
   const unsubTab = tabStore.subscribe((state) => {
-    // #380: BEFORE assigning the new activeTabId (which triggers Svelte to
-    // flip style:display on the outgoing container in the next microtask),
-    // snapshot the still-visible outgoing view. Without this, the trigger
-    // effect downstream sees the outgoing CM6 view already hidden and
-    // produces an empty glyph list — the morph would only fade in the
-    // incoming side, never scramble from the outgoing content.
+    // #380 / #383: BEFORE assigning the new activeTabId (which triggers
+    // Svelte to flip style:display on the outgoing container in the next
+    // microtask), snapshot the still-visible outgoing view. Without this,
+    // the trigger effect downstream sees the outgoing surface already
+    // hidden and produces an empty glyph list — the morph would only
+    // fade in the incoming side, never scramble from the outgoing
+    // content. Covers both CM6 (text) and canvas tabs via
+    // `snapshotForTab`.
     const prevActive = activeTabId;
     const nextActive = state.activeTabId;
     if (
@@ -276,15 +301,14 @@
       state.splitState[paneId].includes(prevActive) &&
       state.splitState[paneId].includes(nextActive)
     ) {
+      const prevTab = state.tabs.find((t) => t.id === prevActive);
       const prevView = viewMap.get(prevActive);
-      if (prevView) {
-        try {
-          pendingOutgoingSnapshot = snapshotEditorView(prevView);
-          pendingOutgoingForTabId = prevActive;
-        } catch {
-          pendingOutgoingSnapshot = null;
-          pendingOutgoingForTabId = null;
-        }
+      try {
+        pendingOutgoingSnapshot = snapshotForTab(prevTab, prevView);
+        pendingOutgoingForTabId = pendingOutgoingSnapshot ? prevActive : null;
+      } catch {
+        pendingOutgoingSnapshot = null;
+        pendingOutgoingForTabId = null;
       }
     }
     paneTabIds = state.splitState[paneId];
@@ -583,14 +607,16 @@
   type MorphOverlayHandle = ReturnType<typeof TabMorphOverlay>;
   let morphOverlay: MorphOverlayHandle | null = $state(null);
 
-  // #380: outgoing snapshot must be taken BEFORE Svelte re-flips the
-  // `style:display` of the previously-active container — once the old
-  // container is `display: none`, `view.coordsAtPos` returns null and
-  // `getBoundingClientRect` returns a zero rect, so the snapshot would
-  // be empty. The store subscriber below runs synchronously on dispatch,
-  // ahead of the next microtask in which Svelte flushes reactivity, so
-  // we capture the snapshot there and stash it for the trigger effect.
-  let pendingOutgoingSnapshot: import("../../lib/editor/tabMorph").ViewSnapshot | null = null;
+  // #380 / #383: outgoing snapshot must be taken BEFORE Svelte re-flips
+  // the `style:display` of the previously-active container — once the
+  // old container is `display: none`, `view.coordsAtPos` (CM6) returns
+  // null and `getBoundingClientRect` (canvas) returns a zero rect, so
+  // the snapshot would be empty. The store subscriber above runs
+  // synchronously on dispatch, ahead of the next microtask in which
+  // Svelte flushes reactivity, so we capture the snapshot there and
+  // stash it for the trigger effect. The variables are tab-type-agnostic
+  // — they hold whichever shape `snapshotForTab` produced (CM6 or canvas).
+  let pendingOutgoingSnapshot: import("../../lib/morphTypes").ViewSnapshot | null = null;
   let pendingOutgoingForTabId: string | null = null;
 
   // Handle scroll save/restore on tab switch — separate effect to avoid
@@ -611,13 +637,14 @@
           } catch (_) { /* view may have been destroyed */ }
         }
       }
-      // #380: trigger morph if both sides are already-mounted text editors.
-      // Skipped during async mount (mountingIds), for non-editor tabs
-      // (graph/image/canvas/unsupported), and when either side is in
-      // Reading Mode (no CM6 layout to snapshot). The outgoing snapshot
-      // was captured synchronously in the tabStore subscriber above —
-      // the incoming snapshot is taken here, after Svelte has flipped
-      // the new container to display: block.
+      // #380 / #383: trigger morph if both sides are morph-eligible.
+      // Skipped during async mount (mountingIds), for non-morphable tabs
+      // (graph/image/unsupported/PDF), and when either side is in Reading
+      // Mode (no readable layout to snapshot). The outgoing snapshot was
+      // captured synchronously in the tabStore subscriber above — the
+      // incoming snapshot is taken here, after Svelte has flipped the
+      // new container to display: block. Canvas tabs route through the
+      // canvasMorphRegistry; CM6 tabs route through `snapshotEditorView`.
       const outgoingSnapshot = pendingOutgoingForTabId === prevActiveTabId
         ? pendingOutgoingSnapshot
         : null;
@@ -632,20 +659,23 @@
       ) {
         const outTab = allTabs.find((t) => t.id === prevActiveTabId);
         const inTab = allTabs.find((t) => t.id === newActiveId);
-        const inView = viewMap.get(newActiveId);
         const bothEdit =
           (outTab?.viewMode ?? "edit") === "edit" &&
           (inTab?.viewMode ?? "edit") === "edit";
         if (
-          inView &&
           bothEdit &&
-          tabHasEditor(outTab) &&
-          tabHasEditor(inTab)
+          tabSupportsMorph(outTab) &&
+          tabSupportsMorph(inTab)
         ) {
           // Defer the incoming snapshot to the next frame so the new
           // container's display:block has flushed before we measure.
+          // For canvas-tab incoming, the registry lookup may return null
+          // when the canvas hasn't mounted yet (first-open race) — the
+          // overlay bypasses on null incoming, which is the right
+          // behavior.
+          const inView = viewMap.get(newActiveId);
           requestAnimationFrame(() => {
-            const incomingSnapshot = snapshotEditorView(inView);
+            const incomingSnapshot = snapshotForTab(inTab, inView);
             morphOverlay?.playFromSnapshots(outgoingSnapshot, incomingSnapshot);
           });
         }

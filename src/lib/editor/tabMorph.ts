@@ -9,6 +9,9 @@
 // timing rules without a DOM.
 
 import type { EditorView } from "@codemirror/view";
+import type { GlyphRef, ViewSnapshot } from "../morphTypes";
+
+export type { GlyphRef, ViewSnapshot } from "../morphTypes";
 
 /** Hard cut at the morph duration. Overridable via the
  *  `--vc-tab-switch-duration` CSS custom property (read at trigger time
@@ -45,26 +48,6 @@ export function resolveMorphDuration(): number {
  * tab always falls through to the instant path.
  */
 export const MORPH_SUPPRESSION_MS = 320;
-
-/** A single character at a known viewport pixel position. */
-export interface GlyphRef {
-  ch: string;
-  x: number;
-  y: number;
-}
-
-/** Snapshot of the visible glyphs for one editor view. */
-export interface ViewSnapshot {
-  glyphs: GlyphRef[];
-  /** Line height in CSS pixels — used by the renderer to align baselines. */
-  lineHeight: number;
-  /** Font shorthand suitable for `ctx.font`. */
-  font: string;
-  /** Color resolved from the editor's `--color-text`. */
-  color: string;
-  /** Pixel rect of the editor scroller, viewport-relative. */
-  scrollerRect: { x: number; y: number; width: number; height: number };
-}
 
 /** Per-glyph entry on the morph timeline. */
 export interface ScheduledGlyph {
