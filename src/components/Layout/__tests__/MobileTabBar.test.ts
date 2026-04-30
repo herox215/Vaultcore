@@ -153,9 +153,10 @@ describe("MobileTabBar (#389)", () => {
     // the contract, and that's fine.
     const fs = await import("node:fs/promises");
     const url = await import("node:url");
-    const here = url.fileURLToPath(import.meta.url);
-    const path = await import("node:path");
-    const componentPath = path.resolve(path.dirname(here), "..", "MobileTabBar.svelte");
+    // import.meta.resolve goes through the runtime resolver — if the file
+    // moves or is renamed, this throws loud rather than silently resolving
+    // to a wrong path that happens to not contain the word.
+    const componentPath = url.fileURLToPath(import.meta.resolve("../MobileTabBar.svelte"));
     const src = await fs.readFile(componentPath, "utf8");
     expect(/from\s+["'][^"']*viewportStore["']/.test(src)).toBe(false);
   });

@@ -30,14 +30,22 @@
     label: string;
     icon: typeof Files;
     controls?: string;
-    onSelect: () => void;
   }
 
-  const tabs: TabSpec[] = $derived([
-    { id: "files",  label: "Dateien", icon: Files,  controls: "vc-mobile-drawer", onSelect: onSelectFiles  },
-    { id: "search", label: "Suche",   icon: Search,                                onSelect: onSelectSearch },
-    { id: "more",   label: "Mehr",    icon: Menu,                                  onSelect: onSelectMore   },
-  ]);
+  // Static — labels, icons, ids, and aria-controls don't change at runtime.
+  // The per-tab onclick payload dispatches via the prop callbacks; recomputing
+  // this array every render would be wasted work.
+  const tabs: ReadonlyArray<TabSpec> = [
+    { id: "files",  label: "Dateien", icon: Files,  controls: "vc-mobile-drawer" },
+    { id: "search", label: "Suche",   icon: Search                               },
+    { id: "more",   label: "Mehr",    icon: Menu                                 },
+  ];
+
+  function onSelect(id: TabId) {
+    if (id === "files") onSelectFiles();
+    else if (id === "search") onSelectSearch();
+    else onSelectMore();
+  }
 
   // Search/More never become "active" — Search is a transient modal that
   // owns its own active state, More is a placeholder. Only Files has a
@@ -79,7 +87,7 @@
       aria-selected={isActive ? "true" : "false"}
       aria-controls={tab.controls}
       tabindex={tabIndex(tab.id, idx)}
-      onclick={tab.onSelect}
+      onclick={() => onSelect(tab.id)}
       onkeydown={(e) => onTabKeydown(e, idx)}
       class="vc-mobile-tab"
       class:vc-mobile-tab--active={isActive}
