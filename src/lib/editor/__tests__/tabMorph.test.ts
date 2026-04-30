@@ -13,8 +13,8 @@ import {
   prefersReducedMotion,
   randomGlyph,
   resolveMorphDuration,
-  type ViewSnapshot,
 } from "../tabMorph";
+import type { ViewSnapshot } from "../../morphTypes";
 
 function snap(text: string): ViewSnapshot {
   return {

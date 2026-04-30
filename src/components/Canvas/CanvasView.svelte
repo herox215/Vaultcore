@@ -225,6 +225,10 @@
       void persist();
     }
     cancelLongpressTimer();
+    // #383: unregister BEFORE the rest of the teardown so a tab-switch
+    // racing with this destroy can't read a snapshot fn whose closure
+    // points at `viewportEl` after Svelte has detached it. Ordering is
+    // load-bearing — a stale closure would dereference a null DOM ref.
     unregisterCanvasSnapshot(tabId);
     // #165: tear down preview-invalidation subscriptions so multi-tab
     // open/close cycles don't leak listeners.

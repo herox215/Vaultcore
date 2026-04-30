@@ -11,8 +11,6 @@
 import type { EditorView } from "@codemirror/view";
 import type { GlyphRef, ViewSnapshot } from "../morphTypes";
 
-export type { GlyphRef, ViewSnapshot } from "../morphTypes";
-
 /** Hard cut at the morph duration. Overridable via the
  *  `--vc-tab-switch-duration` CSS custom property (read at trigger time
  *  by `resolveMorphDuration`); this constant is the default and the

@@ -97,9 +97,14 @@ export function snapshotCanvas(
   const font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   const color = cs?.color || "#000";
 
-  // Approximate monospace cell width — close enough to lay glyphs out
-  // along a node's top edge without doing real font-metric measurement
-  // on every snapshot.
+  // Approximate monospace cell width. Canvas cards render in a
+  // proportional UI font, so this is wrong for any glyph that isn't
+  // ~0.6em wide — but doing real font-metric measurement (`measureText`
+  // per glyph) on every tab switch would burn the keystroke-latency
+  // budget, and the morph is only a 240ms visual cue: pixel-exact
+  // glyph placement isn't the point. If a future ticket needs faithful
+  // canvas → DOM glyph mapping, swap this for a per-node `measureText`
+  // pass once at snapshot time, not per-glyph.
   const cellW = fontSize * 0.6;
   const lineH = lineHeight;
 

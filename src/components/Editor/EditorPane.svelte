@@ -260,15 +260,14 @@
     return true;
   }
 
-  // #383: tabs that participate in the char-morph tab transition. Superset
-  // of `tabHasEditor` — adds canvas tabs, which are snapshotted via the
-  // canvasMorphRegistry rather than from a CM6 view. Graph / image /
-  // unsupported / PDF still bypass to instant-swap.
+  // #383: tabs that participate in the char-morph tab transition. Defined
+  // in terms of `tabHasEditor` so any new viewer type added to that
+  // function's exclusion list is automatically excluded from morphing —
+  // the only difference is that canvas tabs ARE morphable here (via the
+  // canvasMorphRegistry) while `tabHasEditor` excludes them (no CM6 view).
   function tabSupportsMorph(t: Tab | undefined): boolean {
     if (!t) return false;
-    if (t.type === "graph") return false;
-    if (t.viewer === "image" || t.viewer === "unsupported") return false;
-    return true;
+    return tabHasEditor(t) || t.viewer === "canvas";
   }
 
   // #383: produce a `ViewSnapshot` for the morph overlay regardless of the
@@ -659,6 +658,10 @@
       ) {
         const outTab = allTabs.find((t) => t.id === prevActiveTabId);
         const inTab = allTabs.find((t) => t.id === newActiveId);
+        // Canvas tabs do not carry a `viewMode` field, so the `?? "edit"`
+        // fallback always lets them pass — that's intentional, canvas
+        // has no Reading Mode to gate against. The check exists to
+        // suppress text↔text morphs when either side is in Reading Mode.
         const bothEdit =
           (outTab?.viewMode ?? "edit") === "edit" &&
           (inTab?.viewMode ?? "edit") === "edit";

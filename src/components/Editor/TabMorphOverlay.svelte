@@ -22,8 +22,8 @@
     randomGlyph,
     resolveMorphDuration,
     type ScheduledGlyph,
-    type ViewSnapshot,
   } from "../../lib/editor/tabMorph";
+  import type { ViewSnapshot } from "../../lib/morphTypes";
 
   let canvasEl = $state<HTMLCanvasElement | null>(null);
   let visible = $state(false);
