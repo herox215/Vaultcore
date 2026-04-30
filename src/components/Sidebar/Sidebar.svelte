@@ -1038,8 +1038,8 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
-    /* #385 — token undefined on desktop → fallback `auto` (byte-identical
-       padding-only height); coarse → 44px. */
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
     min-height: var(--vc-hit-target, auto);
   }
 
@@ -1196,8 +1196,8 @@
     border: none;
     cursor: pointer;
     color: var(--color-text);
-    /* #385 — token undefined on desktop → fallback `auto` (byte-identical
-       to current padding-only height); coarse → 44px. */
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
     min-height: var(--vc-hit-target, auto);
   }
 

@@ -78,11 +78,12 @@ const Q_COARSE = "(pointer: coarse)";
 
 function installHarness(initial: Record<string, boolean>): MqlHarness {
   const harness = makeMqlHarness(initial);
+  // vi.stubGlobal alone is sufficient — it patches both `globalThis.matchMedia`
+  // and `window.matchMedia` (in jsdom they're the same binding) and
+  // `vi.unstubAllGlobals()` in afterEach reverses it cleanly. An additional
+  // `Object.defineProperty(window, ...)` would NOT be reversed by
+  // unstubAllGlobals and would leak across tests.
   vi.stubGlobal("matchMedia", harness.matchMedia);
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    value: harness.matchMedia,
-  });
   return harness;
 }
 
@@ -187,6 +188,47 @@ describe("viewportStore", () => {
     }
   });
 
+  it("re-runs start() correctly after a multi-subscriber teardown (A+B unsubscribe → C subscribes)", () => {
+    // Exercises the path where svelte/store's internal subscriber counter
+    // must reach zero before `start` is invoked again. With only a single
+    // subscriber per cycle the counter trivially toggles 0→1→0; the
+    // multi-subscriber case is where counter arithmetic could regress.
+    const harness = installHarness({ [Q_MOBILE]: false, [Q_TABLET]: false, [Q_COARSE]: false });
+    const store = createViewportStore();
+
+    const unsubA = store.subscribe(() => {});
+    const unsubB = store.subscribe(() => {});
+    for (const q of [Q_MOBILE, Q_TABLET, Q_COARSE]) {
+      // Both subscribers share one start() invocation, so addCount is 1.
+      expect(harness.get(q).addCount).toBe(1);
+    }
+    unsubA();
+    unsubB();
+    for (const q of [Q_MOBILE, Q_TABLET, Q_COARSE]) {
+      expect(harness.get(q).removeCount).toBe(1);
+      expect(harness.get(q).listeners.size).toBe(0);
+    }
+
+    // Mutate MQL state while detached so we can also confirm the new
+    // start() reads fresh state (not a stale closure carried over).
+    harness.get(Q_MOBILE).matches = true;
+    harness.get(Q_TABLET).matches = true;
+    harness.get(Q_COARSE).matches = true;
+
+    const unsubC = store.subscribe(() => {});
+    for (const q of [Q_MOBILE, Q_TABLET, Q_COARSE]) {
+      expect(harness.get(q).addCount).toBe(2);
+      expect(harness.get(q).listeners.size).toBe(1);
+    }
+    expect(get(store).mode).toBe("mobile");
+    expect(get(store).isCoarsePointer).toBe(true);
+    unsubC();
+    for (const q of [Q_MOBILE, Q_TABLET, Q_COARSE]) {
+      expect(harness.get(q).removeCount).toBe(2);
+      expect(harness.get(q).listeners.size).toBe(0);
+    }
+  });
+
   it("re-attaches listeners and reflects the CURRENT MQL state after a teardown/resubscribe cycle", () => {
     const harness = installHarness({ [Q_MOBILE]: false, [Q_TABLET]: false, [Q_COARSE]: false });
     const store = createViewportStore();
@@ -232,10 +274,6 @@ describe("viewportStore", () => {
       throw new Error("matchMedia not supported in this context");
     });
     vi.stubGlobal("matchMedia", throwingMatchMedia);
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: throwingMatchMedia,
-    });
 
     const store = createViewportStore();
     const unsub = store.subscribe(() => {});

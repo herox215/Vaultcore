@@ -211,8 +211,8 @@
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-text);
-    /* #385 — token undefined on desktop → fallback `auto` (byte-identical
-       padding-only height); coarse → 44px. */
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
     min-height: var(--vc-hit-target, auto);
   }
   .vc-password-modal-ok {

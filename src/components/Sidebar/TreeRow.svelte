@@ -796,9 +796,8 @@
     cursor: pointer;
     background: var(--color-surface);
     color: var(--color-text);
-    /* #385 — token undefined on desktop → fallback `auto` is the
-       initial value, so no min-height effect (byte-identical). Coarse
-       → 44px. */
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. */
     min-height: var(--vc-hit-target, auto);
   }
 

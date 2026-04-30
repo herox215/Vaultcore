@@ -105,10 +105,10 @@
     border: none;
     cursor: pointer;
     color: var(--color-text);
-    /* #385 — token undefined on desktop → fallback `auto` is the
-       initial value (no min-height effect, byte-identical to current
-       padding-only ~30px). Coarse → 44px. Block display kept; on coarse
-       the text sits at the top of the taller hit area until #386. */
+    /* #385 — fallback `auto` = no min-height constraint (initial value), so
+       desktop sizing stays padding-driven as before; coarse → 44px. Block
+       display kept; on coarse the text sits at the top of the taller hit
+       area until #386 polishes it. */
     min-height: var(--vc-hit-target, auto);
   }
 

@@ -31,10 +31,13 @@ const Q_MOBILE = "(max-width: 699px)";
 const Q_TABLET = "(max-width: 1023px)";
 const Q_COARSE = "(pointer: coarse)";
 
-const SSR_DEFAULT: ViewportState = {
+// Frozen so the shared module-level reference handed to `readable()` (and
+// returned via `get()` before the first MQL read) cannot be mutated by a
+// caller and contaminate every subsequent factory invocation.
+const SSR_DEFAULT: ViewportState = Object.freeze({
   mode: "desktop",
   isCoarsePointer: false,
-};
+});
 
 function modeFor(mobile: boolean, tablet: boolean): ViewportMode {
   if (mobile) return "mobile";
@@ -69,15 +72,14 @@ export function createViewportStore(): Readable<ViewportState> {
     };
 
     read();
-    const onChange = () => read();
-    mqlMobile.addEventListener("change", onChange);
-    mqlTablet.addEventListener("change", onChange);
-    mqlCoarse.addEventListener("change", onChange);
+    mqlMobile.addEventListener("change", read);
+    mqlTablet.addEventListener("change", read);
+    mqlCoarse.addEventListener("change", read);
 
     return () => {
-      mqlMobile.removeEventListener("change", onChange);
-      mqlTablet.removeEventListener("change", onChange);
-      mqlCoarse.removeEventListener("change", onChange);
+      mqlMobile.removeEventListener("change", read);
+      mqlTablet.removeEventListener("change", read);
+      mqlCoarse.removeEventListener("change", read);
     };
   });
 }
