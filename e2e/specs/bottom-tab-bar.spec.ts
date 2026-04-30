@@ -102,17 +102,29 @@ describe("Mobile bottom tab bar (#389)", () => {
     });
   });
 
-  it("More tab shows the placeholder toast (until #397)", async () => {
+  it("More tab closes the drawer first if open AND shows the placeholder toast", async () => {
+    // Mirror of the Search-tab regression: the close-drawer-first guard in
+    // handleMobileMoreTab must work the same way as Search. Without this
+    // test, the More-tab close-first line could regress silently.
+    await clickFilesTab();
+    await browser.waitUntil(isDrawerOpen, { timeout: 3000 });
     await clickMoreTab();
     // toastStore renders into a host that stays in DOM; selector covers
     // the common conventions in this repo.
     const toast = await browser.$(".vc-toast, [role='status']");
     await toast.waitForDisplayed({ timeout: 3000 });
+    await browser.waitUntil(async () => !(await isDrawerOpen()), {
+      timeout: 3000,
+      timeoutMsg: "Drawer should close when More tab is tapped",
+    });
   });
 
   it("absent at desktop size", async () => {
     await browser.setWindowSize(1280, 900);
-    // Wait for the @media-driven re-render.
+    // Wait for the @media-driven re-render. Window-size restore is owned
+    // by the `after` hook — keeping the restore out of the test body means
+    // a `waitUntil` timeout produces the original assertion failure
+    // cleanly rather than hiding behind an unguarded restore line.
     await browser.waitUntil(async () => {
       const bars = await browser.$$(".vc-mobile-tab-bar");
       return bars.length === 0;
@@ -120,7 +132,5 @@ describe("Mobile bottom tab bar (#389)", () => {
       timeout: 3000,
       timeoutMsg: "Tab bar should be absent at desktop size",
     });
-    // Restore mobile size for the after-hook contract.
-    await browser.setWindowSize(600, 900);
   });
 });
