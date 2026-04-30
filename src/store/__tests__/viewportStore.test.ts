@@ -78,11 +78,11 @@ const Q_COARSE = "(pointer: coarse)";
 
 function installHarness(initial: Record<string, boolean>): MqlHarness {
   const harness = makeMqlHarness(initial);
-  // vi.stubGlobal alone is sufficient — it patches both `globalThis.matchMedia`
-  // and `window.matchMedia` (in jsdom they're the same binding) and
-  // `vi.unstubAllGlobals()` in afterEach reverses it cleanly. An additional
-  // `Object.defineProperty(window, ...)` would NOT be reversed by
-  // unstubAllGlobals and would leak across tests.
+  // Per-test override of the global baseline that `src/test/setup.ts` installs
+  // via `Object.defineProperty(window, "matchMedia", { configurable: true, ... })`.
+  // The `configurable: true` descriptor is what lets `vi.stubGlobal` override
+  // it here and lets `vi.unstubAllGlobals()` (in afterEach) restore the
+  // baseline — so per-test stubbing only needs `vi.stubGlobal`.
   vi.stubGlobal("matchMedia", harness.matchMedia);
   return harness;
 }
