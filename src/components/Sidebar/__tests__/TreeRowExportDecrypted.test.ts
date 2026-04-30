@@ -77,6 +77,8 @@ function makeProps(row: FlatRow) {
     onEnsureExpanded: vi.fn(),
     onRefreshFolder: vi.fn(),
     onPathChanged: vi.fn(),
+    onRequestRenameCascade: vi.fn(),
+    onRequestMoveCascade: vi.fn(),
   };
 }
 
