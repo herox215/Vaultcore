@@ -61,7 +61,7 @@ describe("longPress action (#387)", () => {
     vi.advanceTimersByTime(500);
     expect(fired).toHaveLength(1);
     expect(fired[0]).toMatchObject({ clientX: 30, clientY: 40, pointerType: "touch" });
-    expect(fired[0].target).toBe(node);
+    expect(fired[0]!.target).toBe(node);
     handle.destroy();
   });
 

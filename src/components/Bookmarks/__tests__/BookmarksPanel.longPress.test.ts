@@ -53,8 +53,9 @@ describe("BookmarksPanel long-press → context menu (#387)", () => {
 
     const rows = container.querySelectorAll<HTMLElement>(".vc-bookmark-row");
     expect(rows.length).toBeGreaterThan(0);
+    const first = rows[0]!;
 
-    rows[0].dispatchEvent(pointerEvent("pointerdown", { clientX: 80, clientY: 50 }));
+    first.dispatchEvent(pointerEvent("pointerdown", { clientX: 80, clientY: 50 }));
     vi.advanceTimersByTime(500);
     await tick();
 
@@ -69,11 +70,12 @@ describe("BookmarksPanel long-press → context menu (#387)", () => {
     await tick();
 
     const rows = container.querySelectorAll<HTMLElement>(".vc-bookmark-row");
-    rows[0].dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    const [first, second] = [rows[0]!, rows[1]!];
+    first.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
     vi.advanceTimersByTime(500);
     await tick();
 
-    rows[1].dispatchEvent(pointerEvent("pointerdown", { clientX: 200, clientY: 100 }));
+    second.dispatchEvent(pointerEvent("pointerdown", { clientX: 200, clientY: 100 }));
     vi.advanceTimersByTime(500);
     await tick();
 
@@ -87,7 +89,7 @@ describe("BookmarksPanel long-press → context menu (#387)", () => {
     const { container } = render(BookmarksPanel);
     await tick();
     const rows = container.querySelectorAll<HTMLElement>(".vc-bookmark-row");
-    await fireEvent.contextMenu(rows[0], { clientX: 50, clientY: 30 });
+    await fireEvent.contextMenu(rows[0]!, { clientX: 50, clientY: 30 });
     await tick();
     const menu = container.querySelector(".vc-bookmark-menu") as HTMLElement;
     expect(menu).toBeTruthy();
