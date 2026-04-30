@@ -187,7 +187,7 @@ describe("viewportStore", () => {
     }
   });
 
-  it("re-attaches listeners when a new subscriber arrives after teardown", () => {
+  it("re-attaches listeners and reflects the CURRENT MQL state after a teardown/resubscribe cycle", () => {
     const harness = installHarness({ [Q_MOBILE]: false, [Q_TABLET]: false, [Q_COARSE]: false });
     const store = createViewportStore();
 
@@ -198,10 +198,18 @@ describe("viewportStore", () => {
       expect(harness.get(q).removeCount).toBe(1);
     }
 
+    // While no one is subscribed, MQL state changes underneath (e.g. an
+    // OS-level dock to a tablet form factor). When a fresh subscriber
+    // arrives the store must read the new MQL state, not a stale closure.
+    harness.get(Q_TABLET).matches = true;
+    harness.get(Q_COARSE).matches = true;
+
     const unsubB = store.subscribe(() => {});
     for (const q of [Q_MOBILE, Q_TABLET, Q_COARSE]) {
       expect(harness.get(q).addCount).toBe(2);
     }
+    expect(get(store).mode).toBe("tablet");
+    expect(get(store).isCoarsePointer).toBe(true);
     unsubB();
   });
 
@@ -213,5 +221,32 @@ describe("viewportStore", () => {
     expect(state.mode).toBe("desktop");
     expect(state.isCoarsePointer).toBe(false);
     unsub();
+  });
+
+  it("falls through to SSR default when matchMedia is a function but throws on call", () => {
+    // Some sandboxed WebView configs (e.g. certain WKWebView setups) expose
+    // `matchMedia` as a function but throw on invocation. The guard at
+    // `typeof matchMedia !== 'function'` doesn't catch that — needs a
+    // try/catch around the calls.
+    const throwingMatchMedia = vi.fn(() => {
+      throw new Error("matchMedia not supported in this context");
+    });
+    vi.stubGlobal("matchMedia", throwingMatchMedia);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: throwingMatchMedia,
+    });
+
+    const store = createViewportStore();
+    const unsub = store.subscribe(() => {});
+    const state = get(store);
+    expect(state.mode).toBe("desktop");
+    expect(state.isCoarsePointer).toBe(false);
+    // Store must not have left listeners attached on a partially-set-up MQL.
+    // (Throwing matchMedia means we never got an MQL to attach to.) Sanity
+    // check: subsequent subscribe/unsubscribe cycles don't crash.
+    unsub();
+    const unsub2 = store.subscribe(() => {});
+    unsub2();
   });
 });
