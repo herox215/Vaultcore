@@ -325,4 +325,56 @@ describe("EditorPane keyboard-aware scroll (#395)", () => {
     const leftCalls = leftDispatch.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
     expect(leftCalls.length).toBe(0);
   });
+
+  it("rapid tab switch between rAF schedule and frame: tab-A's stale dispatch is suppressed", async () => {
+    // Aristotle iter-1 #1 regression guard. Sequence:
+    //   1. Tab A active, kb opens → $effect schedules rAF for A.
+    //   2. User switches to tab B BEFORE the frame fires.
+    //   3. The pending rAF callback re-checks the live tab id; since the
+    //      active tab is now B, it skips the dispatch (no stale-view crash,
+    //      no scroll on a tab the user moved away from).
+    //   4. The new $effect for tab B independently schedules its own rAF
+    //      and dispatches normally.
+    //
+    // Override the synchronous stubRaf with a queuing rAF so we can hold
+    // the callback while we mutate state in the test.
+    const queue: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      queue.push(cb);
+      return queue.length;
+    });
+
+    const { cm: cmA } = await mountPaneWithMarkdownTab();
+    const { EditorView: EV } = await import("@codemirror/view");
+    const viewA = EV.findFromDOM(cmA);
+    if (!viewA) throw new Error("no view A");
+    Object.defineProperty(viewA, "hasFocus", { configurable: true, get: () => true });
+    const dispatchA = vi.spyOn(viewA, "dispatch");
+
+    setKeyboardHeight(250);
+    await flushAsync();
+    // At least one rAF queued for tab A. Not flushed yet.
+    expect(queue.length).toBeGreaterThanOrEqual(1);
+    expect(dispatchA.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object)).length).toBe(0);
+
+    // User switches to tab B mid-flight (BEFORE any frame fires for A).
+    tabStore.openTab("/vault/other.md", "edit");
+    await flushAsync();
+
+    // Flush ALL queued rAFs. Each one captured `scheduledTabId` at the
+    // moment it was enqueued; the rAFs scheduled while tab A was active
+    // must skip their dispatch because the live active tab is now B.
+    while (queue.length > 0) {
+      const cb = queue.shift()!;
+      cb(0);
+    }
+
+    // Property under test: no dispatch lands on viewA (the stale view
+    // belonging to tab A — which is still active in this single-pane setup
+    // since openTab dedupes/activates new tabs in the same pane). With the
+    // pre-rAF guard removed, the rAF re-checks the active tab id at frame
+    // time and skips when it doesn't match the captured tab id.
+    const dispatchACalls = dispatchA.mock.calls.filter((c: unknown[]) => "effects" in (c[0] as object));
+    expect(dispatchACalls.length).toBe(0);
+  });
 });
