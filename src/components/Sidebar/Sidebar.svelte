@@ -38,7 +38,7 @@
   import { resolvedLinksStore } from "../../store/resolvedLinksStore";
   import type {
     RenameCascadeRequest,
-    MoveCascadeRequest,
+    MoveDropRequest,
     PendingRename,
     PendingMove,
   } from "../../types/sidebar";
@@ -561,15 +561,64 @@
     pendingRename = { ...req, fileCount };
   }
 
-  function handleRequestMoveCascade(req: MoveCascadeRequest) {
+  async function handleRequestMoveCascade(req: MoveDropRequest) {
+    // Modal precedence — same rule as rename cascade.
     if (pendingRename || pendingMove) return;
-    pendingMove = req;
+    const vault = $vaultStore.currentPath;
+    if (!vault) return;
+    const { sourcePath, targetDirPath } = req;
+    const sourceRelPath = sourcePath.startsWith(vault + "/")
+      ? sourcePath.slice(vault.length + 1)
+      : sourcePath;
+    const sourceFilename = sourcePath.split("/").pop() ?? sourcePath;
+    const newAbsPath = targetDirPath + "/" + sourceFilename;
+    const newRelPath = newAbsPath.startsWith(vault + "/")
+      ? newAbsPath.slice(vault.length + 1)
+      : newAbsPath;
+
+    let linkCount = 0;
+    let fileCount = 0;
+    try {
+      const backlinks = await getBacklinks(sourceRelPath);
+      linkCount = backlinks.length;
+      fileCount = new Set(backlinks.map((b) => b.sourcePath)).size;
+    } catch {
+      /* proceed without cascade */
+    }
+
+    if (linkCount > 0) {
+      pendingMove = {
+        sourcePath,
+        targetDirPath,
+        sourceRelPath,
+        newRelPath,
+        linkCount,
+        fileCount,
+      };
+      return;
+    }
+
+    // No-cascade direct move — was previously inside TreeRow.handleDrop.
+    try {
+      await moveFile(sourcePath, targetDirPath);
+      void bookmarksStore.renamePath(sourceRelPath, newRelPath, vault);
+      await refreshFolder(targetDirPath);
+      const parent = parentOf(sourcePath);
+      if (parent) await refreshFolder(parent);
+      resolvedLinksStore.requestReload();
+    } catch (err) {
+      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
+      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    }
   }
 
   async function confirmRenameWithLinks() {
     if (!pendingRename) return;
+    // Snapshot but DO NOT clear pendingRename yet — clearing before the
+    // IPC settles would let a second cascade request slip past the modal
+    // guard in handleRequest*Cascade and trigger concurrent link rewrites.
+    // Keep the dialog open while applying; clear only when the IPC resolves.
     const { oldPath, newPath, oldRelPath, newRelPath } = pendingRename;
-    pendingRename = null;
     handlePathChanged(oldPath, newPath);
     resolvedLinksStore.requestReload();
     try {
@@ -589,6 +638,8 @@
         variant: "error",
         message: "Links konnten nicht aktualisiert werden.",
       });
+    } finally {
+      pendingRename = null;
     }
   }
 
@@ -598,8 +649,9 @@
 
   async function confirmMoveWithLinks() {
     if (!pendingMove) return;
+    // Same re-entrancy reasoning as confirmRenameWithLinks — keep the modal
+    // guard armed across the whole IPC chain.
     const { sourcePath, targetDirPath, sourceRelPath, newRelPath } = pendingMove;
-    pendingMove = null;
     try {
       await moveFile(sourcePath, targetDirPath);
       const vaultForBookmarks = $vaultStore.currentPath;
@@ -624,6 +676,8 @@
     } catch (err) {
       const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
+    } finally {
+      pendingMove = null;
     }
   }
 

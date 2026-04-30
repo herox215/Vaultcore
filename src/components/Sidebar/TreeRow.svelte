@@ -25,8 +25,6 @@
     createFile,
     createFolder,
     deleteFile,
-    moveFile,
-    getBacklinks,
     writeFile,
     exportDecryptedFile,
     pickSavePath,
@@ -48,7 +46,7 @@
   import { disarmAutoLock } from "../../store/autoLockStore";
   import { lockFolder } from "../../ipc/commands";
   import type { FlatRow } from "../../lib/flattenTree";
-  import type { RenameCascadeRequest, MoveCascadeRequest } from "../../types/sidebar";
+  import type { RenameCascadeRequest, MoveDropRequest } from "../../types/sidebar";
 
   interface Props {
     row: FlatRow;
@@ -79,11 +77,13 @@
      */
     onRequestRenameCascade: (req: RenameCascadeRequest) => void;
     /**
-     * Hand a move-with-backlinks request up to Sidebar (#378). Same lifetime
-     * problem as rename — the source row dies on drop when the watcher
-     * fires the synthetic delete+add for the moved file.
+     * Hand a drop event up to Sidebar (#378). TreeRow only detects the drop
+     * and validates the drag source/target; Sidebar runs the rest of the
+     * pipeline (getBacklinks → cascade-or-direct dispatch → moveFile →
+     * updateLinksAfterRename → folder refreshes) on its always-mounted
+     * lifetime, symmetric with the rename path.
      */
-    onRequestMoveCascade: (req: MoveCascadeRequest) => void;
+    onRequestMoveCascade: (req: MoveDropRequest) => void;
   }
 
   let {
@@ -392,7 +392,7 @@
     isDragTarget = false;
   }
 
-  async function handleDrop(e: DragEvent) {
+  function handleDrop(e: DragEvent) {
     isDragTarget = false;
     if (!row.isDir) return;
     if (!e.dataTransfer || !isSidebarDrag(e.dataTransfer.types)) return;
@@ -401,48 +401,9 @@
       e.dataTransfer.getData("text/vaultcore-file") ||
       e.dataTransfer.getData("text/vaultcore-folder");
     if (!sourcePath || sourcePath === row.path) return;
-
-    const vault = getVaultRoot();
-    const sourceRelPath = vault ? toRelPath(sourcePath, vault) : sourcePath;
-    const sourceFilename = sourcePath.split("/").pop() ?? sourcePath;
-    const newAbsPath = row.path + "/" + sourceFilename;
-    const newRelPath = vault ? toRelPath(newAbsPath, vault) : newAbsPath;
-
-    let linkCount = 0;
-    let fileCount = 0;
-    try {
-      const backlinks = await getBacklinks(sourceRelPath);
-      linkCount = backlinks.length;
-      fileCount = new Set(backlinks.map((b) => b.sourcePath)).size;
-    } catch {
-      /* proceed without cascade */
-    }
-
-    if (linkCount > 0) {
-      onRequestMoveCascade({
-        sourcePath,
-        targetDirPath: row.path,
-        sourceRelPath,
-        newRelPath,
-        linkCount,
-        fileCount,
-      });
-      return;
-    }
-
-    try {
-      await moveFile(sourcePath, row.path);
-      if (vault) {
-        void bookmarksStore.renamePath(sourceRelPath, newRelPath, vault);
-      }
-      await onRefreshFolder(row.path);
-      const parent = parentOf(sourcePath);
-      if (parent) await onRefreshFolder(parent);
-      resolvedLinksStore.requestReload();
-    } catch (err) {
-      const ve = isVaultError(err) ? err : { kind: "Io" as const, message: String(err), data: null };
-      toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
-    }
+    // #378: hand off synchronously — Sidebar owns the rest of the pipeline
+    // so an intervening watcher event cannot tear down state mid-flight.
+    onRequestMoveCascade({ sourcePath, targetDirPath: row.path });
   }
 
 </script>

@@ -15,23 +15,17 @@ vi.mock("../../../ipc/commands", () => ({
   createFolder: vi.fn(),
   deleteFile: vi.fn(),
   moveFile: vi.fn(),
-  updateLinksAfterRename: vi.fn().mockResolvedValue({
-    updatedFiles: 2,
-    updatedLinks: 3,
-    failedFiles: [],
-    updatedPaths: [],
-  }),
+  updateLinksAfterRename: vi.fn(),
   getBacklinks: vi.fn(),
-  loadBookmarks: vi.fn().mockResolvedValue([]),
-  saveBookmarks: vi.fn().mockResolvedValue(undefined),
+  loadBookmarks: vi.fn(),
+  saveBookmarks: vi.fn(),
   writeFile: vi.fn(),
-  tagsList: vi.fn().mockResolvedValue([]),
-  searchTagPaths: vi.fn().mockResolvedValue([]),
+  listTags: vi.fn(),
   renameFile: vi.fn(),
   exportDecryptedFile: vi.fn(),
   pickSavePath: vi.fn(),
   lockFolder: vi.fn(),
-  listEncryptedFolders: vi.fn().mockResolvedValue([]),
+  listEncryptedFolders: vi.fn(),
 }));
 
 vi.mock("../../../ipc/events", () => ({
@@ -48,7 +42,16 @@ vi.mock("../../../ipc/events", () => ({
   listenEncryptDropProgress: vi.fn().mockResolvedValue(() => {}),
 }));
 
-import { listDirectory, renameFile, getBacklinks } from "../../../ipc/commands";
+import {
+  listDirectory,
+  renameFile,
+  getBacklinks,
+  updateLinksAfterRename,
+  loadBookmarks,
+  saveBookmarks,
+  listTags,
+  listEncryptedFolders,
+} from "../../../ipc/commands";
 import { vaultStore } from "../../../store/vaultStore";
 import { bookmarksStore } from "../../../store/bookmarksStore";
 import Sidebar from "../Sidebar.svelte";
@@ -114,10 +117,23 @@ describe("Sidebar rename cascade survives tree re-flatten (#378)", () => {
     bookmarksStore.reset();
     vaultStore.setReady({ currentPath: VAULT, fileList: [], fileCount: 0 });
     vi.clearAllMocks();
+    // Re-seed every mock return value AFTER clearAllMocks. Setting them in
+    // the vi.mock() factory only would be wiped by clearAllMocks and the
+    // confirm path below would receive `undefined` from updateLinksAfterRename.
     (renameFile as any).mockResolvedValue({
       newPath: `${VAULT}/Welcome Renamed.md`,
       linkCount: 3,
     });
+    (updateLinksAfterRename as any).mockResolvedValue({
+      updatedFiles: 2,
+      updatedLinks: 3,
+      failedFiles: [],
+      updatedPaths: [],
+    });
+    (loadBookmarks as any).mockResolvedValue([]);
+    (saveBookmarks as any).mockResolvedValue(undefined);
+    (listTags as any).mockResolvedValue([]);
+    (listEncryptedFolders as any).mockResolvedValue([]);
     (getBacklinks as any).mockResolvedValue([
       { sourcePath: "Daily Log.md" },
       { sourcePath: "Ideas.md" },
