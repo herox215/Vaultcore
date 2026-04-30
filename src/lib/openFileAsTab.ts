@@ -7,7 +7,13 @@
 import { tabStore } from "../store/tabStore";
 import { readFile } from "../ipc/commands";
 import { isVaultError } from "../types/errors";
-import { getExtension, getTabKind, IMAGE_EXTS, TEXT_EXTS } from "./tabKind";
+import {
+  defaultViewModeForViewport,
+  getExtension,
+  getTabKind,
+  IMAGE_EXTS,
+  TEXT_EXTS,
+} from "./tabKind";
 import { encryptedFolders } from "../store/encryptedFoldersStore";
 import { vaultStore } from "../store/vaultStore";
 import { openUnlockModal } from "../store/encryptionModalStore";
@@ -92,7 +98,12 @@ export async function openFileAsTab(absPath: string): Promise<string | null> {
 
   const ext = getExtension(absPath);
   if (ext === "md" || ext === "markdown") {
-    return tabStore.openTab(absPath);
+    // #388 — markdown opens default to read on mobile, edit elsewhere.
+    // Only the markdown branch passes the hint; image/canvas/text/unsupported
+    // viewers have no Reading Mode path so the hint would be a no-op there
+    // (and the tabStore would still write `viewMode: "read"` onto a tab kind
+    // that EditorPane ignores — wasted state).
+    return tabStore.openTab(absPath, defaultViewModeForViewport());
   }
   if (ext === "canvas") {
     return tabStore.openFileTab(absPath, "canvas");

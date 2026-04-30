@@ -1,46 +1,58 @@
 /**
  * #388 — Breadcrumbs reading-mode toggle is hidden on mobile.
  *
- * Mobile users get a dedicated topbar pencil button (rendered in
- * VaultLayout). To avoid two toggles in the same surface, the existing
- * Breadcrumbs toggle from #63 hides itself when the viewport is mobile.
- * Desktop and tablet keep the breadcrumbs toggle unchanged.
+ * Mobile users get a dedicated topbar pencil button (TopbarReadingToggle).
+ * To avoid two toggles in the same surface, the existing Breadcrumbs
+ * toggle from #63 hides itself when the viewport is mobile. Desktop and
+ * tablet keep the breadcrumbs toggle unchanged.
+ *
+ * Test setup notes: see TopbarReadingToggle.test.ts header. We mock
+ * viewportStore once at module load with a controllable writable rather
+ * than using vi.resetModules — Svelte 5 effect tracking shares state
+ * across the whole module graph and resetModules tears it.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { readable } from "svelte/store";
+
+const { viewportWritable } = vi.hoisted(() => ({
+  viewportWritable: (() => {
+    const { writable } = require("svelte/store");
+    return writable({ mode: "desktop", isCoarsePointer: false });
+  })(),
+}));
+
+vi.mock("../../../store/viewportStore", () => ({
+  viewportStore: viewportWritable,
+  createViewportStore: () => viewportWritable,
+}));
 
 vi.mock("../../../ipc/commands", () => ({
   listDirectory: vi.fn().mockResolvedValue([]),
 }));
 
-async function loadBreadcrumbs(
-  mode: "desktop" | "tablet" | "mobile",
-): Promise<{ Breadcrumbs: any; vaultStore: any; tabStore: any }> {
-  vi.resetModules();
-  vi.doMock("../../../store/viewportStore", () => ({
-    viewportStore: readable({ mode, isCoarsePointer: mode === "mobile" }),
-  }));
-  const { vaultStore } = await import("../../../store/vaultStore");
-  const { tabStore } = await import("../../../store/tabStore");
-  const Breadcrumbs = (await import("../Breadcrumbs.svelte")).default;
-  return { Breadcrumbs, vaultStore, tabStore };
+import { vaultStore } from "../../../store/vaultStore";
+import { tabStore } from "../../../store/tabStore";
+import Breadcrumbs from "../Breadcrumbs.svelte";
+
+function setViewportMode(mode: "desktop" | "tablet" | "mobile"): void {
+  viewportWritable.set({ mode, isCoarsePointer: mode === "mobile" });
 }
 
 describe("Breadcrumbs reading-mode toggle visibility (#388)", () => {
-  beforeEach(() => {});
+  beforeEach(() => {
+    tabStore._reset();
+    vaultStore.reset();
+    setViewportMode("desktop");
+  });
 
   afterEach(() => {
     cleanup();
-    vi.doUnmock("../../../store/viewportStore");
   });
 
   it("renders the toggle on desktop when viewMode is defined", async () => {
-    const { Breadcrumbs, vaultStore, tabStore } = await loadBreadcrumbs("desktop");
-    tabStore._reset();
-    vaultStore.reset();
+    setViewportMode("desktop");
     vaultStore.setReady({
       currentPath: "/vault",
       fileList: ["folder/note.md"],
@@ -60,9 +72,7 @@ describe("Breadcrumbs reading-mode toggle visibility (#388)", () => {
   });
 
   it("hides the toggle on mobile even when viewMode is defined", async () => {
-    const { Breadcrumbs, vaultStore, tabStore } = await loadBreadcrumbs("mobile");
-    tabStore._reset();
-    vaultStore.reset();
+    setViewportMode("mobile");
     vaultStore.setReady({
       currentPath: "/vault",
       fileList: ["folder/note.md"],
@@ -82,9 +92,7 @@ describe("Breadcrumbs reading-mode toggle visibility (#388)", () => {
   });
 
   it("renders the toggle on tablet (tablet inherits the desktop default)", async () => {
-    const { Breadcrumbs, vaultStore, tabStore } = await loadBreadcrumbs("tablet");
-    tabStore._reset();
-    vaultStore.reset();
+    setViewportMode("tablet");
     vaultStore.setReady({
       currentPath: "/vault",
       fileList: ["folder/note.md"],

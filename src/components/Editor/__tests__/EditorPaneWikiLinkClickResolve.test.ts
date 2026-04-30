@@ -144,7 +144,9 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     await flushAsync();
 
     expect(createFile).not.toHaveBeenCalled();
-    expect(openTabSpy).toHaveBeenCalledWith("/vault/test/Untitled.md");
+    // #388 — wiki-link follow now passes the viewport-aware viewMode hint;
+    // jsdom default viewport is desktop, so the hint resolves to "edit".
+    expect(openTabSpy).toHaveBeenCalledWith("/vault/test/Untitled.md", "edit");
   });
 
   it("triggers a reload without opening or creating when the live map lost the target (resolved=true, liveRelPath=null)", async () => {
@@ -244,7 +246,7 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     );
     await flushAsync();
 
-    expect(openTabSpy).toHaveBeenCalledWith("/vault/target.md");
+    expect(openTabSpy).toHaveBeenCalledWith("/vault/target.md", "edit");
     expect(requestRangeSpy).toHaveBeenCalledWith("/vault/target.md", 100, 130);
   });
 
@@ -279,7 +281,7 @@ describe("EditorPane wiki-link click — live-lookup against stale decoration (#
     );
     await flushAsync();
 
-    expect(openTabSpy).toHaveBeenCalledWith("/vault/target.md");
+    expect(openTabSpy).toHaveBeenCalledWith("/vault/target.md", "edit");
     expect(toastSpy).toHaveBeenCalled();
     const toastArg = toastSpy.mock.calls[0]?.[0] as { variant: string; message: string };
     expect(toastArg.variant).toBe("warning");

@@ -10,126 +10,127 @@
  *
  * Click behaviour:
  *   - Click flips the active tab's viewMode via tabStore.toggleViewMode.
- *   - Icon flips from BookOpen (in edit) to Pencil (in read), and back.
+ *   - data-mode flips between "edit" and "read" reactively.
  *
  * Per-tab persistence (T-top-9):
  *   - Toggle tab A to edit, switch active to B, switch back to A — A stays
- *     in edit and the icon reflects A's state, not the most-recently-toggled
+ *     in edit and the toggle reflects A's state, not the most-recently-toggled
  *     tab's state.
+ *
+ * Test setup notes:
+ *   - viewportStore is mocked once at module load with a controllable writable.
+ *     We do NOT use vi.resetModules — Svelte 5 effect tracking is shared
+ *     across the whole module graph and resetModules tears that lifecycle,
+ *     producing `effect_orphan` errors in onMount / $effect.
+ *   - `setViewportMode(mode)` swaps the mocked store's value between tests.
+ *   - Each test re-renders TopbarReadingToggle so it reads the current mode
+ *     during its onMount subscription.
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { readable } from "svelte/store";
+import { writable, get } from "svelte/store";
 
-vi.mock("../../../ipc/commands", () => ({}));
+// Hoisted: a single writable owned by the mock so every importer of
+// viewportStore sees the same store instance across all tests.
+const { viewportWritable } = vi.hoisted(() => ({
+  viewportWritable: (() => {
+    // Avoid top-of-file svelte import in vi.hoisted by deferring inside
+    // the IIFE — vi.hoisted runs after svelte resolves.
+    const { writable } = require("svelte/store");
+    return writable({ mode: "desktop", isCoarsePointer: false });
+  })(),
+}));
 
-async function loadToggle(
-  mode: "desktop" | "tablet" | "mobile",
-): Promise<{
-  TopbarReadingToggle: any;
-  tabStore: typeof import("../../../store/tabStore").tabStore;
-}> {
-  vi.resetModules();
-  vi.doMock("../../../store/viewportStore", () => ({
-    viewportStore: readable({ mode, isCoarsePointer: mode === "mobile" }),
-  }));
-  const { tabStore } = await import("../../../store/tabStore");
-  const TopbarReadingToggle = (await import("../TopbarReadingToggle.svelte")).default;
-  return { TopbarReadingToggle, tabStore };
+vi.mock("../../../store/viewportStore", () => ({
+  viewportStore: viewportWritable,
+  createViewportStore: () => viewportWritable,
+}));
+
+function setViewportMode(mode: "desktop" | "tablet" | "mobile"): void {
+  viewportWritable.set({ mode, isCoarsePointer: mode === "mobile" });
 }
 
+import { tabStore } from "../../../store/tabStore";
+import TopbarReadingToggle from "../TopbarReadingToggle.svelte";
+
 describe("TopbarReadingToggle visibility (#388)", () => {
+  beforeEach(() => {
+    tabStore._reset();
+    setViewportMode("desktop");
+  });
+
   afterEach(() => {
     cleanup();
-    vi.doUnmock("../../../store/viewportStore");
   });
 
   it("hidden on desktop even when an active markdown tab exists", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("desktop");
-    tabStore._reset();
+    setViewportMode("desktop");
     tabStore.openTab("/v/note.md");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on tablet even when an active markdown tab exists", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("tablet");
-    tabStore._reset();
+    setViewportMode("tablet");
     tabStore.openTab("/v/note.md");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on mobile when no tab is active", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
-    await tick();
+    setViewportMode("mobile");
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on mobile for graph tabs", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openGraphTab();
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on mobile for image tabs", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openFileTab("/v/photo.png", "image");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on mobile for canvas tabs", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openFileTab("/v/board.canvas", "canvas");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on mobile for text-viewer tabs (.json / .txt / etc.)", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openFileTab("/v/data.json", "text");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("hidden on mobile for unsupported tabs", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openFileTab("/v/blob.bin", "unsupported");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     expect(container.querySelector("[data-vc-topbar-reading-toggle]")).toBeNull();
   });
 
   it("visible on mobile for active markdown tab in edit mode (data-mode='edit')", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openTab("/v/note.md", "edit");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     const button = container.querySelector("[data-vc-topbar-reading-toggle]");
@@ -138,10 +139,8 @@ describe("TopbarReadingToggle visibility (#388)", () => {
   });
 
   it("visible on mobile for active markdown tab in read mode (data-mode='read')", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openTab("/v/note.md", "read");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     const button = container.querySelector("[data-vc-topbar-reading-toggle]");
@@ -150,10 +149,8 @@ describe("TopbarReadingToggle visibility (#388)", () => {
   });
 
   it("visible on mobile for tab with undefined viewMode (treated as edit)", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
+    setViewportMode("mobile");
     tabStore.openTab("/v/note.md");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
     const button = container.querySelector("[data-vc-topbar-reading-toggle]");
@@ -163,16 +160,17 @@ describe("TopbarReadingToggle visibility (#388)", () => {
 });
 
 describe("TopbarReadingToggle click behaviour (#388)", () => {
+  beforeEach(() => {
+    tabStore._reset();
+    setViewportMode("mobile");
+  });
+
   afterEach(() => {
     cleanup();
-    vi.doUnmock("../../../store/viewportStore");
   });
 
   it("click on edit-mode tab flips it to read and the data-mode updates", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
     const tabId = tabStore.openTab("/v/note.md", "edit");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
 
@@ -184,8 +182,7 @@ describe("TopbarReadingToggle click behaviour (#388)", () => {
     await fireEvent.click(button);
     await tick();
 
-    const after = await import("svelte/store").then((m) => m.get(tabStore));
-    const tab = after.tabs.find((t) => t.id === tabId);
+    const tab = get(tabStore).tabs.find((t) => t.id === tabId);
     expect(tab?.viewMode).toBe("read");
 
     const buttonAfter = container.querySelector(
@@ -195,10 +192,7 @@ describe("TopbarReadingToggle click behaviour (#388)", () => {
   });
 
   it("click on read-mode tab flips it to edit and the data-mode updates", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
     const tabId = tabStore.openTab("/v/note.md", "read");
-    await tick();
     const { container } = render(TopbarReadingToggle);
     await tick();
 
@@ -210,8 +204,7 @@ describe("TopbarReadingToggle click behaviour (#388)", () => {
     await fireEvent.click(button);
     await tick();
 
-    const after = await import("svelte/store").then((m) => m.get(tabStore));
-    expect(after.tabs.find((t) => t.id === tabId)?.viewMode).toBe("edit");
+    expect(get(tabStore).tabs.find((t) => t.id === tabId)?.viewMode).toBe("edit");
 
     const buttonAfter = container.querySelector(
       "[data-vc-topbar-reading-toggle]",
@@ -220,12 +213,9 @@ describe("TopbarReadingToggle click behaviour (#388)", () => {
   });
 
   it("per-tab persistence — toggle A, switch to B, switch back, A still in flipped mode", async () => {
-    const { TopbarReadingToggle, tabStore } = await loadToggle("mobile");
-    tabStore._reset();
     const idA = tabStore.openTab("/v/a.md", "edit");
     const idB = tabStore.openTab("/v/b.md", "edit");
     tabStore.activateTab(idA);
-    await tick();
 
     const { container } = render(TopbarReadingToggle);
     await tick();
@@ -236,20 +226,23 @@ describe("TopbarReadingToggle click behaviour (#388)", () => {
     expect(button.getAttribute("data-mode")).toBe("edit");
     await fireEvent.click(button);
     await tick();
-    expect(container.querySelector("[data-vc-topbar-reading-toggle]")
-      ?.getAttribute("data-mode")).toBe("read");
+    expect(
+      container.querySelector("[data-vc-topbar-reading-toggle]")?.getAttribute("data-mode"),
+    ).toBe("read");
 
     tabStore.activateTab(idB);
     await tick();
-    expect(container.querySelector("[data-vc-topbar-reading-toggle]")
-      ?.getAttribute("data-mode")).toBe("edit");
+    expect(
+      container.querySelector("[data-vc-topbar-reading-toggle]")?.getAttribute("data-mode"),
+    ).toBe("edit");
 
     tabStore.activateTab(idA);
     await tick();
-    expect(container.querySelector("[data-vc-topbar-reading-toggle]")
-      ?.getAttribute("data-mode")).toBe("read");
+    expect(
+      container.querySelector("[data-vc-topbar-reading-toggle]")?.getAttribute("data-mode"),
+    ).toBe("read");
 
-    const final = await import("svelte/store").then((m) => m.get(tabStore));
+    const final = get(tabStore);
     expect(final.tabs.find((t) => t.id === idA)?.viewMode).toBe("read");
     expect(final.tabs.find((t) => t.id === idB)?.viewMode).toBe("edit");
   });
