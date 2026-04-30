@@ -33,6 +33,14 @@ function renderBar(overrides: Partial<{
   });
 }
 
+function tabsOf(container: HTMLElement): [HTMLButtonElement, HTMLButtonElement, HTMLButtonElement] {
+  const list = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  );
+  if (list.length !== 3) throw new Error(`expected 3 tabs, got ${list.length}`);
+  return list as [HTMLButtonElement, HTMLButtonElement, HTMLButtonElement];
+}
+
 describe("MobileTabBar (#389)", () => {
   it("renders a tablist with 3 tabs and aria-label='Main navigation'", () => {
     const { container } = renderBar();
@@ -44,34 +52,32 @@ describe("MobileTabBar (#389)", () => {
 
   it("Files tab carries aria-controls='vc-mobile-drawer'; Search and More do not have aria-controls", () => {
     const { container } = renderBar();
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect(tabs[0].getAttribute("aria-controls")).toBe("vc-mobile-drawer");
-    expect(tabs[1].hasAttribute("aria-controls")).toBe(false);
-    expect(tabs[2].hasAttribute("aria-controls")).toBe(false);
+    const [files, search, more] = tabsOf(container);
+    expect(files.getAttribute("aria-controls")).toBe("vc-mobile-drawer");
+    expect(search.hasAttribute("aria-controls")).toBe(false);
+    expect(more.hasAttribute("aria-controls")).toBe(false);
   });
 
   it("aria-selected is present on every tab — never omitted (ARIA tabs §3.23)", () => {
     const { container } = renderBar();
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    for (const tab of Array.from(tabs)) {
+    for (const tab of tabsOf(container)) {
       expect(tab.hasAttribute("aria-selected")).toBe(true);
     }
   });
 
   it("when drawerOpen=false, every aria-selected is 'false'", () => {
     const { container } = renderBar({ drawerOpen: false });
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    for (const tab of Array.from(tabs)) {
+    for (const tab of tabsOf(container)) {
       expect(tab.getAttribute("aria-selected")).toBe("false");
     }
   });
 
   it("when drawerOpen=true, Files tab is selected and others are not", () => {
     const { container } = renderBar({ drawerOpen: true });
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
-    expect(tabs[1].getAttribute("aria-selected")).toBe("false");
-    expect(tabs[2].getAttribute("aria-selected")).toBe("false");
+    const [files, search, more] = tabsOf(container);
+    expect(files.getAttribute("aria-selected")).toBe("true");
+    expect(search.getAttribute("aria-selected")).toBe("false");
+    expect(more.getAttribute("aria-selected")).toBe("false");
   });
 
   it("clicking each tab invokes the matching callback exactly once", async () => {
@@ -79,10 +85,10 @@ describe("MobileTabBar (#389)", () => {
     const onSelectSearch = vi.fn();
     const onSelectMore = vi.fn();
     const { container } = renderBar({ onSelectFiles, onSelectSearch, onSelectMore });
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    await fireEvent.click(tabs[0]);
-    await fireEvent.click(tabs[1]);
-    await fireEvent.click(tabs[2]);
+    const [files, search, more] = tabsOf(container);
+    await fireEvent.click(files);
+    await fireEvent.click(search);
+    await fireEvent.click(more);
     expect(onSelectFiles).toHaveBeenCalledTimes(1);
     expect(onSelectSearch).toHaveBeenCalledTimes(1);
     expect(onSelectMore).toHaveBeenCalledTimes(1);
@@ -90,12 +96,14 @@ describe("MobileTabBar (#389)", () => {
 
   it("roving tabindex follows the active tab — Files is reachable when drawerOpen, none when closed", async () => {
     const { container, rerender } = renderBar({ drawerOpen: false });
-    let tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    // No active tab → first tab carries tabindex=0 (entry point) per the
-    // ARIA tabs pattern fallback.
-    expect(tabs[0].getAttribute("tabindex")).toBe("0");
-    expect(tabs[1].getAttribute("tabindex")).toBe("-1");
-    expect(tabs[2].getAttribute("tabindex")).toBe("-1");
+    {
+      const [files, search, more] = tabsOf(container);
+      // No active tab → first tab carries tabindex=0 (entry point) per the
+      // ARIA tabs pattern fallback.
+      expect(files.getAttribute("tabindex")).toBe("0");
+      expect(search.getAttribute("tabindex")).toBe("-1");
+      expect(more.getAttribute("tabindex")).toBe("-1");
+    }
 
     await rerender({
       drawerOpen: true,
@@ -104,49 +112,51 @@ describe("MobileTabBar (#389)", () => {
       onSelectMore: vi.fn(),
     });
     await tick();
-    tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect(tabs[0].getAttribute("tabindex")).toBe("0");
-    expect(tabs[1].getAttribute("tabindex")).toBe("-1");
-    expect(tabs[2].getAttribute("tabindex")).toBe("-1");
+    const [files, search, more] = tabsOf(container);
+    expect(files.getAttribute("tabindex")).toBe("0");
+    expect(search.getAttribute("tabindex")).toBe("-1");
+    expect(more.getAttribute("tabindex")).toBe("-1");
   });
 
   it("ArrowRight cycles focus forward and wraps; ArrowLeft cycles backward and wraps", async () => {
     const { container } = renderBar();
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs[0].focus();
-    expect(document.activeElement).toBe(tabs[0]);
+    const [files, search, more] = tabsOf(container);
+    files.focus();
+    expect(document.activeElement).toBe(files);
 
-    await fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
-    expect(document.activeElement).toBe(tabs[1]);
-    await fireEvent.keyDown(tabs[1], { key: "ArrowRight" });
-    expect(document.activeElement).toBe(tabs[2]);
-    await fireEvent.keyDown(tabs[2], { key: "ArrowRight" });
-    expect(document.activeElement).toBe(tabs[0]);
+    await fireEvent.keyDown(files, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(search);
+    await fireEvent.keyDown(search, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(more);
+    await fireEvent.keyDown(more, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(files);
 
-    await fireEvent.keyDown(tabs[0], { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(tabs[2]);
+    await fireEvent.keyDown(files, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(more);
   });
 
   it("Home jumps to the first tab; End jumps to the last", async () => {
     const { container } = renderBar();
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs[1].focus();
-    await fireEvent.keyDown(tabs[1], { key: "Home" });
-    expect(document.activeElement).toBe(tabs[0]);
-    await fireEvent.keyDown(tabs[0], { key: "End" });
-    expect(document.activeElement).toBe(tabs[2]);
+    const [files, search, more] = tabsOf(container);
+    search.focus();
+    await fireEvent.keyDown(search, { key: "Home" });
+    expect(document.activeElement).toBe(files);
+    await fireEvent.keyDown(files, { key: "End" });
+    expect(document.activeElement).toBe(more);
   });
 
   it("does not import viewportStore — parent-gated component is the architectural contract", async () => {
     // Verifies the v2 #4 fix: MobileTabBar must not self-gate on viewport.
     // Read the source instead of relying on a runtime probe (would still
-    // pass if a vi.mock blocked the import at runtime).
+    // pass if a vi.mock blocked the import at runtime). Match the import
+    // statement specifically — the word may appear in a comment explaining
+    // the contract, and that's fine.
     const fs = await import("node:fs/promises");
     const url = await import("node:url");
     const here = url.fileURLToPath(import.meta.url);
     const path = await import("node:path");
     const componentPath = path.resolve(path.dirname(here), "..", "MobileTabBar.svelte");
     const src = await fs.readFile(componentPath, "utf8");
-    expect(src.includes("viewportStore")).toBe(false);
+    expect(/from\s+["'][^"']*viewportStore["']/.test(src)).toBe(false);
   });
 });
