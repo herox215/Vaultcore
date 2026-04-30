@@ -294,19 +294,35 @@
     ) {
       const view = viewMap.get(tabId);
       if (view && view.hasFocus) {
-        const v = view;
+        const scheduledTabId = tabId;
         requestAnimationFrame(() => {
-          v.dispatch({
+          // Re-check the tab and view still match: a rapid tab switch
+          // between schedule and frame would otherwise dispatch on a stale
+          // (or destroyed) view. Reading viewMap by id and comparing
+          // against the active tab keeps the rAF idempotent against
+          // mid-flight activation changes.
+          const liveView = viewMap.get(scheduledTabId);
+          if (!liveView) return;
+          if (tabStore.getActiveTab()?.id !== scheduledTabId) return;
+          liveView.dispatch({
             effects: EditorView.scrollIntoView(
-              v.state.selection.main.head,
+              liveView.state.selection.main.head,
               { y: "center" },
             ),
           });
+          // Commit `lastDispatchTabId` AFTER the dispatch lands. If we set
+          // it pre-rAF, a follow-up effect that enters the gate during the
+          // rAF window would see a stale "we already dispatched for A"
+          // record and skip the legitimate redispatch for B.
+          lastDispatchTabId = scheduledTabId;
         });
-        lastDispatchTabId = tabId;
       }
     }
 
+    // `lastKbHeight` MUST update synchronously (not inside rAF): it tracks
+    // the last seen value so the next $effect run can detect a 0→>0
+    // transition. Deferring it would lose intermediate transitions if the
+    // store fires twice before the frame.
     lastKbHeight = kb;
   });
 
