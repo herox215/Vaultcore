@@ -3,7 +3,7 @@
 // on `.vc-editor-content`. The synthetic contextmenu that some platforms
 // dispatch after a touch hold must NOT also bubble through CM6's
 // `editorContextMenuExtension`, which would surface the menu twice.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 
@@ -88,6 +88,13 @@ describe("EditorPane long-press → context menu (#387)", () => {
     vaultStore.reset();
     readFile.mockReset().mockResolvedValue("hello world");
     vaultStore.setReady({ currentPath: "/vault", fileList: ["note.md"], fileCount: 1 });
+    // Match the rest of the suite: fake timers everywhere. Mount uses
+    // microtask-only awaits (flushAsync below) so fakes are safe end-to-end.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("opens the custom context menu after a 500ms touch hold on .vc-editor-content", async () => {
@@ -101,9 +108,7 @@ describe("EditorPane long-press → context menu (#387)", () => {
     expect(container.querySelector(".vc-context-menu")).toBeNull();
 
     surface.dispatchEvent(pointerEvent("pointerdown", { clientX: 120, clientY: 80 }));
-    // Real timers — the action's setTimeout(500) drives this. 600ms gives a
-    // safe margin without making the test sluggish.
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    vi.advanceTimersByTime(500);
     await tick();
 
     const menu = container.querySelector(".vc-context-menu") as HTMLElement;
@@ -120,7 +125,7 @@ describe("EditorPane long-press → context menu (#387)", () => {
 
     const surface = container.querySelector(".vc-editor-content") as HTMLElement;
     surface.dispatchEvent(pointerEvent("pointerdown", { clientX: 50, clientY: 50 }));
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    vi.advanceTimersByTime(500);
     await tick();
 
     const menusAfterFire = container.querySelectorAll(".vc-context-menu");

@@ -65,8 +65,17 @@ export function longPress(
   let startPointerType = "";
   let startTarget: EventTarget | null = null;
   let suppressorAbort: AbortController | null = null;
+  // The 600 ms ceiling fires `disarmSuppressor` if no other teardown signal
+  // arrives first. The timer ID lives outside the AbortController so
+  // `destroy()` can clear it directly — otherwise a fire-then-unmount
+  // sequence leaks one pending timeout per cycle.
+  let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
 
   function disarmSuppressor(): void {
+    if (ceilingTimer !== null) {
+      clearTimeout(ceilingTimer);
+      ceilingTimer = null;
+    }
     if (suppressorAbort) {
       suppressorAbort.abort();
       suppressorAbort = null;
@@ -100,7 +109,6 @@ export function longPress(
       "contextmenu",
       (e) => {
         e.preventDefault();
-        e.stopPropagation();
         // stopImmediatePropagation in capture-phase aborts dispatch to
         // any subsequent listener including bubble-phase handlers
         // attached to the original target (e.g. CM6's view.dom).
@@ -110,7 +118,7 @@ export function longPress(
       { capture: true, signal },
     );
 
-    setTimeout(() => disarmSuppressor(), SUPPRESSOR_CEILING_MS);
+    ceilingTimer = setTimeout(() => disarmSuppressor(), SUPPRESSOR_CEILING_MS);
 
     window.addEventListener("blur", () => disarmSuppressor(), { signal, once: true });
 
