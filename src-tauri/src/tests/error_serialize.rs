@@ -134,6 +134,21 @@ fn vault_error_serialize_crypto_error() {
 }
 
 #[test]
+fn vault_error_serialize_path_outside_vault() {
+    // #392: T-02 violation surfaced by PosixStorage's path-traversal
+    // guard. The `path` field carries the user-supplied relative path
+    // (NOT the resolved canonical) so the frontend's data-routing
+    // contract still works — `data` is always a path the user typed,
+    // never a leaked filesystem location.
+    let v = to_json(VaultError::PathOutsideVault {
+        path: "../escape.md".into(),
+    });
+    assert_eq!(v["kind"], "PathOutsideVault");
+    assert_eq!(v["message"], "Path resolves outside the vault: ../escape.md");
+    assert_eq!(v["data"], "../escape.md");
+}
+
+#[test]
 fn vault_error_serialize_picker_failed() {
     // #391: distinct from Io so the frontend can render a picker-specific
     // toast ("Could not open the file picker") instead of the generic

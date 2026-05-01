@@ -36,11 +36,11 @@ fn as_str_round_trips_through_parse() {
 }
 
 #[test]
-fn posix_path_returns_inner_path() {
+fn expect_posix_returns_inner_path() {
     let dir = TempDir::new().unwrap();
     let canonical = std::fs::canonicalize(dir.path()).unwrap();
     let h = VaultHandle::Posix(canonical.clone());
-    assert_eq!(h.posix_path(), Some(canonical.as_path()));
+    assert_eq!(h.expect_posix(), canonical.as_path());
 }
 
 #[test]

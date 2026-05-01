@@ -21,7 +21,10 @@ export type VaultErrorKind =
   // #391 — picker (NSOpenPanel / GTK file chooser / Android SAF) failed.
   // Cancellation is signalled via `null` from the picker wrappers; this
   // variant carries genuine errors only.
-  | "PickerFailed";
+  | "PickerFailed"
+  // #392 — request resolved outside the vault root (T-02 violation).
+  // Either a client bug or attack — never user-actionable.
+  | "PathOutsideVault";
 
 export interface VaultError {
   kind: VaultErrorKind;
@@ -75,6 +78,8 @@ export function vaultErrorCopy(err: VaultError): string {
       return "Encryption error. This file may be corrupted or from a newer VaultCore version.";
     case "PickerFailed":
       return "Could not open the file picker. Please try again.";
+    case "PathOutsideVault":
+      return "Request denied — the path is outside the vault.";
     default: {
       const _exhaustive: never = err.kind;
       return "An unexpected error occurred.";
