@@ -94,6 +94,21 @@ pub async fn read_file(
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<String, VaultError> {
+    // #392 PR-B: Android branch routes through the storage trait. The
+    // frontend sends absolute-looking strings (`<uri> + "/" + <rel>`)
+    // which we re-derive into a rel for VaultStorage::read_file.
+    // Encryption is a passthrough on Android (encrypted folders deferred
+    // to #345 follow-up) so we skip maybe_decrypt_read.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, rel) = android_storage_and_rel(&state, &path)?;
+        let bytes = storage.read_file(&rel)?;
+        return String::from_utf8(bytes).map_err(|_| VaultError::InvalidEncoding { path });
+    }
+
     let target = PathBuf::from(&path);
     let canonical = ensure_inside_vault(&state, &target)?;
     let bytes = std::fs::read(&canonical).map_err(|e| match e.kind() {
@@ -115,6 +130,24 @@ pub async fn write_file(
     path: String,
     content: String,
 ) -> Result<String, VaultError> {
+    // #392 PR-B: Android branch — same shape as read_file. Encryption
+    // is passthrough so we skip maybe_encrypt_write. The watcher
+    // doesn't run on Android so we skip write_ignore. The link/tag/
+    // index dispatch happens via dispatch_self_write on desktop only;
+    // on Android the per-file index update is a no-op (cold-start
+    // indexer is deferred), so the dispatch is also skipped — fulltext
+    // search starts empty until the lazy-index follow-up lands.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, rel) = android_storage_and_rel(&state, &path)?;
+        let bytes = content.as_bytes();
+        storage.write_file(&rel, bytes)?;
+        return Ok(hash_bytes(bytes));
+    }
+
     let target = PathBuf::from(&path);
 
     // For writes we canonicalize the *parent* (the target file may not exist
@@ -228,6 +261,61 @@ fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
         })
 }
 
+/// #392 PR-B: helpers for the Android branch of file commands. The
+/// frontend constructs absolute-looking strings as `<currentPath> + "/"
+/// + <relPath>` where `currentPath` is the SAF tree URI on Android.
+/// `derive_rel_for_android` strips the URI prefix to recover the rel
+/// the storage trait wants. `android_storage` clones the storage Arc
+/// for the calling task without holding the lock.
+#[cfg(target_os = "android")]
+fn android_storage_and_rel(
+    state: &VaultState,
+    target_str: &str,
+) -> Result<(std::sync::Arc<dyn crate::storage::VaultStorage>, String), VaultError> {
+    use crate::storage::VaultHandle;
+    let storage = {
+        let guard = state.storage.read().map_err(|_| VaultError::LockPoisoned)?;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| VaultError::VaultUnavailable {
+                path: target_str.to_string(),
+            })?
+    };
+    let uri = {
+        let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+        match guard.as_ref() {
+            Some(VaultHandle::ContentUri(u)) => u.clone(),
+            _ => {
+                return Err(VaultError::VaultUnavailable {
+                    path: target_str.to_string(),
+                });
+            }
+        }
+    };
+    // Frontend builds `<uri> + "/" + <rel>`. Strip the prefix.
+    let prefix = if uri.ends_with('/') {
+        uri.clone()
+    } else {
+        format!("{}/", uri)
+    };
+    let rel = if target_str == uri || target_str == prefix.trim_end_matches('/') {
+        String::new()
+    } else if let Some(stripped) = target_str.strip_prefix(&prefix) {
+        stripped.to_string()
+    } else if let Some(stripped) = target_str.strip_prefix(&uri) {
+        // Frontend may forget to include the slash separator.
+        stripped.trim_start_matches('/').to_string()
+    } else {
+        return Err(VaultError::PathOutsideVault {
+            path: target_str.to_string(),
+        });
+    };
+    crate::storage::validate_rel(&rel)?;
+    Ok((storage, rel))
+}
+
+
 /// Helper: record a path in the write-ignore list (D-12 self-filtering).
 fn record_write(state: &VaultState, path: PathBuf) {
     if let Ok(mut list) = state.write_ignore.lock() {
@@ -340,6 +428,51 @@ pub async fn create_file(
     name: String,
 ) -> Result<String, VaultError> {
     use tauri::Emitter;
+
+    // #392 PR-B: Android branch. The frontend's `parent` is the
+    // absolute (URI + "/" + parent_rel) form. Derive the parent rel,
+    // pick a non-colliding leaf name, write empty bytes via the
+    // storage trait. Frontend gets back the full absolute path so
+    // subsequent IPC calls work. No file_index sync (cold-start
+    // indexer is deferred); no watcher emit (no watcher on Android).
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, parent_rel) = android_storage_and_rel(&state, &parent)?;
+        let base_name = if name.is_empty() { "Untitled.md" } else { &name };
+        let final_rel = if parent_rel.is_empty() {
+            base_name.to_string()
+        } else {
+            format!("{}/{}", parent_rel, base_name)
+        };
+        crate::storage::validate_rel(&final_rel)?;
+        storage.create_file(&final_rel, b"")?;
+        // Reconstruct the absolute the frontend expects.
+        let uri = {
+            let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+            match guard.as_ref() {
+                Some(crate::storage::VaultHandle::ContentUri(u)) => u.clone(),
+                _ => return Err(VaultError::VaultUnavailable { path: parent }),
+            }
+        };
+        let abs = if uri.ends_with('/') {
+            format!("{}{}", uri, final_rel)
+        } else {
+            format!("{}/{}", uri, final_rel)
+        };
+        let _ = app.emit(
+            crate::watcher::FILE_CHANGED_EVENT,
+            crate::watcher::FileChangePayload {
+                path: abs.clone(),
+                kind: "create".to_string(),
+                new_path: None,
+            },
+        );
+        return Ok(abs);
+    }
+
     let final_path = create_file_impl(&state, parent, name)?;
     // #307: the watcher suppresses this create via write_ignore (D-12), so
     // emit a synthetic file_changed event — same pattern as delete_file (#102).
@@ -378,6 +511,36 @@ pub async fn create_folder(
     parent: String,
     name: String,
 ) -> Result<String, VaultError> {
+    // #392 PR-B: Android branch.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, parent_rel) = android_storage_and_rel(&state, &parent)?;
+        let base_name = if name.is_empty() { "New Folder" } else { &name };
+        let final_rel = if parent_rel.is_empty() {
+            base_name.to_string()
+        } else {
+            format!("{}/{}", parent_rel, base_name)
+        };
+        crate::storage::validate_rel(&final_rel)?;
+        storage.create_dir(&final_rel)?;
+        let uri = {
+            let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+            match guard.as_ref() {
+                Some(crate::storage::VaultHandle::ContentUri(u)) => u.clone(),
+                _ => return Err(VaultError::VaultUnavailable { path: parent }),
+            }
+        };
+        let abs = if uri.ends_with('/') {
+            format!("{}{}", uri, final_rel)
+        } else {
+            format!("{}/{}", uri, final_rel)
+        };
+        return Ok(abs);
+    }
+
     create_folder_impl(&state, parent, name)
 }
 
@@ -528,6 +691,51 @@ pub async fn rename_file(
     new_name: String,
 ) -> Result<RenameResult, VaultError> {
     use tauri::Emitter;
+
+    // #392 PR-B: Android branch. Same-parent rename only — the
+    // frontend's rename UX changes the leaf name, not the parent. The
+    // link cascade (rename references in other files) is desktop-only;
+    // returning link_count = 0 is safe because backlinks are also
+    // empty on Android until the lazy-index follow-up.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, old_rel) = android_storage_and_rel(&state, &old_path)?;
+        let new_rel = if let Some(idx) = old_rel.rfind('/') {
+            format!("{}/{}", &old_rel[..idx], new_name)
+        } else {
+            new_name.clone()
+        };
+        crate::storage::validate_rel(&new_rel)?;
+        storage.rename(&old_rel, &new_rel)?;
+        let uri = {
+            let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+            match guard.as_ref() {
+                Some(crate::storage::VaultHandle::ContentUri(u)) => u.clone(),
+                _ => return Err(VaultError::VaultUnavailable { path: old_path }),
+            }
+        };
+        let new_abs = if uri.ends_with('/') {
+            format!("{}{}", uri, new_rel)
+        } else {
+            format!("{}/{}", uri, new_rel)
+        };
+        let _ = app.emit(
+            crate::watcher::FILE_CHANGED_EVENT,
+            crate::watcher::FileChangePayload {
+                path: old_path,
+                kind: "rename".to_string(),
+                new_path: Some(new_abs.clone()),
+            },
+        );
+        return Ok(RenameResult {
+            new_path: new_abs,
+            link_count: 0,
+        });
+    }
+
     let old_canonical_for_event = std::fs::canonicalize(&old_path)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| old_path.clone());
@@ -624,6 +832,29 @@ pub async fn delete_file(
     path: String,
 ) -> Result<(), VaultError> {
     use tauri::Emitter;
+
+    // #392 PR-B: Android branch. Permanent delete via SAF — no
+    // .trash subfolder. DocumentFile.delete on Android 11+ moves to
+    // OS-level trash automatically (visible in Files app), so user-
+    // level recovery is preserved.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, rel) = android_storage_and_rel(&state, &path)?;
+        storage.delete(&rel)?;
+        let _ = app.emit(
+            crate::watcher::FILE_CHANGED_EVENT,
+            crate::watcher::FileChangePayload {
+                path,
+                kind: "delete".to_string(),
+                new_path: None,
+            },
+        );
+        return Ok(());
+    }
+
     // delete_file_impl returns the canonical source path AFTER a successful
     // delete + index dispatch, so the synthetic event uses the same form
     // the watcher would have seen.
@@ -701,6 +932,52 @@ pub async fn move_file(
     to_folder: String,
 ) -> Result<String, VaultError> {
     use tauri::Emitter;
+
+    // #392 PR-B: Android branch. Cross-parent rename via the storage
+    // trait (Kotlin uses DocumentsContract.moveDocument when the SAF
+    // provider supports FLAG_SUPPORTS_MOVE; otherwise the Kotlin side
+    // surfaces a clear error). Same link-cascade caveat as rename.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, from_rel) = android_storage_and_rel(&state, &from)?;
+        let (_, to_folder_rel) = android_storage_and_rel(&state, &to_folder)?;
+        let leaf = from_rel
+            .rsplit('/')
+            .next()
+            .ok_or_else(|| VaultError::PathOutsideVault { path: from.clone() })?;
+        let to_rel = if to_folder_rel.is_empty() {
+            leaf.to_string()
+        } else {
+            format!("{}/{}", to_folder_rel, leaf)
+        };
+        crate::storage::validate_rel(&to_rel)?;
+        storage.rename(&from_rel, &to_rel)?;
+        let uri = {
+            let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+            match guard.as_ref() {
+                Some(crate::storage::VaultHandle::ContentUri(u)) => u.clone(),
+                _ => return Err(VaultError::VaultUnavailable { path: from }),
+            }
+        };
+        let new_abs = if uri.ends_with('/') {
+            format!("{}{}", uri, to_rel)
+        } else {
+            format!("{}/{}", uri, to_rel)
+        };
+        let _ = app.emit(
+            crate::watcher::FILE_CHANGED_EVENT,
+            crate::watcher::FileChangePayload {
+                path: from,
+                kind: "rename".to_string(),
+                new_path: Some(new_abs.clone()),
+            },
+        );
+        return Ok(new_abs);
+    }
+
     let old_canonical_for_event = std::fs::canonicalize(&from)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| from.clone());
@@ -763,6 +1040,19 @@ pub async fn get_file_hash(
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<String, VaultError> {
+    // #392 PR-B: Android branch — read bytes through the storage trait,
+    // hash. Encryption is passthrough on Android so bytes are
+    // already plaintext.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, rel) = android_storage_and_rel(&state, &path)?;
+        let bytes = storage.read_file(&rel)?;
+        return Ok(hash_bytes(&bytes));
+    }
+
     get_file_hash_impl(&state, path)
 }
 
@@ -781,6 +1071,70 @@ pub async fn save_attachment(
     filename: String,
     bytes: Vec<u8>,
 ) -> Result<String, VaultError> {
+    // #392 PR-B: Android branch. The frontend supplies `folder` as
+    // either an absolute (URI-prefixed) string OR a vault-relative
+    // path; android_storage_and_rel handles both. Encryption is
+    // passthrough so we skip the encrypted-root checks. Collision
+    // avoidance still runs via storage.exists.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, folder_rel) = if folder.starts_with("content://") {
+            android_storage_and_rel(&state, &folder)?
+        } else {
+            // Vault-relative — re-derive without the prefix path.
+            let storage = {
+                let guard = state.storage.read().map_err(|_| VaultError::LockPoisoned)?;
+                guard.as_ref().cloned().ok_or_else(|| {
+                    VaultError::VaultUnavailable { path: folder.clone() }
+                })?
+            };
+            crate::storage::validate_rel(&folder)?;
+            (storage, folder.clone())
+        };
+        storage.create_dir(&folder_rel)?;
+        // Collision avoidance.
+        let (stem, ext) = if let Some(dot) = filename.rfind('.') {
+            (&filename[..dot], &filename[dot..])
+        } else {
+            (filename.as_str(), "")
+        };
+        let mut final_rel = if folder_rel.is_empty() {
+            filename.clone()
+        } else {
+            format!("{}/{}", folder_rel, filename)
+        };
+        if storage.exists(&final_rel) {
+            let mut found = false;
+            for n in 1u32..=1000 {
+                let candidate_name = format!("{} {}{}", stem, n, ext);
+                let candidate = if folder_rel.is_empty() {
+                    candidate_name
+                } else {
+                    format!("{}/{}", folder_rel, candidate_name)
+                };
+                if !storage.exists(&candidate) {
+                    final_rel = candidate;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(VaultError::Io(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "too many collisions for attachment filename",
+                )));
+            }
+        }
+        crate::storage::validate_rel(&final_rel)?;
+        storage.write_file(&final_rel, &bytes)?;
+        // Return vault-relative path; frontend's attachment renderer
+        // resolves `<currentPath>/<rel>` for display.
+        return Ok(final_rel);
+    }
+
     let vault_root = get_vault_root(&state)?;
 
     // Build and create the target folder.
@@ -901,6 +1255,16 @@ pub async fn read_attachment_bytes(
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<Vec<u8>, VaultError> {
+    // #392 PR-B: Android branch.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, rel) = android_storage_and_rel(&state, &path)?;
+        return storage.read_file(&rel);
+    }
+
     read_attachment_bytes_impl(&state, path)
 }
 
@@ -943,5 +1307,21 @@ pub async fn count_wiki_links(
     state: tauri::State<'_, VaultState>,
     filename: String,
 ) -> Result<u32, VaultError> {
+    // #392 PR-B: Android branch returns 0. count_wiki_links walks the
+    // entire vault tree (`walkdir::WalkDir`) which is impractical over
+    // ContentResolver. The frontend uses this count for a "you're
+    // about to delete a file with N references" confirmation modal;
+    // returning 0 means the modal still fires the delete (no false
+    // negative on what the user typed) but doesn't show a count. The
+    // lazy-index follow-up (#392 follow-up) will populate this once
+    // backlinks are tracked.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        return Ok(0);
+    }
+
     count_wiki_links_impl(&state, filename)
 }

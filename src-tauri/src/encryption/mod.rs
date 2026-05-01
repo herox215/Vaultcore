@@ -193,7 +193,14 @@ pub fn maybe_decrypt_read(
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
         match guard.as_ref() {
-            Some(h) => h.expect_posix().to_path_buf(),
+            Some(crate::storage::VaultHandle::Posix(p)) => p.clone(),
+            // #392 PR-B: encrypted folders are not yet supported on
+            // Android (canonical-path-keyed manifest is desktop-only).
+            // Passthrough ensures plain (unencrypted) Android vaults
+            // still flow read paths cleanly. Encrypt path is guarded
+            // separately at every encrypt_folder/unlock_folder entry.
+            #[cfg(target_os = "android")]
+            Some(crate::storage::VaultHandle::ContentUri(_)) => return Ok(bytes),
             None => return Ok(bytes),
         }
     };
@@ -232,7 +239,10 @@ pub fn maybe_encrypt_write(
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
         match guard.as_ref() {
-            Some(h) => h.expect_posix().to_path_buf(),
+            Some(crate::storage::VaultHandle::Posix(p)) => p.clone(),
+            // #392 PR-B: see maybe_decrypt_read for rationale.
+            #[cfg(target_os = "android")]
+            Some(crate::storage::VaultHandle::ContentUri(_)) => return Ok(bytes.to_vec()),
             None => return Ok(bytes.to_vec()),
         }
     };

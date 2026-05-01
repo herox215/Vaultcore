@@ -405,6 +405,23 @@ pub async fn update_links_after_rename(
     new_path: String,
     state: tauri::State<'_, VaultState>,
 ) -> Result<RenameResult, VaultError> {
+    // #392 PR-B: link cascade is desktop-only (uses walkdir + raw fs
+    // reads). On Android the frontend already received link_count=0
+    // from rename_file; this no-op makes the follow-up call safe.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let _ = (old_path, new_path);
+        return Ok(RenameResult {
+            updated_files: 0,
+            updated_links: 0,
+            failed_files: Vec::new(),
+            updated_paths: Vec::new(),
+        });
+    }
+
     // Get vault root — clone before releasing the lock.
     let vault_root: PathBuf = {
         let vp = state.current_vault.lock().map_err(|_| VaultError::VaultUnavailable {
@@ -765,7 +782,12 @@ pub async fn get_resolved_attachments(
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
         match guard.as_ref() {
-            Some(h) => h.expect_posix().to_path_buf(),
+            Some(crate::storage::VaultHandle::Posix(p)) => p.clone(),
+            // #392 PR-B: attachment resolution walks the vault tree
+            // with WalkDir — desktop-only. Returns empty so the
+            // frontend's image-render fallback kicks in.
+            #[cfg(target_os = "android")]
+            Some(crate::storage::VaultHandle::ContentUri(_)) => return Ok(HashMap::new()),
             None => return Ok(HashMap::new()),
         }
     };

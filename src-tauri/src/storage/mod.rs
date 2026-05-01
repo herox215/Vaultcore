@@ -8,10 +8,20 @@
 // to return per-platform locations.
 
 pub mod handle;
+pub mod permission;
 pub mod posix;
+
+#[cfg(target_os = "android")]
+pub mod android;
+
+#[cfg(test)]
+pub mod mock;
 
 pub use handle::VaultHandle;
 pub use posix::PosixStorage;
+
+#[cfg(target_os = "android")]
+pub use android::AndroidStorage;
 
 use crate::error::VaultError;
 use std::path::Path;
@@ -57,4 +67,37 @@ pub trait VaultStorage: Send + Sync {
     /// scratch under `<getFilesDir()>/vaults/<uri_hash>/` because mmap
     /// (Tantivy's storage backend) does not work over `ContentResolver`.
     fn metadata_path(&self) -> &Path;
+}
+
+/// Path-traversal guard shared by every backend. Free function rather
+/// than a trait method so backends can call it without `&self` (e.g.
+/// inside resolution helpers that don't yet hold the storage Arc).
+/// Rejects `..` segments, leading `/` or `\`, and null bytes — the
+/// structural invariants every rel_path must satisfy regardless of
+/// backing store. Storage impls layer their own backend-specific
+/// guards on top (`PosixStorage` adds canonical-starts-with checks;
+/// `AndroidStorage` relies on SAF's tree-URI scope enforcement).
+pub fn validate_rel(rel: &str) -> Result<(), VaultError> {
+    // Reject path-traversal sequences. Note: Path::components handles
+    // OS-specific separators correctly, but we explicitly check for
+    // `..` substring too because raw `..` in a single segment slips
+    // past component-by-component analysis on some platforms.
+    if rel.contains('\0') {
+        return Err(VaultError::PathOutsideVault {
+            path: rel.to_string(),
+        });
+    }
+    if rel.starts_with('/') || rel.starts_with('\\') {
+        return Err(VaultError::PathOutsideVault {
+            path: rel.to_string(),
+        });
+    }
+    for segment in rel.split(['/', '\\']) {
+        if segment == ".." {
+            return Err(VaultError::PathOutsideVault {
+                path: rel.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
