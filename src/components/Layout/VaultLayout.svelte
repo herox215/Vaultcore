@@ -9,6 +9,7 @@
   import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
   import MobileTabBar from "./MobileTabBar.svelte";
+  import MobileBurgerSheet from "./MobileBurgerSheet.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
@@ -111,12 +112,20 @@
   let mobileDrawerOpen = $state(false);
   let triggerRef: HTMLButtonElement | undefined = $state(undefined);
   let drawerEl: HTMLDivElement | undefined = $state(undefined);
+  // #397 — burger sheet (More-tab destination). Mounted alongside the
+  // drawer; both share the parent `isMobile` gate.
+  let mobileBurgerOpen = $state(false);
   const isMobile = $derived($viewportStore.mode === "mobile");
 
   // Resize-to-desktop forces the drawer closed so re-entering mobile starts
-  // from a known state.
+  // from a known state. Same applies to the burger sheet — without this,
+  // resizing while the burger is open would leave a stranded sheet that
+  // isn't reachable from any desktop affordance.
   $effect(() => {
-    if (!isMobile) mobileDrawerOpen = false;
+    if (!isMobile) {
+      mobileDrawerOpen = false;
+      mobileBurgerOpen = false;
+    }
   });
 
   // Focus management: when the drawer opens, focus the first focusable inside
@@ -160,10 +169,11 @@
   }
   function handleMobileMoreTab() {
     mobileDrawerOpen = false;
-    // TODO #397: replace with the burger sheet open flag once the component
-    // lands. The placeholder toast tells the user the destination exists
-    // without misrepresenting it as broken.
-    toastStore.info("Mehr-Menü folgt");
+    // #397 — burger sheet (Backlinks / Bookmarks / Outline / Outgoing /
+    // Properties / Settings router). Properties + Settings rows are
+    // still placeholders until #393 / #394 ship; the burger sheet itself
+    // stub-toasts those branches.
+    mobileBurgerOpen = true;
   }
 
   const unsubTab = tabStore.subscribe((state) => {
@@ -1069,6 +1079,12 @@
     onSelectFiles={handleMobileFilesTab}
     onSelectSearch={handleMobileSearchTab}
     onSelectMore={handleMobileMoreTab}
+  />
+  <!-- #397 — burger sheet (More-tab destination). Self-handles its own
+       open/close transitions; parent owns the open flag. -->
+  <MobileBurgerSheet
+    open={mobileBurgerOpen}
+    onClose={() => (mobileBurgerOpen = false)}
   />
 {/if}
 

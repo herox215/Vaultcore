@@ -25,7 +25,11 @@ vi.mock("../../OutgoingLinks/OutgoingLinksPanel.svelte", async () => ({
   default: (await import("./testStubs/StubPanel.svelte")).default,
 }));
 
-const toastInfo = vi.fn();
+// vi.mock factories are hoisted above any normal `const`, so a captured
+// vi.fn() reference would be uninitialized at mock-evaluation time. The
+// hoisted helper resolves that — same pattern as the viewportStore mock
+// shape from #386's responsive-collapse spec.
+const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
 vi.mock("../../../store/toastStore", () => ({
   toastStore: {
     info: toastInfo,
