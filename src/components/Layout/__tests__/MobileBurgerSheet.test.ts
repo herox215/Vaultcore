@@ -146,6 +146,40 @@ describe("MobileBurgerSheet (#397)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("focus trap: Tab from the last focusable wraps to the first; Shift+Tab from first wraps to last", async () => {
+    const { container } = renderSheet();
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    expect(buttons.length).toBe(6);
+    const first = buttons[0]!;
+    const last = buttons[buttons.length - 1]!;
+
+    // Forward wrap.
+    last.focus();
+    expect(document.activeElement).toBe(last);
+    await fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+
+    // Backward wrap.
+    first.focus();
+    await fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("focus trap: Tab away from a middle item does NOT preventDefault (browser handles native tab order)", async () => {
+    // The trap only kicks in at boundaries (first/last). Middle items
+    // should let the browser's native tab order through — a noop preventDefault
+    // would feel sluggish without changing user-visible behaviour.
+    const { container } = renderSheet();
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const middle = buttons[2]!;
+    middle.focus();
+    const ev = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    dialog.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
   it("Escape from menu view calls onClose; Escape from panel view returns to menu", async () => {
     const onClose = vi.fn();
     const { container } = renderSheet({ onClose });

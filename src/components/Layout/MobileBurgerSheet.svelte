@@ -41,7 +41,12 @@
   type PanelId = "backlinks" | "bookmarks" | "outline" | "outgoing";
 
   let activePanel = $state<PanelId | null>(null);
-  let sheetEl: HTMLDivElement | undefined = $state(undefined);
+  // bind:this writes the live DOM node here. Svelte 5 wants a $state target
+  // even for imperative refs because the keydown trap (focusables() below)
+  // reads it from inside reactive scope — plain `let` triggers a
+  // non_reactive_update warning. Same pattern as the drawer's drawerEl in
+  // VaultLayout.svelte.
+  let sheetEl = $state<HTMLDivElement | undefined>(undefined);
 
   // Reset to the menu view whenever the sheet closes. Each open thus
   // starts on the menu — no implicit deep-link to the last-viewed panel,
@@ -105,17 +110,53 @@
     onClose();
   }
 
+  // Standard keyboard-trap selector: anything that can take focus, minus
+  // explicitly disabled or programmatically-only-focusable nodes.
+  const FOCUSABLE_SELECTOR = [
+    'button:not([disabled]):not([tabindex="-1"])',
+    'a[href]:not([tabindex="-1"])',
+    'input:not([disabled]):not([tabindex="-1"])',
+    'select:not([disabled]):not([tabindex="-1"])',
+    'textarea:not([disabled]):not([tabindex="-1"])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(",");
+
+  function focusables(): HTMLElement[] {
+    if (!sheetEl) return [];
+    return Array.from(sheetEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+  }
+
   function onKeydown(e: KeyboardEvent) {
-    if (e.key !== "Escape") return;
-    e.preventDefault();
-    if (activePanel !== null) {
-      // Two-step Escape: panel view → menu view first; another Escape
-      // would then close. Matches the drawer pattern from #386 where a
-      // stacked nav element gives users an "undo last navigation"
-      // affordance instead of dumping them back to the editor.
-      activePanel = null;
-    } else {
-      onClose();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (activePanel !== null) {
+        // Two-step Escape: panel view → menu view first; another Escape
+        // would then close. Matches the drawer pattern from #386 where a
+        // stacked nav element gives users an "undo last navigation"
+        // affordance instead of dumping them back to the editor.
+        activePanel = null;
+      } else {
+        onClose();
+      }
+      return;
+    }
+    if (e.key === "Tab") {
+      // Focus trap: keep keyboard navigation inside the dialog. Without
+      // this, Shift+Tab from the back button (or Tab from the last row)
+      // escapes into the editor behind the scrim — confusing for any
+      // assistive-tech user.
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   }
 </script>
