@@ -10,6 +10,9 @@
 pub mod handle;
 pub mod posix;
 
+#[cfg(test)]
+pub mod mock;
+
 pub use handle::VaultHandle;
 pub use posix::PosixStorage;
 
