@@ -94,12 +94,24 @@ pub struct EncryptProgress {
 
 fn vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    guard
-        .as_ref()
-        .map(|h| h.expect_posix().to_path_buf())
-        .ok_or_else(|| VaultError::VaultUnavailable {
+    match guard.as_ref() {
+        Some(crate::storage::VaultHandle::Posix(p)) => Ok(p.clone()),
+        // #392 PR-B: encrypted folders are not supported on
+        // content://-rooted vaults yet. The manifest is canonical-path-
+        // keyed; the SAF layer doesn't have an equivalent. Fail-fast
+        // here so every encryption command (encrypt_folder,
+        // unlock_folder, lock_folder, lock_all_folders,
+        // list_encrypted_folders, export_decrypted_file) surfaces a
+        // single discriminated error to the frontend. Tracked: #345
+        // storage-trait-aware encryption follow-up.
+        #[cfg(target_os = "android")]
+        Some(crate::storage::VaultHandle::ContentUri(_)) => {
+            Err(VaultError::EncryptionUnsupportedOnAndroid)
+        }
+        None => Err(VaultError::VaultUnavailable {
             path: String::from("<no vault>"),
-        })
+        }),
+    }
 }
 
 /// Canonical absolute path of the folder the user referenced, with
@@ -501,12 +513,19 @@ pub fn export_decrypted_file_impl(
             .current_vault
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
-        guard
-            .as_ref()
-            .map(|h| h.expect_posix().to_path_buf())
-            .ok_or_else(|| VaultError::VaultUnavailable {
-                path: source.clone(),
-            })?
+        match guard.as_ref() {
+            Some(crate::storage::VaultHandle::Posix(p)) => p.clone(),
+            // #392 PR-B: see vault_root helper for rationale.
+            #[cfg(target_os = "android")]
+            Some(crate::storage::VaultHandle::ContentUri(_)) => {
+                return Err(VaultError::EncryptionUnsupportedOnAndroid);
+            }
+            None => {
+                return Err(VaultError::VaultUnavailable {
+                    path: source.clone(),
+                });
+            }
+        }
     };
 
     // 2. Canonicalize source + enforce vault scope against the single
