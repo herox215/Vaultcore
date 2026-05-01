@@ -53,6 +53,7 @@ function renderSheet(
     open: boolean;
     onClose: () => void;
     onSelectProperties: () => void;
+    onOpenSettings: () => void;
   }> = {},
 ) {
   return render(MobileBurgerSheet, {
@@ -60,6 +61,7 @@ function renderSheet(
       open: true,
       onClose: vi.fn(),
       onSelectProperties: vi.fn(),
+      onOpenSettings: vi.fn(),
       ...overrides,
     },
   });
@@ -128,13 +130,18 @@ describe("MobileBurgerSheet (#397)", () => {
     expect(toastInfo).not.toHaveBeenCalled();
   });
 
-  it("clicking the Settings row fires toastStore.info AND calls onClose (TODO #394)", async () => {
+  it("clicking the Settings row calls onOpenSettings AND onClose (#394 wired)", async () => {
+    // #394 replaces the old stub-toast with a real callback. The row no
+    // longer fires toastStore.info — the parent (VaultLayout) now opens
+    // the mobile settings sheet via the onOpenSettings callback.
     const onClose = vi.fn();
-    const { container } = renderSheet({ onClose });
+    const onOpenSettings = vi.fn();
+    const { container } = renderSheet({ onClose, onOpenSettings });
     const row = container.querySelector<HTMLButtonElement>('[data-row-id="settings"]');
     await fireEvent.click(row!);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
   it("clicking the scrim calls onClose", async () => {
