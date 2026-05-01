@@ -149,6 +149,39 @@ fn vault_error_serialize_path_outside_vault() {
 }
 
 #[test]
+fn vault_error_serialize_vault_permission_revoked() {
+    // #392 PR-B: SAF tree URI grant was revoked. `data` is the URI so
+    // the frontend's re-pick UX can route the user back through
+    // pickVaultFolder() with no retyping.
+    let v = to_json(VaultError::VaultPermissionRevoked {
+        uri: "content://com.android.externalstorage.documents/tree/primary%3AVault".into(),
+    });
+    assert_eq!(v["kind"], "VaultPermissionRevoked");
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("Vault permission revoked: content://"));
+    assert_eq!(
+        v["data"],
+        "content://com.android.externalstorage.documents/tree/primary%3AVault"
+    );
+}
+
+#[test]
+fn vault_error_serialize_encryption_unsupported_on_android() {
+    // #392 PR-B: encrypt_folder / unlock_folder etc. early-return with
+    // this when the active vault is `content://`-rooted. Data-less —
+    // the only relevant action is "wait for the #345 follow-up".
+    let v = to_json(VaultError::EncryptionUnsupportedOnAndroid);
+    assert_eq!(v["kind"], "EncryptionUnsupportedOnAndroid");
+    assert_eq!(
+        v["message"],
+        "Encrypted folders are not yet supported on Android."
+    );
+    assert_eq!(v["data"], Value::Null);
+}
+
+#[test]
 fn vault_error_serialize_picker_failed() {
     // #391: distinct from Io so the frontend can render a picker-specific
     // toast ("Could not open the file picker") instead of the generic
