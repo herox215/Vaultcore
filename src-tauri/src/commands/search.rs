@@ -349,6 +349,20 @@ pub async fn rebuild_index(
     use tauri::Emitter;
     use crate::indexer::IndexCmd;
 
+    // #392 PR-B: cold-rebuild walks the vault tree with WalkDir — not
+    // viable over ContentResolver. Returns Ok no-op on Android so the
+    // frontend's "rebuild index" menu entry doesn't crash; the index
+    // populates lazily as files are opened. Tracked: lazy-index
+    // follow-up.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let _ = app;
+        return Ok(());
+    }
+
     // Get vault path — clone so the Mutex is released before the await.
     let vault_path = {
         let vp = state

@@ -104,6 +104,16 @@ pub async fn list_snippets(
     state: tauri::State<'_, VaultState>,
     vault_path: String,
 ) -> Result<Vec<String>, VaultError> {
+    // #392 PR-B: snippets aren't surfaced on Android in v1. See
+    // templates.rs for the rationale (POSIX-only walkdir + read).
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        return Ok(Vec::new());
+    }
+
     list_snippets_impl(&state, vault_path)
 }
 
@@ -139,5 +149,13 @@ pub async fn read_snippet(
     vault_path: String,
     filename: String,
 ) -> Result<String, VaultError> {
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        return Err(VaultError::FileNotFound { path: filename });
+    }
+
     read_snippet_impl(&state, vault_path, filename)
 }

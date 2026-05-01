@@ -15,25 +15,63 @@ use std::path::{Path, PathBuf};
 const BOOKMARKS_DIR: &str = ".vaultcore";
 const BOOKMARKS_FILE: &str = "bookmarks.json";
 
-/// Resolve `<vault>/.vaultcore/bookmarks.json` after confirming `vault_path`
+/// Resolve the on-disk bookmarks JSON path after confirming `vault_path`
 /// matches the currently-open vault.
+///
+/// Desktop: `<vault>/.vaultcore/bookmarks.json` (canonicalize the input,
+/// require byte-equality with `current_vault`'s POSIX path).
+///
+/// #392 PR-B Android: `<storage.metadata_path()>/bookmarks.json` —
+/// app-private scratch under `<getFilesDir()>/vaults/<uri-hash>/`. The
+/// vault_path equality check uses `canonical_dedup_key` so trailing-
+/// slash variations of the same content URI compare as equal.
 fn bookmarks_path_for(state: &VaultState, vault_path: &str) -> Result<PathBuf, VaultError> {
-    let canonical = std::fs::canonicalize(vault_path).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => VaultError::FileNotFound { path: vault_path.to_string() },
-        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: vault_path.to_string() },
-        _ => VaultError::Io(e),
-    })?;
+    use crate::storage::VaultHandle;
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    let vault = guard
-        .as_ref()
-        .ok_or_else(|| VaultError::VaultUnavailable {
-            path: vault_path.to_string(),
-        })?
-        .expect_posix();
-    if canonical != *vault {
-        return Err(VaultError::PermissionDenied { path: canonical.display().to_string() });
+    let handle = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
+        path: vault_path.to_string(),
+    })?;
+    match handle {
+        VaultHandle::Posix(vault) => {
+            let canonical = std::fs::canonicalize(vault_path).map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => VaultError::FileNotFound {
+                    path: vault_path.to_string(),
+                },
+                std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied {
+                    path: vault_path.to_string(),
+                },
+                _ => VaultError::Io(e),
+            })?;
+            if canonical != *vault {
+                return Err(VaultError::PermissionDenied {
+                    path: canonical.display().to_string(),
+                });
+            }
+            Ok(canonical.join(BOOKMARKS_DIR).join(BOOKMARKS_FILE))
+        }
+        #[cfg(target_os = "android")]
+        VaultHandle::ContentUri(uri) => {
+            // Equality via canonical_dedup_key tolerates trailing-slash
+            // variations the frontend may produce.
+            let frontend_key = VaultHandle::ContentUri(vault_path.to_string()).canonical_dedup_key();
+            let backend_key = handle.canonical_dedup_key();
+            if frontend_key != backend_key {
+                return Err(VaultError::PermissionDenied {
+                    path: vault_path.to_string(),
+                });
+            }
+            // metadata_path is app-private POSIX scratch; safe for
+            // std::fs::*. Drop the handle guard before going through
+            // the storage RwLock to avoid lock-order issues.
+            let _ = uri;
+            drop(guard);
+            let storage_guard = state.storage.read().map_err(|_| VaultError::LockPoisoned)?;
+            let storage = storage_guard.as_ref().cloned().ok_or_else(|| {
+                VaultError::VaultUnavailable { path: vault_path.to_string() }
+            })?;
+            Ok(storage.metadata_path().join(BOOKMARKS_FILE))
+        }
     }
-    Ok(canonical.join(BOOKMARKS_DIR).join(BOOKMARKS_FILE))
 }
 
 pub fn load_bookmarks_impl(state: &VaultState, vault_path: String) -> Result<Vec<String>, VaultError> {

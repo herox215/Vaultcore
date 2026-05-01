@@ -537,6 +537,20 @@ pub(crate) async fn merge_external_change_impl(
 ) -> Result<MergeCommandResult, crate::error::VaultError> {
     use crate::merge::{three_way_merge, MergeOutcome};
 
+    // #392 PR-B: merge_external_change is fired by the watcher when an
+    // external edit is detected. On Android there's no watcher, so this
+    // command should never reach here in normal flow — but if the
+    // frontend retries from a stale event after switching vaults, we
+    // surface a clear error instead of panicking at expect_posix.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| crate::error::VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let _ = (editor_content, last_saved_content);
+        return Err(crate::error::VaultError::VaultUnavailable { path });
+    }
+
     // T-02-18 mitigation: validate path is inside vault
     let vault_path: PathBuf = {
         let guard = state
