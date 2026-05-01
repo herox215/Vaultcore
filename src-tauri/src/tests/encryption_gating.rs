@@ -81,7 +81,7 @@ async fn dispatch_self_write_gate_runs_before_coordinator_probe() {
     std::fs::write(&secret_file, "plaintext payload").unwrap();
 
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(vault.clone()));
     // Attach a real coordinator so a MISSING gate would actually
     // mutate index state and fail a follow-up invariant.
     let coord = IndexCoordinator::new(&vault).await.unwrap();
@@ -139,7 +139,7 @@ async fn encrypt_folder_locks_root_before_sealing_files() {
     std::fs::write(vault.join("journal/a.md"), b"# A\n").unwrap();
     std::fs::write(vault.join("journal/b.md"), b"# B\n").unwrap();
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(vault.clone()));
 
     // Directly call the Tauri command body via its inner impl — we
     // don't have a mock AppHandle here, so simulate the pieces the
@@ -325,7 +325,7 @@ async fn read_file_decrypts_under_unlocked_root() {
 
     // Now set up state as-if the user had unlocked the folder via the IPC.
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(vault.clone()));
     let folder_canon = folder.canonicalize().unwrap();
     // Not locked — but key present in the keyring.
     let mut key_copy = Zeroizing::new([0u8; 32]);
@@ -372,7 +372,7 @@ async fn write_file_encrypts_under_unlocked_root() {
     .unwrap();
 
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(vault.clone()));
     let folder_canon = folder.canonicalize().unwrap();
     let mut key_copy = Zeroizing::new([0u8; 32]);
     key_copy.copy_from_slice(key.as_slice());

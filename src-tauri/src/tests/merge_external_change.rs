@@ -37,7 +37,7 @@ fn tokio_test_block_on<F: std::future::Future>(f: F) -> F::Output {
 fn state_with_vault_no_coord(root: &Path) -> VaultState {
     let canonical = std::fs::canonicalize(root).unwrap();
     let s = VaultState::default();
-    *s.current_vault.lock().unwrap() = Some(canonical);
+    *s.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(canonical));
     s
 }
 
@@ -48,7 +48,7 @@ fn state_with_vault_no_coord(root: &Path) -> VaultState {
 async fn state_with_vault_and_coord(root: &Path) -> VaultState {
     let canonical = std::fs::canonicalize(root).unwrap();
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(canonical.clone());
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(canonical.clone()));
 
     let coord =
         IndexCoordinator::new_with_file_index(&canonical, Arc::clone(&state.file_index))
