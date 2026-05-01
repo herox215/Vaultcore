@@ -10,6 +10,7 @@
   import RightSidebar from "./RightSidebar.svelte";
   import MobileTabBar from "./MobileTabBar.svelte";
   import MobileBurgerSheet from "./MobileBurgerSheet.svelte";
+  import MobilePropertiesSheet from "./MobilePropertiesSheet.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
@@ -115,16 +116,22 @@
   // #397 — burger sheet (More-tab destination). Mounted alongside the
   // drawer; both share the parent `isMobile` gate.
   let mobileBurgerOpen = $state(false);
+  // #393 — properties bottom sheet, opened from the burger sheet's
+  // Properties row. Mutually exclusive with `mobileBurgerOpen` at the
+  // user-flow level (burger calls onClose before flipping this), so the
+  // two never co-render in practice.
+  let mobilePropertiesOpen = $state(false);
   const isMobile = $derived($viewportStore.mode === "mobile");
 
   // Resize-to-desktop forces the drawer closed so re-entering mobile starts
-  // from a known state. Same applies to the burger sheet — without this,
-  // resizing while the burger is open would leave a stranded sheet that
-  // isn't reachable from any desktop affordance.
+  // from a known state. Same applies to the burger + properties sheets —
+  // without this, resizing while either is open would leave a stranded
+  // sheet that isn't reachable from any desktop affordance.
   $effect(() => {
     if (!isMobile) {
       mobileDrawerOpen = false;
       mobileBurgerOpen = false;
+      mobilePropertiesOpen = false;
     }
   });
 
@@ -1104,6 +1111,15 @@
   <MobileBurgerSheet
     open={mobileBurgerOpen}
     onClose={() => (mobileBurgerOpen = false)}
+    onSelectProperties={() => (mobilePropertiesOpen = true)}
+  />
+  <!-- #393 — properties bottom sheet, opened from the burger sheet's
+       Properties row. Reads frontmatter via PropertiesPanel's existing
+       activeViewStore subscription; lifts above the on-screen keyboard
+       via #395's `--vc-keyboard-height` CSS var. -->
+  <MobilePropertiesSheet
+    open={mobilePropertiesOpen}
+    onClose={() => (mobilePropertiesOpen = false)}
   />
 {/if}
 

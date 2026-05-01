@@ -33,9 +33,16 @@
   let {
     open,
     onClose,
+    onSelectProperties,
   }: {
     open: boolean;
     onClose: () => void;
+    /**
+     * #393 — invoked when the user taps the Properties row. The parent
+     * is expected to flip its `mobilePropertiesOpen` flag; the burger
+     * sheet then calls `onClose()` so the two sheets never co-render.
+     */
+    onSelectProperties: () => void;
   } = $props();
 
   type PanelId = "backlinks" | "bookmarks" | "outline" | "outgoing";
@@ -73,7 +80,7 @@
     id: "backlinks" | "bookmarks" | "outline" | "outgoing" | "properties" | "settings";
     label: string;
     icon: typeof Link2;
-    action: "panel" | "stub";
+    action: "panel" | "properties" | "stub";
     panelId?: PanelId;
     stubMessage?: string;
   };
@@ -86,7 +93,7 @@
     { id: "bookmarks",  label: "Lesezeichen",       icon: Bookmark,     action: "panel", panelId: "bookmarks" },
     { id: "outline",    label: "Gliederung",        icon: List,         action: "panel", panelId: "outline" },
     { id: "outgoing",   label: "Ausgehende Links",  icon: ArrowUpRight, action: "panel", panelId: "outgoing" },
-    { id: "properties", label: "Eigenschaften",     icon: FileText,     action: "stub",  stubMessage: "Eigenschaften folgen" },
+    { id: "properties", label: "Eigenschaften",     icon: FileText,     action: "properties" },
     { id: "settings",   label: "Einstellungen",     icon: SettingsIcon, action: "stub",  stubMessage: "Einstellungen folgen" },
   ];
 
@@ -102,10 +109,17 @@
       activePanel = row.panelId;
       return;
     }
-    // TODO #393 (properties) / #394 (settings). The toast tells the user
-    // the destination exists but isn't wired yet; closing the sheet keeps
-    // the More tab's tap-feedback intact (no dead-end where the menu
-    // stays open after an apparent-no-op).
+    if (row.action === "properties") {
+      // #393 — hand off to the parent's properties sheet, then close
+      // ourselves so the two sheets never co-render.
+      onSelectProperties();
+      onClose();
+      return;
+    }
+    // TODO #394 (settings). The toast tells the user the destination
+    // exists but isn't wired yet; closing the sheet keeps the More tab's
+    // tap-feedback intact (no dead-end where the menu stays open after
+    // an apparent-no-op).
     if (row.stubMessage) toastStore.info(row.stubMessage);
     onClose();
   }
