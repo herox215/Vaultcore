@@ -25,3 +25,5 @@ mod encryption_gating;
 mod export_decrypted;
 mod legacy_semantic_cleanup;
 mod picker;
+mod storage_posix;
+mod vault_handle;
