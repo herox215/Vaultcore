@@ -866,6 +866,91 @@ pub fn ensure_home_canvas(vault_path: &Path) -> Result<(), VaultError> {
     Ok(())
 }
 
+/// Storage-trait variant of `ensure_home_canvas` for backends that don't
+/// surface a POSIX-mappable vault root (Android SAF). Writes the same
+/// JSON template through the `VaultStorage` trait using vault-relative
+/// paths, so the file lands in `<tree>/.vaultcore/home.canvas` regardless
+/// of the underlying ContentProvider. Idempotent: skips when the file
+/// already exists.
+pub fn ensure_home_canvas_via_storage(
+    storage: &dyn crate::storage::VaultStorage,
+    display_name: &str,
+) -> Result<(), VaultError> {
+    const REL_PATH: &str = ".vaultcore/home.canvas";
+    if storage.exists(REL_PATH) {
+        return Ok(());
+    }
+    storage.create_dir(".vaultcore")?;
+
+    let welcome_text = format!(
+        "# {}\n\nEdit this canvas — it's your personal home.",
+        display_name
+    );
+    let doc = serde_json::json!({
+        "nodes": [{
+            "id": "welcome",
+            "type": "text",
+            "x": 0,
+            "y": 0,
+            "width": 400,
+            "height": 120,
+            "text": welcome_text,
+        }],
+        "edges": [],
+    });
+
+    let mut buf = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+    let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+    serde::Serialize::serialize(&doc, &mut ser).map_err(|e| {
+        VaultError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    })?;
+    storage.create_file(REL_PATH, &buf)?;
+    Ok(())
+}
+
+/// Storage-trait variant of `ensure_docs_page` for backends that don't
+/// surface a POSIX-mappable vault root. Reads the head of the existing
+/// file (when present) via the storage trait to compare the embedded
+/// `vaultcore_docs_version` against the running build, and rewrites
+/// only on mismatch — same semantics as the POSIX path, expressed in
+/// vault-relative form.
+pub fn ensure_docs_page_via_storage(
+    storage: &dyn crate::storage::VaultStorage,
+) -> Result<(), VaultError> {
+    const REL_PATH: &str = ".vaultcore/DOCS.md";
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    if storage.exists(REL_PATH) {
+        if let Ok(bytes) = storage.read_file(REL_PATH) {
+            let head_len = bytes.len().min(1024);
+            if let Ok(head) = std::str::from_utf8(&bytes[..head_len]) {
+                let needle = format!("vaultcore_docs_version: \"{}\"", current_version);
+                if head.contains(&needle) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    storage.create_dir(".vaultcore")?;
+
+    let header = format!(
+        "---\nvaultcore_docs_version: \"{}\"\n---\n\n",
+        current_version
+    );
+    let mut contents = String::with_capacity(header.len() + DOCS_TEMPLATE_BODY.len());
+    contents.push_str(&header);
+    contents.push_str(DOCS_TEMPLATE_BODY);
+
+    if storage.exists(REL_PATH) {
+        storage.write_file(REL_PATH, contents.as_bytes())?;
+    } else {
+        storage.create_file(REL_PATH, contents.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// Bundled docs body. Shipped alongside the binary so the file contents
 /// can be edited as normal Markdown without touching Rust code.
 const DOCS_TEMPLATE_BODY: &str = include_str!("../../resources/DOCS.template.md");
