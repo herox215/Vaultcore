@@ -31,7 +31,7 @@
 // (Samsung/MIUI vendor extensions), and any future vendor-specific
 // codes — cancellation is a UX state, not an error.
 
-package com.vaultcore.app
+package app.vaultcore.picker
 
 import android.app.Activity
 import android.content.Intent
