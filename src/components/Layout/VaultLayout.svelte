@@ -175,6 +175,24 @@
     }
   });
 
+  // #393 — Properties sheet focus-return latch. Same pattern as the burger
+  // sheet above: when the sheet closes, return focus to the More tab so
+  // the next Tab keypress doesn't drop the user somewhere arbitrary in
+  // the editor. The Properties sheet is always opened FROM the burger
+  // sheet's Properties row, and the burger calls onClose immediately
+  // before flipping this flag — so the user's mental "where I came from"
+  // is the More tab, same as for the burger itself.
+  let propertiesWasOpen = $state(false);
+  $effect(() => {
+    if (mobilePropertiesOpen) {
+      propertiesWasOpen = true;
+    } else if (propertiesWasOpen) {
+      const moreTab = document.getElementById("vc-mobile-tab-more");
+      moreTab?.focus();
+      propertiesWasOpen = false;
+    }
+  });
+
   // #389 — mobile bottom-tab-bar handlers. State (drawer + omni-search) is
   // owned here in VaultLayout; MobileTabBar receives callbacks only. The
   // close-drawer-first lines on Search/More are required because the drawer

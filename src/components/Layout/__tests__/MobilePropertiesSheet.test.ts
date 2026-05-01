@@ -11,9 +11,8 @@
  * vars through layout) but we DO assert the property is referenced in
  * the rendered style block via class presence.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/svelte";
-import { tick } from "svelte";
 
 vi.mock("../../Properties/PropertiesPanel.svelte", async () => ({
   default: (await import("./testStubs/StubPanel.svelte")).default,
@@ -80,25 +79,46 @@ describe("MobilePropertiesSheet (#393)", () => {
   });
 
   it("focus trap: Tab from last focusable wraps to first; Shift+Tab from first wraps to last", async () => {
-    // The dialog itself is focusable (tabindex=-1 is non-tabbable but
-    // programmatically focusable). Real focusables here are whatever the
-    // stubbed PropertiesPanel exposes — for the stub, none. We add a real
-    // focusable to make the trap exercise meaningful: the close-on-scrim
-    // is purely an attribute on a div, but the dialog markup may grow
-    // its own buttons (drag-handle is currently aria-hidden div, no
-    // button). Without focusables the trap is a no-op AND the test
-    // expects no preventDefault.
-    //
-    // Strategy: assert the trap doesn't crash and the dialog stays
-    // focused. Real focusable coverage lives in the burger test which
-    // has 6 menuitem buttons.
+    // The PropertiesPanel stub has no focusable elements, so the real
+    // panel's inputs aren't reachable here. To exercise the trap's
+    // boundary semantics (not just the no-op early-return), inject two
+    // real `<button>` children into the sheet and drive Tab/Shift+Tab
+    // from the boundary elements. The trap's selector queries the live
+    // DOM via `sheetEl.querySelectorAll`, so injected buttons are
+    // observed identically to a real PropertiesPanel's inputs.
+    const { container } = renderSheet();
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    const first = document.createElement("button");
+    first.type = "button";
+    first.textContent = "first";
+    const last = document.createElement("button");
+    last.type = "button";
+    last.textContent = "last";
+    dialog.appendChild(first);
+    dialog.appendChild(last);
+
+    // Forward wrap: Tab from last → first.
+    last.focus();
+    expect(document.activeElement).toBe(last);
+    await fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+
+    // Backward wrap: Shift+Tab from first → last.
+    first.focus();
+    await fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("focus trap is a no-op when there are no focusables (early return)", () => {
+    // Boundary trap only. With zero focusables (the default stub state)
+    // the keydown handler must NOT preventDefault — letting the browser
+    // handle Tab natively, which is fine because there's nothing inside
+    // the sheet to trap to anyway.
     const { container } = renderSheet();
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
     dialog.focus();
     const ev = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
     dialog.dispatchEvent(ev);
-    // No focusables → no-op (no preventDefault). Same intent as burger
-    // test's "tab away from middle item" — boundary trap only.
     expect(ev.defaultPrevented).toBe(false);
   });
 
