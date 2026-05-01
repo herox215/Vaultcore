@@ -10,11 +10,17 @@
 pub mod handle;
 pub mod posix;
 
+#[cfg(target_os = "android")]
+pub mod android;
+
 #[cfg(test)]
 pub mod mock;
 
 pub use handle::VaultHandle;
 pub use posix::PosixStorage;
+
+#[cfg(target_os = "android")]
+pub use android::AndroidStorage;
 
 use crate::error::VaultError;
 use std::path::Path;
