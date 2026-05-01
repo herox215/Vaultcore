@@ -11,6 +11,7 @@
   import MobileTabBar from "./MobileTabBar.svelte";
   import MobileBurgerSheet from "./MobileBurgerSheet.svelte";
   import MobilePropertiesSheet from "./MobilePropertiesSheet.svelte";
+  import MobileSettingsSheet from "./MobileSettingsSheet.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
@@ -123,15 +124,20 @@
   let mobilePropertiesOpen = $state(false);
   const isMobile = $derived($viewportStore.mode === "mobile");
 
-  // Resize-to-desktop forces the drawer closed so re-entering mobile starts
-  // from a known state. Same applies to the burger + properties sheets —
-  // without this, resizing while either is open would leave a stranded
-  // sheet that isn't reachable from any desktop affordance.
+  // Resize-to-desktop forces all mobile-only sheets closed so re-entering
+  // mobile starts from a known state. The drawer, burger, and properties
+  // sheets are mobile-exclusive surfaces. settingsOpen is shared with the
+  // desktop modal — without forcing it false here, a resize while the
+  // mobile settings sheet is open would silently swap the mobile sheet for
+  // the desktop modal mid-flow. The sheet was opened via a mobile
+  // affordance (gear icon at mobile width, or burger row); reopening on
+  // desktop is a fresh user action.
   $effect(() => {
     if (!isMobile) {
       mobileDrawerOpen = false;
       mobileBurgerOpen = false;
       mobilePropertiesOpen = false;
+      settingsOpen = false;
     }
   });
 
@@ -1106,11 +1112,24 @@
   onClose={() => { templatePickerOpen = false; }}
 />
 
-<SettingsModal
-  open={settingsOpen}
-  onClose={() => { settingsOpen = false; }}
-  {onSwitchVault}
-/>
+<!-- #394 — render-time switch between desktop modal and mobile full-screen
+     sheet. Single shared `settingsOpen` flag — both viewports use the same
+     trigger paths (topbar gear + burger Einstellungen row), so unifying the
+     state avoids duplication. The sheet's content reads the same stores as
+     the modal. -->
+{#if isMobile}
+  <MobileSettingsSheet
+    open={settingsOpen}
+    onClose={() => { settingsOpen = false; }}
+    {onSwitchVault}
+  />
+{:else}
+  <SettingsModal
+    open={settingsOpen}
+    onClose={() => { settingsOpen = false; }}
+    {onSwitchVault}
+  />
+{/if}
 
 <!-- #357: auto-encrypt-on-drop live progress pill. Self-hides while idle. -->
 <EncryptionStatusbar />
@@ -1130,6 +1149,7 @@
     open={mobileBurgerOpen}
     onClose={() => (mobileBurgerOpen = false)}
     onSelectProperties={() => (mobilePropertiesOpen = true)}
+    onOpenSettings={() => (settingsOpen = true)}
   />
   <!-- #393 — properties bottom sheet, opened from the burger sheet's
        Properties row. Reads frontmatter via PropertiesPanel's existing
