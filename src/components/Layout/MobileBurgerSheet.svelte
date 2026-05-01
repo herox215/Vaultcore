@@ -10,9 +10,11 @@
    *   1. Menu — a 6-row list. Default state when the sheet opens.
    *   2. Panel — the selected sub-panel rendered inline with a back button.
    *
-   * Properties + Settings rows are TODO placeholders that stub-toast and
-   * close the sheet; #393 and #394 will replace those branches with real
-   * destinations.
+   * Properties row hands off to the Properties bottom sheet (#393) via
+   * the `onSelectProperties` prop, then closes itself so the two sheets
+   * never co-render. Settings row remains a TODO #394 stub-toast that
+   * will be replaced with a real destination once the settings layout
+   * lands.
    */
   import {
     Link2,
@@ -33,9 +35,16 @@
   let {
     open,
     onClose,
+    onSelectProperties,
   }: {
     open: boolean;
     onClose: () => void;
+    /**
+     * #393 — invoked when the user taps the Properties row. The parent
+     * is expected to flip its `mobilePropertiesOpen` flag; the burger
+     * sheet then calls `onClose()` so the two sheets never co-render.
+     */
+    onSelectProperties: () => void;
   } = $props();
 
   type PanelId = "backlinks" | "bookmarks" | "outline" | "outgoing";
@@ -73,7 +82,7 @@
     id: "backlinks" | "bookmarks" | "outline" | "outgoing" | "properties" | "settings";
     label: string;
     icon: typeof Link2;
-    action: "panel" | "stub";
+    action: "panel" | "properties" | "stub";
     panelId?: PanelId;
     stubMessage?: string;
   };
@@ -86,7 +95,7 @@
     { id: "bookmarks",  label: "Lesezeichen",       icon: Bookmark,     action: "panel", panelId: "bookmarks" },
     { id: "outline",    label: "Gliederung",        icon: List,         action: "panel", panelId: "outline" },
     { id: "outgoing",   label: "Ausgehende Links",  icon: ArrowUpRight, action: "panel", panelId: "outgoing" },
-    { id: "properties", label: "Eigenschaften",     icon: FileText,     action: "stub",  stubMessage: "Eigenschaften folgen" },
+    { id: "properties", label: "Eigenschaften",     icon: FileText,     action: "properties" },
     { id: "settings",   label: "Einstellungen",     icon: SettingsIcon, action: "stub",  stubMessage: "Einstellungen folgen" },
   ];
 
@@ -102,10 +111,17 @@
       activePanel = row.panelId;
       return;
     }
-    // TODO #393 (properties) / #394 (settings). The toast tells the user
-    // the destination exists but isn't wired yet; closing the sheet keeps
-    // the More tab's tap-feedback intact (no dead-end where the menu
-    // stays open after an apparent-no-op).
+    if (row.action === "properties") {
+      // #393 — hand off to the parent's properties sheet, then close
+      // ourselves so the two sheets never co-render.
+      onSelectProperties();
+      onClose();
+      return;
+    }
+    // TODO #394 (settings). The toast tells the user the destination
+    // exists but isn't wired yet; closing the sheet keeps the More tab's
+    // tap-feedback intact (no dead-end where the menu stays open after
+    // an apparent-no-op).
     if (row.stubMessage) toastStore.info(row.stubMessage);
     onClose();
   }
