@@ -155,6 +155,13 @@
   // the native handler chain.
   let longpressCaptureEl: HTMLElement | null = null;
 
+  // Multi-touch guard: secondary fingers of a pinch carry isPrimary=false.
+  // When one arrives during an active pan/move/edge/resize we abort the
+  // gesture so the node the primary finger landed on doesn't continue
+  // translating mid-pinch. We deliberately track no per-pointer state —
+  // the browser's `isPrimary` flag is the source of truth and survives
+  // pointercancel races that an explicit Set wouldn't.
+
   const MIN_ZOOM = 0.15;
   const MAX_ZOOM = 4;
 
@@ -456,11 +463,44 @@
     zoom = next;
   }
 
+  // Cancel any in-flight gesture and release pointer captures. Used when a
+  // second finger lands during an active pan/move/edge/resize so a pinch
+  // doesn't continue translating the node the first finger happened to
+  // be on. We deliberately do NOT revert in-progress geometry changes —
+  // the doc-watcher's debounced save is fine with the partial state and
+  // pointerup will flush it normally.
+  function abortActiveGesture() {
+    cancelLongpressTimer();
+    longpressCaptureEl = null;
+    if (pointerMode?.kind === "edge") draft = null;
+    pointerMode = null;
+  }
+
   function onViewportPointerDown(e: PointerEvent) {
     if (editingNodeId || editingEdgeId) return;
+    // Secondary-finger guard: a pinch lands a non-primary touch while a
+    // primary-touch gesture is still active. Drop it on the floor so the
+    // node the primary finger captured doesn't keep moving toward the
+    // second finger.
+    if (e.pointerType === "touch" && !e.isPrimary) {
+      abortActiveGesture();
+      return;
+    }
     const isPan = e.button === 1 || (e.button === 0 && spaceHeld);
     if (isPan) {
       e.preventDefault();
+      selectedNodeId = null;
+      selectedEdgeId = null;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      pointerMode = beginPan(e, { x: camX, y: camY });
+      return;
+    }
+    // Touch on empty viewport → pan immediately. The desktop long-press-to-pan
+    // gesture (#144) doesn't translate to mobile: on touch the natural drag is
+    // a pan, and a tap-and-hold with no drag is a context-menu trigger handled
+    // separately. Bypass the pending-longpress state machine so finger-drag
+    // pans without a 300 ms wait.
+    if (e.pointerType === "touch") {
       selectedNodeId = null;
       selectedEdgeId = null;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -628,6 +668,12 @@
   function onNodePointerDown(e: PointerEvent, node: CanvasNode) {
     if (editingNodeId === node.id) return;
     if (e.button !== 0 || spaceHeld) return;
+    // Same secondary-finger guard as the viewport handler.
+    if (e.pointerType === "touch" && !e.isPrimary) {
+      e.stopPropagation();
+      abortActiveGesture();
+      return;
+    }
     e.stopPropagation();
     selectedNodeId = node.id;
     selectedEdgeId = null;
@@ -643,6 +689,23 @@
             startY: m.y,
           }))
         : [];
+    // Touch: skip the pending-longpress arc and begin moving immediately.
+    // The pending-longpress fallback only matters on desktop where holding
+    // still flips into pan mode (#144). On touch we always want a finger
+    // drag to translate the node — a stationary touch instead opens the
+    // context menu via the separate longPress action wired on the canvas
+    // surface. Capture the pointer on the node element so subsequent
+    // pointermove events route through `onViewportPointerMove` (which
+    // bubbles up from the captured node).
+    if (e.pointerType === "touch") {
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic-test pointer ID */
+      }
+      pointerMode = beginMove(node, e, members);
+      return;
+    }
     // Enter pending-longpress — if the user keeps the pointer still for
     // LONGPRESS_HOLD_MS we flip to pan; if they move past the threshold
     // first, we fall through to beginMove (the original gesture).

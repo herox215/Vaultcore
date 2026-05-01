@@ -315,15 +315,33 @@ async fn open_vault_android(
         .app_local_data_dir()
         .map_err(|e| VaultError::Io(std::io::Error::other(e.to_string())))?;
     let storage = AndroidStorage::new(&app, uri.clone(), &app_local_data)?;
+    let storage_arc: std::sync::Arc<dyn crate::storage::VaultStorage> =
+        std::sync::Arc::new(storage);
 
     state.set_open_vault(
         VaultHandle::ContentUri(uri.clone()),
-        std::sync::Arc::new(storage),
+        std::sync::Arc::clone(&storage_arc),
     )?;
 
     // recent-vaults.json stores the URI verbatim — VaultHandle::parse
     // round-trips it via the content:// heuristic on next open.
     push_recent_vault(&app, &uri)?;
+
+    // Bootstrap the per-vault home canvas + bundled docs page. The
+    // desktop indexer cold-start handles this for POSIX vaults; on
+    // Android the indexer is skipped (mmap-incompatible), so we run the
+    // storage-trait variants directly. Failures are non-fatal — a logged
+    // warning matches the desktop semantics, and the user can still open
+    // their notes without these auxiliary files.
+    if let Err(e) = crate::indexer::ensure_home_canvas_via_storage(
+        storage_arc.as_ref(),
+        &display_name_from_content_uri(&uri),
+    ) {
+        log::warn!("ensure_home_canvas_via_storage failed: {e:?}");
+    }
+    if let Err(e) = crate::indexer::ensure_docs_page_via_storage(storage_arc.as_ref()) {
+        log::warn!("ensure_docs_page_via_storage failed: {e:?}");
+    }
 
     *state.vault_reachable.lock().map_err(|_| VaultError::LockPoisoned)? = true;
 
@@ -368,6 +386,51 @@ pub async fn repair_vault_index(vault_path: String) -> Result<(), VaultError> {
         let _ = std::fs::remove_file(&version_file);
     }
     Ok(())
+}
+
+// --- Android URI helpers ----------------------------------------------------
+
+/// Extract a human-friendly display name from a SAF tree URI.
+/// `content://com.android.externalstorage.documents/tree/primary%3ATest`
+/// → `"Test"`. Mirrors the frontend's `deriveVaultName` so the seeded
+/// home.canvas welcome heading matches the sidebar label.
+#[cfg(target_os = "android")]
+fn display_name_from_content_uri(uri: &str) -> String {
+    let last = uri.rsplit('/').next().unwrap_or(uri);
+    let decoded = percent_decode(last);
+    match decoded.find(':') {
+        Some(idx) => {
+            let tail = &decoded[idx + 1..];
+            if tail.is_empty() { decoded.clone() } else { tail.to_string() }
+        }
+        None => decoded,
+    }
+}
+
+/// Minimal RFC 3986 percent-decoder for SAF tree-URI segments. Only
+/// %XX hex pairs are decoded — invalid sequences pass through. Output
+/// is treated as UTF-8; non-UTF-8 byte sequences fall back to the raw
+/// input. SAF segments are short (single path component), so a small
+/// allocator is fine.
+#[cfg(target_os = "android")]
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
 // --- recent-vaults.json persistence -----------------------------------------

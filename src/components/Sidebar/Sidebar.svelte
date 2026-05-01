@@ -21,6 +21,7 @@
     DEFAULT_TREE_STATE,
   } from "../../lib/treeState";
   import { vaultStore } from "../../store/vaultStore";
+  import { viewportStore } from "../../store/viewportStore";
   import { toastStore } from "../../store/toastStore";
   import { progressStore } from "../../store/progressStore";
   import { isVaultError, vaultErrorCopy } from "../../types/errors";
@@ -789,11 +790,27 @@
     return null;
   }
 
-  const vaultName = $derived(
-    $vaultStore.currentPath
-      ? $vaultStore.currentPath.split("/").pop() ?? $vaultStore.currentPath
-      : "No vault",
-  );
+  // Display name derivation:
+  //  - Posix path: last `/`-separated segment ("/Users/foo/Notes" → "Notes")
+  //  - Android content:// URI: take the path leaf, percent-decode, strip the
+  //    common "primary:" / "<storageId>:" prefix that SAF prepends. e.g.
+  //    "content://...documents/tree/primary%3ATest" → "Test".
+  function deriveVaultName(path: string | null | undefined): string {
+    if (!path) return "No vault";
+    if (path.startsWith("content://")) {
+      const last = path.split("/").pop() ?? path;
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(last);
+      } catch {
+        decoded = last;
+      }
+      const colonIdx = decoded.indexOf(":");
+      return colonIdx >= 0 ? decoded.slice(colonIdx + 1) || decoded : decoded;
+    }
+    return path.split("/").pop() ?? path;
+  }
+  const vaultName = $derived(deriveVaultName($vaultStore.currentPath));
 </script>
 
 <aside class="vc-sidebar" data-testid="sidebar">
@@ -903,23 +920,29 @@
         >
           <FolderPlus size={16} strokeWidth={1.5} />
         </button>
-        <button
-          class="vc-sidebar-action-btn"
-          onclick={() => tabStore.openGraphTab()}
-          aria-label="Open graph"
-          title="Open graph (Cmd/Ctrl+Shift+G)"
-        >
-          <Network size={16} strokeWidth={1.5} />
-        </button>
-        <button
-          class="vc-sidebar-action-btn"
-          onclick={() => { void openDocsPage(); }}
-          aria-label="Open docs"
-          title="Open documentation (Cmd/Ctrl+Shift+/)"
-          data-testid="sidebar-open-docs"
-        >
-          <BookOpen size={16} strokeWidth={1.5} />
-        </button>
+        {#if $viewportStore.mode !== "mobile"}
+          <!-- Graph + Docs are desktop-only on mobile we hide them to keep
+               the action toolbar uncrammed; both are reachable via the
+               command palette / keyboard shortcuts on desktop, neither is
+               in the mobile UX scope per #74. -->
+          <button
+            class="vc-sidebar-action-btn"
+            onclick={() => tabStore.openGraphTab()}
+            aria-label="Open graph"
+            title="Open graph (Cmd/Ctrl+Shift+G)"
+          >
+            <Network size={16} strokeWidth={1.5} />
+          </button>
+          <button
+            class="vc-sidebar-action-btn"
+            onclick={() => { void openDocsPage(); }}
+            aria-label="Open docs"
+            title="Open documentation (Cmd/Ctrl+Shift+/)"
+            data-testid="sidebar-open-docs"
+          >
+            <BookOpen size={16} strokeWidth={1.5} />
+          </button>
+        {/if}
       </div>
     {/if}
   </header>
