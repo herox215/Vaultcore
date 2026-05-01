@@ -48,11 +48,18 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function renderSheet(overrides: Partial<{ open: boolean; onClose: () => void }> = {}) {
+function renderSheet(
+  overrides: Partial<{
+    open: boolean;
+    onClose: () => void;
+    onSelectProperties: () => void;
+  }> = {},
+) {
   return render(MobileBurgerSheet, {
     props: {
       open: true,
       onClose: vi.fn(),
+      onSelectProperties: vi.fn(),
       ...overrides,
     },
   });
@@ -106,13 +113,19 @@ describe("MobileBurgerSheet (#397)", () => {
     expect(container.querySelector("[data-stub-panel]")).not.toBeNull();
   });
 
-  it("clicking the Properties row fires toastStore.info AND calls onClose (TODO #393)", async () => {
+  it("clicking the Properties row calls onSelectProperties AND onClose, NOT toastStore.info (#393)", async () => {
+    // #393 replaced the old toast stub with a real destination: the
+    // burger sheet emits onSelectProperties so the parent can flip
+    // its `mobilePropertiesOpen` flag, then closes itself so the two
+    // sheets never co-render.
     const onClose = vi.fn();
-    const { container } = renderSheet({ onClose });
+    const onSelectProperties = vi.fn();
+    const { container } = renderSheet({ onClose, onSelectProperties });
     const row = container.querySelector<HTMLButtonElement>('[data-row-id="properties"]');
     await fireEvent.click(row!);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
+    expect(onSelectProperties).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
   it("clicking the Settings row fires toastStore.info AND calls onClose (TODO #394)", async () => {
