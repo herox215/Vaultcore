@@ -8,6 +8,7 @@
   import CommandPalette from "../CommandPalette/CommandPalette.svelte";
   import TemplatePicker from "../TemplatePicker/TemplatePicker.svelte";
   import RightSidebar from "./RightSidebar.svelte";
+  import MobileTabBar from "./MobileTabBar.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
@@ -138,6 +139,32 @@
       wasOpen = false;
     }
   });
+
+  // #389 — mobile bottom-tab-bar handlers. State (drawer + omni-search) is
+  // owned here in VaultLayout; MobileTabBar receives callbacks only. The
+  // close-drawer-first lines on Search/More are required because the drawer
+  // scrim sits at z-index 49 above the tab bar (40) — without this, a tap
+  // through the scrim region would hit the scrim's onclick (closes drawer)
+  // before the modal opens, requiring the user to tap twice.
+  function handleMobileFilesTab() {
+    // Open-only — native iOS/Android bottom-nav bars don't toggle. The drawer
+    // closes via scrim, swipe-left, or Escape.
+    if (mobileDrawerOpen) return;
+    mobileDrawerOpen = true;
+  }
+  function handleMobileSearchTab() {
+    mobileDrawerOpen = false;
+    omniSearchMode = "filename";
+    omniSearchPrefill = undefined;
+    omniSearchOpen = true;
+  }
+  function handleMobileMoreTab() {
+    mobileDrawerOpen = false;
+    // TODO #397: replace with the burger sheet open flag once the component
+    // lands. The placeholder toast tells the user the destination exists
+    // without misrepresenting it as broken.
+    toastStore.info("Mehr-Menü folgt");
+  }
 
   const unsubTab = tabStore.subscribe((state) => {
     rightPaneIds = state.splitState.right;
@@ -1016,6 +1043,17 @@
 <!-- #357: auto-encrypt-on-drop live progress pill. Self-hides while idle. -->
 <EncryptionStatusbar />
 
+<!-- #389 — mobile bottom-tab-bar. Parent gates on `isMobile`; the component
+     itself doesn't subscribe to viewportStore. -->
+{#if isMobile}
+  <MobileTabBar
+    drawerOpen={mobileDrawerOpen}
+    onSelectFiles={handleMobileFilesTab}
+    onSelectSearch={handleMobileSearchTab}
+    onSelectMore={handleMobileMoreTab}
+  />
+{/if}
+
 <!-- #345: global mount for the encryption modals. Encrypt modal stays
      open during the batch so the user sees progress; it closes on
      completion or on error. -->
@@ -1279,6 +1317,15 @@
     .vc-layout-divider-right-hidden,
     .vc-split-divider {
       display: none;
+    }
+
+    /* #389 — make room for the fixed-bottom mobile tab bar (56px + safe-area
+       inset). Padding on `.vc-vault-layout` is a no-op (display:grid +
+       height:100vh + overflow:hidden clips the padding), so the inset goes
+       on the editor flex column, where flex layout actually shrinks the
+       content to fit. */
+    .vc-layout-editor {
+      padding-bottom: calc(56px + env(safe-area-inset-bottom));
     }
   }
 </style>
