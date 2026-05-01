@@ -70,9 +70,12 @@ pub struct DirEntry {
 /// exist, so full canonicalization works.
 fn check_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-        path: target.display().to_string(),
-    })?;
+    let vault = guard
+        .as_ref()
+        .ok_or_else(|| VaultError::VaultUnavailable {
+            path: target.display().to_string(),
+        })?
+        .expect_posix();
     let canonical = std::fs::canonicalize(target).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => VaultError::FileNotFound {
             path: target.display().to_string(),

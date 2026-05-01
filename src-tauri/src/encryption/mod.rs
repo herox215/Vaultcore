@@ -193,7 +193,7 @@ pub fn maybe_decrypt_read(
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
         match guard.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return Ok(bytes),
         }
     };
@@ -232,7 +232,7 @@ pub fn maybe_encrypt_write(
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
         match guard.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return Ok(bytes.to_vec()),
         }
     };

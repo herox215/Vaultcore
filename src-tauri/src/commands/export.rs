@@ -30,7 +30,7 @@ fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
     guard
         .as_ref()
-        .cloned()
+        .map(|h| h.expect_posix().to_path_buf())
         .ok_or_else(|| VaultError::VaultUnavailable { path: String::from("<no vault>") })
 }
 

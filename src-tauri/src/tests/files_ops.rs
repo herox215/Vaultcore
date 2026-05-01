@@ -31,7 +31,7 @@ use tempfile::tempdir;
 fn state_with_vault(root: &std::path::Path) -> VaultState {
     let canonical = fs::canonicalize(root).unwrap();
     let s = VaultState::default();
-    *s.current_vault.lock().unwrap() = Some(canonical);
+    *s.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(canonical));
     s
 }
 

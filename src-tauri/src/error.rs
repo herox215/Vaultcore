@@ -79,6 +79,14 @@ pub enum VaultError {
     /// channel closed, mobile-plugin-bridge deserialize failure, etc.
     #[error("Picker failed: {msg}")]
     PickerFailed { msg: String },
+
+    /// #392: relative path resolved outside the vault root. Distinct
+    /// from `PermissionDenied` (which is OS-level access refusal) — this
+    /// is a T-02 violation, either client bug or attack: the resolved
+    /// canonical path was outside `vault_root`. Never user-actionable; UI
+    /// renders a generic "request denied" copy and logs for follow-up.
+    #[error("Path resolves outside the vault: {path}")]
+    PathOutsideVault { path: String },
 }
 
 impl VaultError {
@@ -99,6 +107,7 @@ impl VaultError {
             Self::CryptoError { .. } => "CryptoError",
             Self::PayloadTooLarge { .. } => "PayloadTooLarge",
             Self::PickerFailed { .. } => "PickerFailed",
+            Self::PathOutsideVault { .. } => "PathOutsideVault",
         }
     }
 
@@ -115,7 +124,8 @@ impl VaultError {
             | Self::MergeConflict { path }
             | Self::InvalidEncoding { path }
             | Self::PathLocked { path }
-            | Self::PayloadTooLarge { path, .. } => Some(path.clone()),
+            | Self::PayloadTooLarge { path, .. }
+            | Self::PathOutsideVault { path } => Some(path.clone()),
             // Data-less variants — and variants whose payload is a human
             // message rather than a routable path. The `data` IPC field
             // is reserved for paths the frontend can `navigate(err.data)`,

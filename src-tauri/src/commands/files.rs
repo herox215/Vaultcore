@@ -60,9 +60,15 @@ fn ensure_unlocked(state: &VaultState, canonical: &Path) -> Result<(), VaultErro
 /// this helper — the T-02 audit depends on it.
 pub(crate) fn ensure_inside_vault(state: &VaultState, target: &Path) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-        path: target.display().to_string(),
-    })?;
+    // #392 PR-A: `.expect_posix()` panics on non-POSIX VaultHandle arms.
+    // PR-B routes file commands through the storage trait instead; this
+    // unwrap will go away there.
+    let vault = guard
+        .as_ref()
+        .ok_or_else(|| VaultError::VaultUnavailable {
+            path: target.display().to_string(),
+        })?
+        .expect_posix();
     let canonical_target = std::fs::canonicalize(target).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => VaultError::FileNotFound {
             path: target.display().to_string(),
@@ -123,9 +129,10 @@ pub async fn write_file(
     })?;
     {
         let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-        let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-            path: path.clone(),
-        })?;
+        let vault = guard
+            .as_ref()
+            .ok_or_else(|| VaultError::VaultUnavailable { path: path.clone() })?
+            .expect_posix();
         if !canonical_parent.starts_with(vault) {
             return Err(VaultError::PermissionDenied { path: path.clone() });
         }
@@ -192,9 +199,13 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
         _ => VaultError::Io(e),
     })?;
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-        path: target.display().to_string(),
-    })?.clone();
+    let vault = guard
+        .as_ref()
+        .ok_or_else(|| VaultError::VaultUnavailable {
+            path: target.display().to_string(),
+        })?
+        .expect_posix()
+        .to_path_buf();
     if !canonical_parent.starts_with(&vault) {
         return Err(VaultError::PermissionDenied { path: canonical_parent.display().to_string() });
     }
@@ -209,9 +220,12 @@ fn ensure_parent_inside_vault(state: &VaultState, target: &Path) -> Result<(Path
 /// Helper: get the current vault root.
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    guard.as_ref().cloned().ok_or_else(|| VaultError::VaultUnavailable {
-        path: String::from("<no vault>"),
-    })
+    guard
+        .as_ref()
+        .map(|h| h.expect_posix().to_path_buf())
+        .ok_or_else(|| VaultError::VaultUnavailable {
+            path: String::from("<no vault>"),
+        })
 }
 
 /// Helper: record a path in the write-ignore list (D-12 self-filtering).
