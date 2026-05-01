@@ -126,6 +126,18 @@ pub async fn list_templates(
     state: tauri::State<'_, VaultState>,
     vault_path: String,
 ) -> Result<Vec<String>, VaultError> {
+    // #392 PR-B: templates aren't surfaced on Android in v1. Returns
+    // an empty list so the frontend's template picker shows "no
+    // templates" rather than crashing on the desktop walkdir path.
+    // Tracked as a known limitation in MOBILE_BUILD.md.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        return Ok(Vec::new());
+    }
+
     list_templates_impl(&state, vault_path)
 }
 
@@ -158,5 +170,16 @@ pub async fn read_template(
     vault_path: String,
     filename: String,
 ) -> Result<String, VaultError> {
+    // #392 PR-B: see list_templates. Frontend never reaches this on
+    // Android because list_templates returns empty; the FileNotFound
+    // covers the defensive case where it does.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        return Err(VaultError::FileNotFound { path: filename });
+    }
+
     read_template_impl(&state, vault_path, filename)
 }

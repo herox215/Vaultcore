@@ -28,10 +28,23 @@ const SKIP_DIRS: &[&str] = &[".obsidian", ".git", ".vaultcore", ".trash"];
 
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    guard
-        .as_ref()
-        .map(|h| h.expect_posix().to_path_buf())
-        .ok_or_else(|| VaultError::VaultUnavailable { path: String::from("<no vault>") })
+    match guard.as_ref() {
+        Some(crate::storage::VaultHandle::Posix(p)) => Ok(p.clone()),
+        // #392 PR-B: HTML export is desktop-only — the asset-inlining
+        // pipeline reads attachment bytes via WalkDir + std::fs::read.
+        // Frontend's "Export to HTML" menu entry shouldn't be enabled
+        // on mobile in v1; if it is, this surfaces a clear error
+        // instead of panicking.
+        #[cfg(target_os = "android")]
+        Some(crate::storage::VaultHandle::ContentUri(_)) => {
+            Err(VaultError::PermissionDenied {
+                path: String::from("HTML export is not yet supported on Android"),
+            })
+        }
+        None => Err(VaultError::VaultUnavailable {
+            path: String::from("<no vault>"),
+        }),
+    }
 }
 
 fn ensure_inside_vault(vault: &Path, target: &Path) -> Result<PathBuf, VaultError> {
