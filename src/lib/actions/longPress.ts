@@ -157,12 +157,16 @@ export function longPress(
     startPointerType = e.pointerType;
     startTarget = e.target;
 
-    if (e.pointerType === "touch") {
-      // Suppress the iOS callout / Android selection magnifier. Touch
-      // only: pen and mouse pass through so Surface drag-start and
-      // desktop focus-on-mousedown keep working.
-      e.preventDefault();
-    }
+    // NOTE: we do NOT preventDefault on pointerdown. The original #387
+    // implementation did, intending to suppress the iOS callout / Android
+    // selection magnifier — but those are triggered by the OS-synthesized
+    // `contextmenu` event AFTER long-press fires, not by the initial
+    // pointerdown itself. Suppressing the pointerdown blocks the click
+    // chain that focuses contenteditable elements (notably CodeMirror's
+    // .cm-content), so a simple tap on the editor wouldn't focus it or
+    // raise the on-screen keyboard. The contextmenu suppressor armed in
+    // `fire()` (capture-phase, document-level) handles OS callout
+    // suppression on its own.
 
     const duration = opts.duration ?? DEFAULT_DURATION;
     timer = setTimeout(fire, duration);
