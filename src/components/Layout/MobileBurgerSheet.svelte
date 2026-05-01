@@ -36,6 +36,7 @@
     open,
     onClose,
     onSelectProperties,
+    onOpenSettings,
   }: {
     open: boolean;
     onClose: () => void;
@@ -45,6 +46,14 @@
      * sheet then calls `onClose()` so the two sheets never co-render.
      */
     onSelectProperties: () => void;
+    /**
+     * #394 — invoked when the user taps the Einstellungen row. Same
+     * close-then-open contract as Properties: the burger calls
+     * `onClose()` first so its `wasOpen` latch can move focus to the
+     * More tab synchronously, THEN this fires so the settings sheet's
+     * own focus microtask resolves on a stable element.
+     */
+    onOpenSettings: () => void;
   } = $props();
 
   type PanelId = "backlinks" | "bookmarks" | "outline" | "outgoing";
@@ -82,7 +91,15 @@
     id: "backlinks" | "bookmarks" | "outline" | "outgoing" | "properties" | "settings";
     label: string;
     icon: typeof Link2;
-    action: "panel" | "properties" | "stub";
+    // Action discriminant names the destination directly so onRowClick is
+    // a pure switch — no id checks. Each non-"panel" arm dispatches to a
+    // dedicated callback prop. Future external rows add a new arm to the
+    // union AND a new prop; no string-id matching.
+    //   - "panel":      routes to an in-sheet panel view (uses panelId).
+    //   - "stub":       toasts a placeholder + closes (until the wiring ticket lands).
+    //   - "properties": hands off to onSelectProperties (#393).
+    //   - "settings":   hands off to onOpenSettings (#394).
+    action: "panel" | "stub" | "properties" | "settings";
     panelId?: PanelId;
     stubMessage?: string;
   };
@@ -91,12 +108,12 @@
   // pure data avoids the wasted-work pattern that Aristotle flagged on
   // #389 (`tabs` was wrongly $derived).
   const ROWS: ReadonlyArray<RowSpec> = [
-    { id: "backlinks",  label: "Backlinks",         icon: Link2,        action: "panel", panelId: "backlinks" },
-    { id: "bookmarks",  label: "Lesezeichen",       icon: Bookmark,     action: "panel", panelId: "bookmarks" },
-    { id: "outline",    label: "Gliederung",        icon: List,         action: "panel", panelId: "outline" },
-    { id: "outgoing",   label: "Ausgehende Links",  icon: ArrowUpRight, action: "panel", panelId: "outgoing" },
+    { id: "backlinks",  label: "Backlinks",         icon: Link2,        action: "panel",      panelId: "backlinks" },
+    { id: "bookmarks",  label: "Lesezeichen",       icon: Bookmark,     action: "panel",      panelId: "bookmarks" },
+    { id: "outline",    label: "Gliederung",        icon: List,         action: "panel",      panelId: "outline" },
+    { id: "outgoing",   label: "Ausgehende Links",  icon: ArrowUpRight, action: "panel",      panelId: "outgoing" },
     { id: "properties", label: "Eigenschaften",     icon: FileText,     action: "properties" },
-    { id: "settings",   label: "Einstellungen",     icon: SettingsIcon, action: "stub",  stubMessage: "Einstellungen folgen" },
+    { id: "settings",   label: "Einstellungen",     icon: SettingsIcon, action: "settings" },
   ];
 
   const PANEL_LABELS: Record<PanelId, string> = {
@@ -107,23 +124,34 @@
   };
 
   function onRowClick(row: RowSpec) {
-    if (row.action === "panel" && row.panelId) {
-      activePanel = row.panelId;
-      return;
+    switch (row.action) {
+      case "panel":
+        if (row.panelId) activePanel = row.panelId;
+        return;
+      case "properties":
+        // Close-then-open ORDER MATTERS. Closing the burger first lets
+        // the burgerWasOpen $effect in VaultLayout move focus to the
+        // More tab synchronously; THEN opening the target sheet
+        // schedules its own focus-to-first-focusable via microtask,
+        // which now wins cleanly. Reversing this order produces a
+        // race: target schedules focus, burger close yanks focus back
+        // to More tab, microtask resolves on a stale element.
+        onClose();
+        onSelectProperties();
+        return;
+      case "settings":
+        onClose();
+        onOpenSettings();
+        return;
+      case "stub":
+        // Still a placeholder. The toast tells the user the destination
+        // exists but isn't wired yet; closing the sheet keeps the More
+        // tab's tap-feedback intact (no dead-end where the menu stays
+        // open after an apparent-no-op).
+        if (row.stubMessage) toastStore.info(row.stubMessage);
+        onClose();
+        return;
     }
-    if (row.action === "properties") {
-      // #393 — hand off to the parent's properties sheet, then close
-      // ourselves so the two sheets never co-render.
-      onSelectProperties();
-      onClose();
-      return;
-    }
-    // TODO #394 (settings). The toast tells the user the destination
-    // exists but isn't wired yet; closing the sheet keeps the More tab's
-    // tap-feedback intact (no dead-end where the menu stays open after
-    // an apparent-no-op).
-    if (row.stubMessage) toastStore.info(row.stubMessage);
-    onClose();
   }
 
   // Standard keyboard-trap selector: anything that can take focus, minus
