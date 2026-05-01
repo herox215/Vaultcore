@@ -71,6 +71,14 @@ pub enum VaultError {
          Move it outside the encrypted folder or use manual encryption."
     )]
     PayloadTooLarge { path: String, size: u64, cap: u64 },
+
+    /// #391: native picker (NSOpenPanel / GTK file chooser /
+    /// ACTION_OPEN_DOCUMENT_TREE) failed in a way that is not user
+    /// cancellation. Cancellation is signalled via `Ok(None)` from the
+    /// picker commands; this variant carries genuine errors only —
+    /// channel closed, mobile-plugin-bridge deserialize failure, etc.
+    #[error("Picker failed: {msg}")]
+    PickerFailed { msg: String },
 }
 
 impl VaultError {
@@ -90,10 +98,16 @@ impl VaultError {
             Self::WrongPassword => "WrongPassword",
             Self::CryptoError { .. } => "CryptoError",
             Self::PayloadTooLarge { .. } => "PayloadTooLarge",
+            Self::PickerFailed { .. } => "PickerFailed",
         }
     }
 
     pub fn extra_data(&self) -> Option<String> {
+        // Exhaustive on purpose — no wildcard arm. Adding a new variant
+        // forces the author to decide whether `data` is a routable path
+        // (then add it to the `Some(path.clone())` arm) or carries a
+        // human message via `Display` only (then add it to the `None`
+        // arm). Rust's compile error is the safety net.
         match self {
             Self::FileNotFound { path }
             | Self::PermissionDenied { path }
@@ -102,13 +116,18 @@ impl VaultError {
             | Self::InvalidEncoding { path }
             | Self::PathLocked { path }
             | Self::PayloadTooLarge { path, .. } => Some(path.clone()),
-            // `extra_data` is the IPC `data` field, reserved for a path
-            // so frontend callers can `navigate(err.data)`. CryptoError
-            // carries a human message, not a path — surfacing it here
-            // would break that contract. The message still ships via
-            // `Display` (the IPC `message` field); nothing is lost.
-            Self::CryptoError { .. } | Self::WrongPassword => None,
-            _ => None,
+            // Data-less variants — and variants whose payload is a human
+            // message rather than a routable path. The `data` IPC field
+            // is reserved for paths the frontend can `navigate(err.data)`,
+            // so messages stay in `Display` (the IPC `message` field).
+            Self::DiskFull
+            | Self::IndexCorrupt
+            | Self::IndexLocked
+            | Self::LockPoisoned
+            | Self::Io(_)
+            | Self::WrongPassword
+            | Self::CryptoError { .. }
+            | Self::PickerFailed { .. } => None,
         }
     }
 }

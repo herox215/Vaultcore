@@ -103,6 +103,24 @@ target dir.
 
 Cold-cache CI run estimate: ~15–20 min. Warm-cache: ~5–8 min.
 
+## Custom Android plugins
+
+Custom Kotlin plugin code lives directly in
+`src-tauri/gen/android/app/src/main/java/com/vaultcore/app/`.
+
+Tauri 2.10 has no functional overlay-directory mechanism — `src-tauri/android/`
+is silently ignored, so files there never reach the build. Empirically tested
+with Tauri 2.10.3: `pnpm tauri android init` does not sweep arbitrary `.kt`
+files in the package directory, so manually-added plugins survive re-init.
+If a future Tauri version changes this behavior the file(s) must be
+re-applied after `init`.
+
+Tracked custom plugins:
+
+| File | Ticket | Purpose |
+|---|---|---|
+| `PickerPlugin.kt` | #391 | Storage Access Framework picker (`ACTION_OPEN_DOCUMENT_TREE` + `ACTION_CREATE_DOCUMENT`) for vault folder selection and save-as on mobile. |
+
 ## Known limitations (tracked, deferred)
 
 - `env_logger::init()` writes to stdout. Logcat does not surface stdout by

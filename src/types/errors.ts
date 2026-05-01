@@ -17,7 +17,11 @@ export type VaultErrorKind =
   // #345 — encrypted-folder error variants.
   | "PathLocked"
   | "WrongPassword"
-  | "CryptoError";
+  | "CryptoError"
+  // #391 — picker (NSOpenPanel / GTK file chooser / Android SAF) failed.
+  // Cancellation is signalled via `null` from the picker wrappers; this
+  // variant carries genuine errors only.
+  | "PickerFailed";
 
 export interface VaultError {
   kind: VaultErrorKind;
@@ -69,6 +73,8 @@ export function vaultErrorCopy(err: VaultError): string {
       return "Wrong password.";
     case "CryptoError":
       return "Encryption error. This file may be corrupted or from a newer VaultCore version.";
+    case "PickerFailed":
+      return "Could not open the file picker. Please try again.";
     default: {
       const _exhaustive: never = err.kind;
       return "An unexpected error occurred.";
