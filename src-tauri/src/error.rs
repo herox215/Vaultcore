@@ -102,6 +102,19 @@ pub enum VaultError {
     /// create/unlock/lock entry. Tracked: #345 storage-trait pass.
     #[error("Encrypted folders are not yet supported on Android.")]
     EncryptionUnsupportedOnAndroid,
+
+    /// #392 PR-B: a desktop-only operation (HTML export, snippet/template
+    /// walks, fulltext rebuild, etc.) was requested while the active
+    /// vault is `content://`-rooted on Android. Distinct from
+    /// `EncryptionUnsupportedOnAndroid` so the frontend can render an
+    /// operation-specific copy ("HTML export isn't supported on Android
+    /// yet") rather than a generic encryption-themed message. The
+    /// `operation` field carries the human-readable name; it lands in
+    /// the `data` field as a label, not a navigable target. Aristotle
+    /// iter-1 finding #4 — replaces the previous shoehorn that put
+    /// prose into a `PermissionDenied { path }` field.
+    #[error("Operation '{operation}' is not yet supported on Android.")]
+    OperationUnsupportedOnAndroid { operation: String },
 }
 
 impl VaultError {
@@ -125,6 +138,7 @@ impl VaultError {
             Self::PathOutsideVault { .. } => "PathOutsideVault",
             Self::VaultPermissionRevoked { .. } => "VaultPermissionRevoked",
             Self::EncryptionUnsupportedOnAndroid => "EncryptionUnsupportedOnAndroid",
+            Self::OperationUnsupportedOnAndroid { .. } => "OperationUnsupportedOnAndroid",
         }
     }
 
@@ -147,6 +161,11 @@ impl VaultError {
             // but the IPC `data` semantic is "string the frontend can
             // act on" — the re-pick UX uses it directly. Same idiom.
             Self::VaultPermissionRevoked { uri } => Some(uri.clone()),
+            // OperationUnsupportedOnAndroid carries a human-readable
+            // operation name as `data` — frontend renders it inline in
+            // the toast copy. Not a path, but still "string the frontend
+            // can act on" by the convention above.
+            Self::OperationUnsupportedOnAndroid { operation } => Some(operation.clone()),
             // Data-less variants — and variants whose payload is a human
             // message rather than a routable path. The `data` IPC field
             // is reserved for paths the frontend can `navigate(err.data)`,

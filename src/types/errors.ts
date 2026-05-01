@@ -31,7 +31,11 @@ export type VaultErrorKind =
   | "VaultPermissionRevoked"
   // #392 PR-B — encrypted folders aren't yet supported on Android.
   // Tracked: #345 storage-trait-aware encryption follow-up.
-  | "EncryptionUnsupportedOnAndroid";
+  | "EncryptionUnsupportedOnAndroid"
+  // #392 PR-B — desktop-only operation (HTML export, snippet/template
+  // walks, etc.) requested while the vault is `content://`-rooted.
+  // The operation name comes through `data` for the toast copy.
+  | "OperationUnsupportedOnAndroid";
 
 export interface VaultError {
   kind: VaultErrorKind;
@@ -91,6 +95,8 @@ export function vaultErrorCopy(err: VaultError): string {
       return "Vault access was revoked. Tap to re-pick the folder.";
     case "EncryptionUnsupportedOnAndroid":
       return "Encrypted folders aren't yet supported on Android.";
+    case "OperationUnsupportedOnAndroid":
+      return `${err.data ?? "This operation"} isn't supported on Android yet.`;
     default: {
       const _exhaustive: never = err.kind;
       return "An unexpected error occurred.";

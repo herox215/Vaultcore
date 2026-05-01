@@ -35,10 +35,16 @@ fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
         // Frontend's "Export to HTML" menu entry shouldn't be enabled
         // on mobile in v1; if it is, this surfaces a clear error
         // instead of panicking.
+        // #392 PR-B Aristotle iter-1 #4: use the dedicated
+        // OperationUnsupportedOnAndroid variant instead of shoehorning
+        // prose into PermissionDenied's path field. The IPC `data`
+        // field carries the operation name as a label (not a path),
+        // so the frontend's `navigate(err.data)` convention isn't
+        // misled.
         #[cfg(target_os = "android")]
         Some(crate::storage::VaultHandle::ContentUri(_)) => {
-            Err(VaultError::PermissionDenied {
-                path: String::from("HTML export is not yet supported on Android"),
+            Err(VaultError::OperationUnsupportedOnAndroid {
+                operation: "HTML export".into(),
             })
         }
         None => Err(VaultError::VaultUnavailable {

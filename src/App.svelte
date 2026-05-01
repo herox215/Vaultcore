@@ -74,7 +74,7 @@
     return { kind: "Io" as const, message: String(err), data: null };
   }
 
-  async function loadVault(path: string): Promise<void> {
+  async function loadVault(path: string, retryCount = 0): Promise<void> {
     vaultStore.setOpening(path);
     progressStore.start(0);
     try {
@@ -106,14 +106,19 @@
       // re-grants without retyping; the picker resolves to the same
       // URI (or a fresh one if the user picks elsewhere) and a new
       // openVault call goes through.
-      if (ve.kind === "VaultPermissionRevoked") {
+      //
+      // Aristotle iter-1 #3: cap the recursion at one retry so a
+      // persistently-revoked permission (e.g. correlated with the
+      // partial-grant scenario) can't blow the stack. After one
+      // failed re-pick we surface the error normally.
+      if (ve.kind === "VaultPermissionRevoked" && retryCount === 0) {
         toastStore.push({
           variant: "warning",
           message: vaultErrorCopy(ve),
         });
         const picked = await pickVaultFolder();
         if (picked !== null) {
-          await loadVault(picked);
+          await loadVault(picked, retryCount + 1);
         } else {
           vaultStore.setError(vaultErrorCopy(ve));
         }
