@@ -87,6 +87,21 @@ pub enum VaultError {
     /// renders a generic "request denied" copy and logs for follow-up.
     #[error("Path resolves outside the vault: {path}")]
     PathOutsideVault { path: String },
+
+    /// #392 PR-B: SAF tree URI no longer has a persisted permission grant
+    /// — user revoked it via Settings, or the app was reinstalled. The
+    /// frontend re-pick UX consumes the `uri` from `data` so the user
+    /// can re-grant access without retyping anything.
+    #[error("Vault permission revoked: {uri}")]
+    VaultPermissionRevoked { uri: String },
+
+    /// #392 PR-B: encrypted-folder operation requested while the vault
+    /// is `content://`-rooted on Android. The encryption manifest is
+    /// canonical-path-keyed (encryption/mod.rs:185) and doesn't yet have
+    /// a URI-aware variant; runtime guard fails fast at every
+    /// create/unlock/lock entry. Tracked: #345 storage-trait pass.
+    #[error("Encrypted folders are not yet supported on Android.")]
+    EncryptionUnsupportedOnAndroid,
 }
 
 impl VaultError {
@@ -108,6 +123,8 @@ impl VaultError {
             Self::PayloadTooLarge { .. } => "PayloadTooLarge",
             Self::PickerFailed { .. } => "PickerFailed",
             Self::PathOutsideVault { .. } => "PathOutsideVault",
+            Self::VaultPermissionRevoked { .. } => "VaultPermissionRevoked",
+            Self::EncryptionUnsupportedOnAndroid => "EncryptionUnsupportedOnAndroid",
         }
     }
 
@@ -126,6 +143,10 @@ impl VaultError {
             | Self::PathLocked { path }
             | Self::PayloadTooLarge { path, .. }
             | Self::PathOutsideVault { path } => Some(path.clone()),
+            // VaultPermissionRevoked carries a URI rather than a path,
+            // but the IPC `data` semantic is "string the frontend can
+            // act on" — the re-pick UX uses it directly. Same idiom.
+            Self::VaultPermissionRevoked { uri } => Some(uri.clone()),
             // Data-less variants — and variants whose payload is a human
             // message rather than a routable path. The `data` IPC field
             // is reserved for paths the frontend can `navigate(err.data)`,
@@ -137,7 +158,8 @@ impl VaultError {
             | Self::Io(_)
             | Self::WrongPassword
             | Self::CryptoError { .. }
-            | Self::PickerFailed { .. } => None,
+            | Self::PickerFailed { .. }
+            | Self::EncryptionUnsupportedOnAndroid => None,
         }
     }
 }
