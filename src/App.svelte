@@ -101,6 +101,24 @@
         vaultStore.setError(vaultErrorCopy(ve));
         return;
       }
+      // #392 PR-B: SAF tree URI grant was revoked (Settings → Apps →
+      // Permissions → Files → revoke, or app reinstall). Re-pick
+      // re-grants without retyping; the picker resolves to the same
+      // URI (or a fresh one if the user picks elsewhere) and a new
+      // openVault call goes through.
+      if (ve.kind === "VaultPermissionRevoked") {
+        toastStore.push({
+          variant: "warning",
+          message: vaultErrorCopy(ve),
+        });
+        const picked = await pickVaultFolder();
+        if (picked !== null) {
+          await loadVault(picked);
+        } else {
+          vaultStore.setError(vaultErrorCopy(ve));
+        }
+        return;
+      }
       vaultStore.setError(vaultErrorCopy(ve));
       toastStore.push({ variant: "error", message: vaultErrorCopy(ve) });
     }
