@@ -28,10 +28,29 @@ const SKIP_DIRS: &[&str] = &[".obsidian", ".git", ".vaultcore", ".trash"];
 
 fn get_vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    guard
-        .as_ref()
-        .map(|h| h.expect_posix().to_path_buf())
-        .ok_or_else(|| VaultError::VaultUnavailable { path: String::from("<no vault>") })
+    match guard.as_ref() {
+        Some(crate::storage::VaultHandle::Posix(p)) => Ok(p.clone()),
+        // #392 PR-B: HTML export is desktop-only — the asset-inlining
+        // pipeline reads attachment bytes via WalkDir + std::fs::read.
+        // Frontend's "Export to HTML" menu entry shouldn't be enabled
+        // on mobile in v1; if it is, this surfaces a clear error
+        // instead of panicking.
+        // #392 PR-B Aristotle iter-1 #4: use the dedicated
+        // OperationUnsupportedOnAndroid variant instead of shoehorning
+        // prose into PermissionDenied's path field. The IPC `data`
+        // field carries the operation name as a label (not a path),
+        // so the frontend's `navigate(err.data)` convention isn't
+        // misled.
+        #[cfg(target_os = "android")]
+        Some(crate::storage::VaultHandle::ContentUri(_)) => {
+            Err(VaultError::OperationUnsupportedOnAndroid {
+                operation: "HTML export".into(),
+            })
+        }
+        None => Err(VaultError::VaultUnavailable {
+            path: String::from("<no vault>"),
+        }),
+    }
 }
 
 fn ensure_inside_vault(vault: &Path, target: &Path) -> Result<PathBuf, VaultError> {

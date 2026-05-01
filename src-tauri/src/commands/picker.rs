@@ -93,7 +93,7 @@ async fn pick_save_path_impl(
 // ── Android branch ──────────────────────────────────────────────────────────
 
 #[cfg(target_os = "android")]
-mod android {
+pub mod android {
     use super::{PickerFilter, VaultError};
     use serde::Deserialize;
     use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
@@ -108,7 +108,13 @@ mod android {
         uri: Option<String>,
     }
 
-    pub struct AndroidPicker<R: Runtime>(PluginHandle<R>);
+    /// Wrapper around the PluginHandle for the Kotlin `PickerPlugin`
+    /// class. Stored in Tauri's `app.state()` so #392 PR-B's
+    /// `AndroidStorage` and the existing #391 picker commands share a
+    /// single registered plugin instance — `register_android_plugin`
+    /// is idempotent per-name but allocating two plugins for the same
+    /// Kotlin class is wasted JVM-side work.
+    pub struct AndroidPicker<R: Runtime>(pub PluginHandle<R>);
 
     /// Registers the Kotlin `PickerPlugin` class on the JVM classpath as
     /// the Tauri mobile plugin handle. Called from `lib.rs` next to the

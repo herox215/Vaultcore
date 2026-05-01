@@ -193,5 +193,93 @@ pub async fn list_directory(
     state: tauri::State<'_, VaultState>,
     path: String,
 ) -> Result<Vec<DirEntry>, VaultError> {
+    // #392 PR-B: Android branch routes through the storage trait.
+    // Mirrors list_directory_impl's filtering (dot-prefixed entries
+    // hidden, sort folders first then alphabetical) but skips
+    // POSIX-only metadata (created/modified timestamps, symlink
+    // detection, encryption-state lookup — encrypted folders aren't
+    // supported on Android in PR-B).
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let (storage, dir_rel) = {
+            let storage = {
+                let guard = state.storage.read().map_err(|_| VaultError::LockPoisoned)?;
+                guard
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| VaultError::VaultUnavailable {
+                        path: path.clone(),
+                    })?
+            };
+            let uri = {
+                let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+                match guard.as_ref() {
+                    Some(crate::storage::VaultHandle::ContentUri(u)) => u.clone(),
+                    _ => return Err(VaultError::VaultUnavailable { path }),
+                }
+            };
+            let prefix = if uri.ends_with('/') { uri.clone() } else { format!("{}/", uri) };
+            let rel = if path == uri || path == prefix.trim_end_matches('/') {
+                String::new()
+            } else if let Some(stripped) = path.strip_prefix(&prefix) {
+                stripped.to_string()
+            } else if let Some(stripped) = path.strip_prefix(&uri) {
+                stripped.trim_start_matches('/').to_string()
+            } else {
+                return Err(VaultError::PathOutsideVault { path: path.clone() });
+            };
+            crate::storage::validate_rel(&rel)?;
+            (storage, rel)
+        };
+
+        let listed = storage.list_dir(&dir_rel)?;
+        let mut entries: Vec<DirEntry> = Vec::new();
+        let uri = {
+            let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
+            match guard.as_ref() {
+                Some(crate::storage::VaultHandle::ContentUri(u)) => u.clone(),
+                _ => return Err(VaultError::VaultUnavailable { path }),
+            }
+        };
+        for e in listed {
+            if e.name.starts_with('.') {
+                continue;
+            }
+            let child_rel = if dir_rel.is_empty() {
+                e.name.clone()
+            } else {
+                format!("{}/{}", dir_rel, e.name)
+            };
+            let abs = if uri.ends_with('/') {
+                format!("{}{}", uri, child_rel)
+            } else {
+                format!("{}/{}", uri, child_rel)
+            };
+            let is_md = !e.is_dir
+                && std::path::Path::new(&e.name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+            entries.push(DirEntry {
+                name: e.name,
+                path: abs,
+                is_dir: e.is_dir,
+                is_symlink: false,
+                is_md,
+                modified: None,
+                created: None,
+                encryption: EncryptionState::NotEncrypted,
+            });
+        }
+        entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+        return Ok(entries);
+    }
+
     list_directory_impl(&state, path)
 }

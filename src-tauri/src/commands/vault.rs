@@ -124,20 +124,32 @@ pub async fn open_vault(
     state: tauri::State<'_, crate::VaultState>,
     path: String,
 ) -> Result<VaultInfo, VaultError> {
-    let p = PathBuf::from(&path);
-    // T-01 mitigation: canonicalize to resolve `..` and symlinks.
-    let canonical = std::fs::canonicalize(&p).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => VaultError::VaultUnavailable { path: path.clone() },
-        std::io::ErrorKind::PermissionDenied => VaultError::PermissionDenied { path: path.clone() },
-        _ => VaultError::Io(e),
-    })?;
+    // #392 PR-B: parse the input as a VaultHandle. On Android the
+    // `content://` heuristic short-circuits canonicalize; everything
+    // else flows through the existing POSIX path. The Android branch
+    // bails out of the desktop-only setup (fs_scope, watcher, manifest
+    // reload, embeddings purge, indexer cold-start) and returns a
+    // bare-bones VaultInfo so the user can read/edit/save markdown
+    // without the full desktop feature surface.
+    let handle = crate::storage::VaultHandle::parse(&path)?;
+
+    #[cfg(target_os = "android")]
+    if let crate::storage::VaultHandle::ContentUri(ref uri) = handle {
+        return open_vault_android(app, state, uri.clone(), path).await;
+    }
+
+    // Desktop path: extract the canonical PathBuf and proceed with the
+    // existing flow unchanged.
+    let canonical = handle.expect_posix().to_path_buf();
     if !canonical.is_dir() {
         return Err(VaultError::VaultUnavailable { path });
     }
 
     // T-01-01-E mitigation: grant Tauri fs plugin scope ONLY to the
     // canonical vault path, recursively. Without this, the frontend's
-    // future @tauri-apps/plugin-fs calls would be refused.
+    // future @tauri-apps/plugin-fs calls would be refused. Desktop-only
+    // because @tauri-apps/plugin-fs's JS surface isn't used on Android
+    // (every file op routes through `commands/files.rs` → VaultStorage).
     app.fs_scope().allow_directory(&canonical, true).map_err(|e| {
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
@@ -250,6 +262,72 @@ pub async fn open_vault(
     *state.vault_reachable.lock().map_err(|_| VaultError::LockPoisoned)? = true;
 
     Ok(vault_info)
+}
+
+// #392 PR-B: Android-specific open_vault flow. Verifies the persisted
+// SAF permission is still in place, takes a fresh idempotent grant,
+// constructs an AndroidStorage backed by the SAF tree URI, and bypasses
+// the desktop-only setup (fs_scope, Tantivy cold-start indexer, watcher
+// spawn, encrypted-folders manifest reload, embeddings purge).
+//
+// Cold-start indexing is deferred to the lazy-on-open follow-up
+// (#392 follow-up). The returned VaultInfo carries file_count = 0 +
+// empty file_list so the frontend's "vault loaded" UI states render
+// without a tree population. Per-file index updates via dispatch_self_*
+// keep the index populated as the user opens files.
+#[cfg(target_os = "android")]
+async fn open_vault_android(
+    app: AppHandle,
+    state: tauri::State<'_, crate::VaultState>,
+    uri: String,
+    original_path: String,
+) -> Result<VaultInfo, VaultError> {
+    use crate::storage::AndroidStorage;
+    use crate::storage::VaultHandle;
+
+    // Stale-bookmark UX: if the user revoked the SAF grant via Settings
+    // or reinstalled the app, the URI is in recent-vaults.json but no
+    // longer in contentResolver.persistedUriPermissions. The frontend
+    // listens for VaultPermissionRevoked in the loadVault error path
+    // and routes through pickVaultFolder() to re-grant.
+    if !AndroidStorage::has_persisted_permission(&app, &uri)? {
+        return Err(VaultError::VaultPermissionRevoked { uri });
+    }
+
+    // Idempotent re-grant: Android docs recommend taking the permission
+    // every time you re-open a URI, even if a grant exists, to extend
+    // its lifetime. Failure here is rare but possible (security
+    // exception) — let it propagate as Io.
+    AndroidStorage::take_persistable_uri_permission(&app, &uri)?;
+
+    let app_local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| VaultError::Io(std::io::Error::other(e.to_string())))?;
+    let storage = AndroidStorage::new(&app, uri.clone(), &app_local_data)?;
+
+    state.set_open_vault(
+        VaultHandle::ContentUri(uri.clone()),
+        std::sync::Arc::new(storage),
+    )?;
+
+    // recent-vaults.json stores the URI verbatim — VaultHandle::parse
+    // round-trips it via the content:// heuristic on next open.
+    push_recent_vault(&app, &uri)?;
+
+    *state.vault_reachable.lock().map_err(|_| VaultError::LockPoisoned)? = true;
+
+    // PR-B v1: stub VaultInfo. Cold-start indexing is deferred — the
+    // frontend gets an empty file_list and the user sees their vault
+    // tree populate as they navigate / open files (per-file index
+    // updates via dispatch_self_write). Documented as a known
+    // limitation in MOBILE_BUILD.md.
+    let _ = original_path; // unused on this path; kept for symmetry
+    Ok(VaultInfo {
+        path: uri,
+        file_count: 0,
+        file_list: Vec::new(),
+    })
 }
 
 #[tauri::command]
@@ -458,6 +536,20 @@ pub(crate) async fn merge_external_change_impl(
     last_saved_content: String,
 ) -> Result<MergeCommandResult, crate::error::VaultError> {
     use crate::merge::{three_way_merge, MergeOutcome};
+
+    // #392 PR-B: merge_external_change is fired by the watcher when an
+    // external edit is detected. On Android there's no watcher, so this
+    // command should never reach here in normal flow — but if the
+    // frontend retries from a stale event after switching vaults, we
+    // surface a clear error instead of panicking at expect_posix.
+    #[cfg(target_os = "android")]
+    if matches!(
+        *state.current_vault.lock().map_err(|_| crate::error::VaultError::LockPoisoned)?,
+        Some(crate::storage::VaultHandle::ContentUri(_))
+    ) {
+        let _ = (editor_content, last_saved_content);
+        return Err(crate::error::VaultError::VaultUnavailable { path });
+    }
 
     // T-02-18 mitigation: validate path is inside vault
     let vault_path: PathBuf = {
