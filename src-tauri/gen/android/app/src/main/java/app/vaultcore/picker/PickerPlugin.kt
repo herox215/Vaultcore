@@ -170,12 +170,28 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun hasPersistedPermission(invoke: Invoke) {
+        // Returns the per-flag breakdown of the persisted grant for
+        // `args.uri`. The Rust caller (`AndroidStorage::has_persisted_permission`)
+        // is responsible for the &&-of-read-and-write decision: this
+        // command MUST NOT collapse the two booleans into a single
+        // "granted" answer, because a read-only grant would otherwise
+        // get classified as "permission ok" — first write would then
+        // fail with a generic Io error instead of triggering the
+        // re-pick UX. See the Rust caller and the matching unit test.
         val args = invoke.parseArgs(UriArg::class.java)
         val target = Uri.parse(args.uri)
-        val granted = activity.contentResolver.persistedUriPermissions.any {
-            it.uri == target && (it.isReadPermission || it.isWritePermission)
+        var hasRead = false
+        var hasWrite = false
+        for (p in activity.contentResolver.persistedUriPermissions) {
+            if (p.uri == target) {
+                if (p.isReadPermission) hasRead = true
+                if (p.isWritePermission) hasWrite = true
+            }
         }
-        invoke.resolve(JSObject().apply { put("granted", granted) })
+        val out = JSObject()
+        out.put("hasRead", hasRead)
+        out.put("hasWrite", hasWrite)
+        invoke.resolve(out)
     }
 
     // ── #392 PR-B: I/O against SAF tree ────────────────────────────────────
@@ -293,9 +309,20 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
                     "moveDocument failed (provider may not support cross-parent move)",
                 )
                 // After move, rename the leaf if the basename changed.
+                // Discarding renameTo's return value would silently leave
+                // the file under its OLD basename at the new parent —
+                // caller thinks "I moved foo.md to /Notes/ as bar.md"
+                // and would in fact see /Notes/foo.md. Fail loud instead.
                 val movedDoc = DocumentFile.fromTreeUri(activity, moved)
-                if (movedDoc?.name != to) {
-                    movedDoc?.renameTo(to)
+                if (movedDoc == null) {
+                    return invoke.reject("could not re-resolve moved document at ${moved}")
+                }
+                if (movedDoc.name != to) {
+                    if (!movedDoc.renameTo(to)) {
+                        return invoke.reject(
+                            "moveDocument succeeded but renameTo($to) returned false",
+                        )
+                    }
                 }
                 invoke.resolve(JSObject())
             }

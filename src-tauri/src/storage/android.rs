@@ -59,10 +59,7 @@ struct ExistsResp {
     exists: bool,
 }
 
-#[derive(Deserialize)]
-struct GrantedResp {
-    granted: bool,
-}
+use super::permission::PermissionFlags;
 
 #[derive(Deserialize)]
 #[allow(dead_code)] // Kotlin returns {} on success; nothing to inspect.
@@ -105,20 +102,21 @@ impl AndroidStorage {
 
     /// Convenience for `open_vault`'s persisted-permission check. Not
     /// part of the trait surface — only meaningful for ContentUri
-    /// vaults.
+    /// vaults. Returns true iff BOTH read AND write are persisted on
+    /// the URI: a partial grant doesn't let us run the vault.
     pub fn has_persisted_permission<R: Runtime>(
         app: &AppHandle<R>,
         uri: &str,
     ) -> Result<bool, VaultError> {
         let picker = app.state::<AndroidPicker<tauri::Wry>>();
-        let r: GrantedResp = picker
+        let r: PermissionFlags = picker
             .0
             .run_mobile_plugin(
                 "hasPersistedPermission",
                 serde_json::json!({ "uri": uri }),
             )
             .map_err(|e| VaultError::Io(std::io::Error::other(e.to_string())))?;
-        Ok(r.granted)
+        Ok(r.is_fully_granted())
     }
 
     /// Idempotent: take the persistable read+write grant on a tree
@@ -341,3 +339,4 @@ mod sha_tests {
         assert!(prefix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
+

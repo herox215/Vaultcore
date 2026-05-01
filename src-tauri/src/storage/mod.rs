@@ -8,6 +8,7 @@
 // to return per-platform locations.
 
 pub mod handle;
+pub mod permission;
 pub mod posix;
 
 #[cfg(target_os = "android")]

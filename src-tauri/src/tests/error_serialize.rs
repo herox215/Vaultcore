@@ -182,6 +182,24 @@ fn vault_error_serialize_encryption_unsupported_on_android() {
 }
 
 #[test]
+fn vault_error_serialize_operation_unsupported_on_android() {
+    // #392 PR-B Aristotle iter-1 #4: HTML export and other
+    // desktop-only operations on a content://-rooted vault surface
+    // through this variant. The `operation` name lands in `data` as
+    // a human label (NOT a path), so the message reads naturally and
+    // the frontend's data-routing contract isn't violated.
+    let v = to_json(VaultError::OperationUnsupportedOnAndroid {
+        operation: "HTML export".into(),
+    });
+    assert_eq!(v["kind"], "OperationUnsupportedOnAndroid");
+    assert_eq!(
+        v["message"],
+        "Operation 'HTML export' is not yet supported on Android."
+    );
+    assert_eq!(v["data"], "HTML export");
+}
+
+#[test]
 fn vault_error_serialize_picker_failed() {
     // #391: distinct from Io so the frontend can render a picker-specific
     // toast ("Could not open the file picker") instead of the generic
