@@ -18,6 +18,7 @@
   import { readFile, writeFile, mergeExternalChange, getResolvedLinks, getResolvedAnchors, getResolvedAttachments, createFile, getFileHash } from "../../ipc/commands";
   import { openFileAsTab } from "../../lib/openFileAsTab";
   import { tabSupportsReading } from "../../lib/tabKind";
+  import { viewportStore } from "../../store/viewportStore";
   import { defaultViewModeForViewport } from "../../lib/viewport";
   import { isVaultError } from "../../types/errors";
   import { toastStore } from "../../store/toastStore";
@@ -252,6 +253,78 @@
   const paneActiveTabSupportsReading = $derived(
     paneActiveTab !== null && tabSupportsReading(paneActiveTab),
   );
+
+  // #395 — keyboard-aware caret centering. When the on-screen keyboard
+  // appears (`viewportStore.keyboardHeight` transitions 0 → >0) AND the
+  // active tab is a focused, edit-mode markdown view in THIS pane, dispatch
+  // `EditorView.scrollIntoView(selection.main.head, { y: "center" })` so
+  // the caret stays visible above the keyboard.
+  //
+  // Re-dispatch rules:
+  //   - Fires on 0→>0 transition (keyboard opens).
+  //   - Fires when `paneActiveTabId` changes while kb > 0 (so swiping to a
+  //     different tab while typing recenters its caret).
+  //   - Per-pixel jitter (250→245→260) does NOT re-dispatch — tracked via
+  //     `lastKbHeight === 0` gate.
+  //   - Closing the keyboard (>0 → 0) does NOT dispatch — the now-larger
+  //     viewport reveals the caret naturally.
+  //
+  // Why rAF: the padding-bottom on `.vc-editor-container` (driven by
+  // `--vc-keyboard-height`) shrinks CM6's host element. CM6 measures its
+  // visible rect against the host, but the layout pass that gives CM6 the
+  // new size happens before the next paint. Dispatching scrollIntoView in
+  // the same microtask risks measuring the stale rect.
+  let lastKbHeight = 0;
+  let lastDispatchTabId: string | null = null;
+  $effect(() => {
+    const kb = $viewportStore.keyboardHeight;
+    const tabId = paneActiveTabId;
+    const tab = paneActiveTab;
+    const isEditableActiveHere =
+      tab !== null &&
+      tabSupportsReading(tab) &&
+      (tab.viewMode ?? "edit") === "edit" &&
+      activePane === paneId;
+
+    if (
+      kb > 0 &&
+      isEditableActiveHere &&
+      tabId !== null &&
+      (lastKbHeight === 0 || lastDispatchTabId !== tabId)
+    ) {
+      const view = viewMap.get(tabId);
+      if (view && view.hasFocus) {
+        const scheduledTabId = tabId;
+        requestAnimationFrame(() => {
+          // Re-check the tab and view still match: a rapid tab switch
+          // between schedule and frame would otherwise dispatch on a stale
+          // (or destroyed) view. Reading viewMap by id and comparing
+          // against the active tab keeps the rAF idempotent against
+          // mid-flight activation changes.
+          const liveView = viewMap.get(scheduledTabId);
+          if (!liveView) return;
+          if (tabStore.getActiveTab()?.id !== scheduledTabId) return;
+          liveView.dispatch({
+            effects: EditorView.scrollIntoView(
+              liveView.state.selection.main.head,
+              { y: "center" },
+            ),
+          });
+          // Commit `lastDispatchTabId` AFTER the dispatch lands. If we set
+          // it pre-rAF, a follow-up effect that enters the gate during the
+          // rAF window would see a stale "we already dispatched for A"
+          // record and skip the legitimate redispatch for B.
+          lastDispatchTabId = scheduledTabId;
+        });
+      }
+    }
+
+    // `lastKbHeight` MUST update synchronously (not inside rAF): it tracks
+    // the last seen value so the next $effect run can detect a 0→>0
+    // transition. Deferring it would lose intermediate transitions if the
+    // store fires twice before the frame.
+    lastKbHeight = kb;
+  });
 
   // #87: show ambient local-graph background in edit mode on markdown tabs.
   const showGraphBg = $derived(
@@ -1250,6 +1323,15 @@
     position: absolute;
     inset: 0;
     z-index: 1;
+    /* #395 — reserve room for the on-screen keyboard so CM6's host
+       element (which fills this container) actually shrinks. With
+       box-sizing: border-box the padding eats into the bottom of the
+       container, and CM6's `.cm-editor` (height: 100%) honors the new
+       content-box height. Default 0px → byte-identical desktop layout.
+       Applies to ReadingView and Canvas containers too — none of them
+       should render under the virtual keyboard. */
+    box-sizing: border-box;
+    padding-bottom: var(--vc-keyboard-height, 0px);
   }
 
   /* #87: semi-transparent editor backgrounds so the ambient graph shows through */
