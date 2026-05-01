@@ -1342,6 +1342,21 @@
     background-color: color-mix(in srgb, var(--color-surface) 70%, transparent) !important;
   }
 
+  /* On mobile the .cm-content document-card sits flush against the gutter
+     because the viewport is narrower than --vc-editor-max-width (720px) and
+     `width: 100%` consumes everything. Carve out 12px on each side so the
+     card visibly floats on the gutter background, matching the existing
+     top/bottom 24px margins. The flex-basis still wins on desktop, so this
+     change is mobile-only. */
+  @media (max-width: 699px) {
+    .vc-editor-content :global(.cm-content) {
+      width: calc(100% - 24px) !important;
+      flex-basis: calc(100% - 24px) !important;
+      margin-left: 12px !important;
+      margin-right: 12px !important;
+    }
+  }
+
   .vc-editor-empty {
     position: absolute;
     inset: 0;

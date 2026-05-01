@@ -3,6 +3,7 @@
   "identifier": "mobile-capability",
   "description": "VaultCore Android capabilities",
   "platforms": ["android"],
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "dialog:default",
