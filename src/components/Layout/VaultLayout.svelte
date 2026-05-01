@@ -149,6 +149,25 @@
     }
   });
 
+  // #397 — focus-return for the burger sheet. The sheet itself focuses its
+  // first focusable on open (component-side); on close, focus must return
+  // to the More tab so the next Tab keypress doesn't drop the user
+  // somewhere arbitrary in the editor. The `burgerWasOpen` latch matches
+  // the drawer's `wasOpen` pattern: it prevents a spurious mount-time
+  // focus call when the sheet starts closed.
+  let burgerWasOpen = $state(false);
+  $effect(() => {
+    if (mobileBurgerOpen) {
+      burgerWasOpen = true;
+    } else if (burgerWasOpen) {
+      // Look up by id rather than threading a bind:this through MobileTabBar
+      // — the tab id contract (`vc-mobile-tab-more`) is stable per #389.
+      const moreTab = document.getElementById("vc-mobile-tab-more");
+      moreTab?.focus();
+      burgerWasOpen = false;
+    }
+  });
+
   // #389 — mobile bottom-tab-bar handlers. State (drawer + omni-search) is
   // owned here in VaultLayout; MobileTabBar receives callbacks only. The
   // close-drawer-first lines on Search/More are required because the drawer
