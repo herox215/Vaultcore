@@ -10,9 +10,11 @@
    *   1. Menu — a 6-row list. Default state when the sheet opens.
    *   2. Panel — the selected sub-panel rendered inline with a back button.
    *
-   * Properties + Settings rows are TODO placeholders that stub-toast and
-   * close the sheet; #393 and #394 will replace those branches with real
-   * destinations.
+   * Properties row hands off to the Properties bottom sheet (#393) via
+   * the `onSelectProperties` prop, then closes itself so the two sheets
+   * never co-render. Settings row remains a TODO #394 stub-toast that
+   * will be replaced with a real destination once the settings layout
+   * lands.
    */
   import {
     Link2,
