@@ -112,9 +112,15 @@ pub fn run() {
     use tauri::Manager;
 
     env_logger::init();
-    tauri::Builder::default()
+    #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(commands::picker::android_init());
+    }
+    builder
         .manage(VaultState::default())
         .setup(|app| {
             // #353 one-shot: the removed semantic-search toggle persisted
@@ -173,6 +179,8 @@ pub fn run() {
             commands::encryption::lock_all_folders,
             commands::encryption::list_encrypted_folders,
             commands::encryption::export_decrypted_file,
+            commands::picker::pick_vault_folder,
+            commands::picker::pick_save_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
