@@ -74,11 +74,12 @@ vi.mock("../../../store/settingsStore", () => {
 });
 
 vi.mock("../../../store/vaultStore", () => {
-  const subscribers = new Set<(s: { currentPath: string | null }) => void>();
-  const state = { currentPath: "/test/vault" };
+  type VaultLike = { currentPath: string | null };
+  const state: VaultLike = { currentPath: "/test/vault" };
+  const subscribers = new Set<(s: VaultLike) => void>();
   return {
     vaultStore: {
-      subscribe: (cb: (s: typeof state) => void) => {
+      subscribe: (cb: (s: VaultLike) => void) => {
         cb(state);
         subscribers.add(cb);
         return () => subscribers.delete(cb);
