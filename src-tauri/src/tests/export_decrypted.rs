@@ -62,7 +62,7 @@ fn setup(unlocked: bool, plaintext: &[u8]) -> SealedVault {
     let sealed_canon = sealed_file.canonicalize().unwrap();
 
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(vault.clone());
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(vault.clone()));
     state.manifest_cache.refresh_from_disk(&vault).unwrap();
     if unlocked {
         let mut k = Zeroizing::new([0u8; 32]);
