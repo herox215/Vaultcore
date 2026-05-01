@@ -142,11 +142,15 @@ pub async fn open_vault(
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
-    // Persist as the active vault (files commands read from here).
-    {
-        let mut guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-        *guard = Some(canonical.clone());
-    }
+    // #392 PR-A: atomically persist the active vault + storage handle.
+    // `set_open_vault` takes both locks in a fixed order so a
+    // concurrent reader never sees `current_vault` and `storage`
+    // pointing at different vaults — relevant to PR-B which reads both
+    // during file commands.
+    state.set_open_vault(
+        crate::storage::VaultHandle::Posix(canonical.clone()),
+        std::sync::Arc::new(crate::storage::PosixStorage::new(canonical.clone())),
+    )?;
 
     // Push to recent-vaults.json
     let canonical_str = canonical.to_string_lossy().into_owned();
@@ -456,14 +460,17 @@ pub(crate) async fn merge_external_change_impl(
     use crate::merge::{three_way_merge, MergeOutcome};
 
     // T-02-18 mitigation: validate path is inside vault
-    let vault_path = {
+    let vault_path: PathBuf = {
         let guard = state
             .current_vault
             .lock()
             .map_err(|_| crate::error::VaultError::LockPoisoned)?;
-        guard.clone().ok_or_else(|| crate::error::VaultError::VaultUnavailable {
-            path: path.clone(),
-        })?
+        guard
+            .as_ref()
+            .map(|h| h.expect_posix().to_path_buf())
+            .ok_or_else(|| crate::error::VaultError::VaultUnavailable {
+                path: path.clone(),
+            })?
     };
 
     let target = PathBuf::from(&path);

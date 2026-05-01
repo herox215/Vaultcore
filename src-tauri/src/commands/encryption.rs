@@ -94,9 +94,12 @@ pub struct EncryptProgress {
 
 fn vault_root(state: &VaultState) -> Result<PathBuf, VaultError> {
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    guard.as_ref().cloned().ok_or_else(|| VaultError::VaultUnavailable {
-        path: String::from("<no vault>"),
-    })
+    guard
+        .as_ref()
+        .map(|h| h.expect_posix().to_path_buf())
+        .ok_or_else(|| VaultError::VaultUnavailable {
+            path: String::from("<no vault>"),
+        })
 }
 
 /// Canonical absolute path of the folder the user referenced, with
@@ -500,7 +503,7 @@ pub fn export_decrypted_file_impl(
             .map_err(|_| VaultError::LockPoisoned)?;
         guard
             .as_ref()
-            .cloned()
+            .map(|h| h.expect_posix().to_path_buf())
             .ok_or_else(|| VaultError::VaultUnavailable {
                 path: source.clone(),
             })?

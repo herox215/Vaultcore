@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 fn make_state(vault_path: std::path::PathBuf) -> VaultState {
     let state = VaultState::default();
-    *state.current_vault.lock().unwrap() = Some(vault_path);
+    *state.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(vault_path));
     state
 }
 

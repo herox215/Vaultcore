@@ -25,7 +25,7 @@ fn state_with_vault(root: &std::path::Path) -> VaultState {
     // production command path would.
     let canonical = fs::canonicalize(root).unwrap();
     let s = VaultState::default();
-    *s.current_vault.lock().unwrap() = Some(canonical);
+    *s.current_vault.lock().unwrap() = Some(crate::storage::VaultHandle::Posix(canonical));
     s
 }
 
@@ -230,9 +230,10 @@ async fn read_file_impl(state: &VaultState, path: String) -> Result<String, Vaul
     })?;
     {
         let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-        let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-            path: path.clone(),
-        })?;
+        let vault = guard
+            .as_ref()
+            .ok_or_else(|| VaultError::VaultUnavailable { path: path.clone() })?
+            .expect_posix();
         if !canonical_target.starts_with(vault) {
             return Err(VaultError::PermissionDenied { path });
         }
@@ -268,9 +269,10 @@ async fn write_file_impl(
     })?;
     {
         let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-        let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-            path: path.clone(),
-        })?;
+        let vault = guard
+            .as_ref()
+            .ok_or_else(|| VaultError::VaultUnavailable { path: path.clone() })?
+            .expect_posix();
         if !canonical_parent.starts_with(vault) {
             return Err(VaultError::PermissionDenied { path });
         }
@@ -310,7 +312,7 @@ async fn dispatch_index_updates_test(
     let vault_root = {
         let Ok(guard) = state.current_vault.lock() else { return };
         match guard.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return,
         }
     };
