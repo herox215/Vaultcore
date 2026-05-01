@@ -1434,5 +1434,15 @@
     .vc-layout-editor {
       padding-bottom: calc(56px + env(safe-area-inset-bottom));
     }
+
+    /* User report: on edge-to-edge Android (status bar drawn over WebView),
+       the topbar's 36px height sits under the system status icons and
+       buttons can't be tapped. Push it down by safe-area-inset-top. The
+       border-bottom still draws cleanly because we pad-top, not margin-top.
+       Mobile-only — desktop has its own window chrome. */
+    .vc-editor-topbar {
+      padding-top: calc(env(safe-area-inset-top) + 4px);
+      height: calc(36px + env(safe-area-inset-top) + 4px);
+    }
   }
 </style>
