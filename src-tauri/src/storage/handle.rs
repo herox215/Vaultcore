@@ -47,23 +47,11 @@ impl VaultHandle {
         Ok(Self::Posix(canonical))
     }
 
-    /// Path accessor for callers that genuinely need a `PathBuf` today
-    /// (the encryption root-finder, the indexer's vault walk, the T-02
-    /// `starts_with` guard). Returns `None` for non-POSIX arms so PR-B's
-    /// migration of those callers to the storage trait is enforced by
-    /// the compiler.
-    pub fn posix_path(&self) -> Option<&Path> {
-        match self {
-            Self::Posix(p) => Some(p.as_path()),
-        }
-    }
-
     /// Panicking accessor for the 22 PR-A sites that still operate on
-    /// `&Path`. Equivalent to `posix_path().expect("...")` but reads
-    /// nicer at the call site. PR-B replaces every caller of this with
-    /// either a `VaultStorage` trait call or a cfg-gated branch — the
-    /// panic message names PR-B explicitly so a regression on Android is
-    /// loud, not silent.
+    /// `&Path`. PR-B replaces every caller with either a `VaultStorage`
+    /// trait call or a cfg-gated branch; the panicking shape exists so
+    /// a regression on Android is loud, not silent. Single grep target
+    /// for PR-B: `expect_posix`.
     pub fn expect_posix(&self) -> &Path {
         match self {
             Self::Posix(p) => p.as_path(),

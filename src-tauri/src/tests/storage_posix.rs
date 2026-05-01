@@ -4,12 +4,18 @@
 
 #![cfg(test)]
 
+use crate::error::VaultError;
 use crate::storage::{PosixStorage, VaultStorage};
 use tempfile::TempDir;
 
 fn fresh_storage() -> (TempDir, PosixStorage) {
     let dir = TempDir::new().expect("tempdir");
-    let storage = PosixStorage::new(dir.path().to_path_buf());
+    // Canonicalize the vault root: this matches `open_vault`'s production
+    // contract (the path comes via `VaultHandle::parse` which canonicalizes)
+    // and is required for the T-02 `starts_with` guard to behave correctly
+    // on macOS, where `/var/...` symlinks to `/private/var/...`.
+    let canonical = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+    let storage = PosixStorage::new(canonical);
     (dir, storage)
 }
 
@@ -96,19 +102,119 @@ fn list_dir_returns_children() {
 fn read_missing_file_maps_to_file_not_found() {
     let (_dir, storage) = fresh_storage();
     match storage.read_file("nope.md") {
-        Err(crate::error::VaultError::FileNotFound { path }) => assert_eq!(path, "nope.md"),
+        Err(VaultError::FileNotFound { path }) => assert_eq!(path, "nope.md"),
         other => panic!("expected FileNotFound, got {other:?}"),
     }
 }
 
 #[test]
 fn metadata_path_returns_dot_vaultcore_under_root() {
-    let (dir, storage) = fresh_storage();
-    assert_eq!(storage.metadata_path(), dir.path().join(".vaultcore"));
+    let dir = TempDir::new().expect("tempdir");
+    let canonical = std::fs::canonicalize(dir.path()).unwrap();
+    let storage = PosixStorage::new(canonical.clone());
+    assert_eq!(storage.metadata_path(), canonical.join(".vaultcore"));
 }
 
 #[test]
 fn exists_returns_false_for_missing() {
     let (_dir, storage) = fresh_storage();
     assert!(!storage.exists("ghost.md"));
+}
+
+// ── T-02 path-traversal guard ───────────────────────────────────────────────
+
+#[test]
+fn read_with_dotdot_escape_is_blocked() {
+    // Set up a sibling file outside the vault that the attacker is
+    // trying to read.
+    let outer = TempDir::new().unwrap();
+    let secret_path = outer.path().join("secret.txt");
+    std::fs::write(&secret_path, b"top secret").unwrap();
+
+    // Vault root sits inside `outer`, so `../secret.txt` would resolve
+    // to a real file but outside the vault.
+    let vault_dir = outer.path().join("vault");
+    std::fs::create_dir(&vault_dir).unwrap();
+    let canonical = std::fs::canonicalize(&vault_dir).unwrap();
+    let storage = PosixStorage::new(canonical);
+
+    match storage.read_file("../secret.txt") {
+        Err(VaultError::PathOutsideVault { path }) => {
+            assert_eq!(path, "../secret.txt");
+        }
+        Ok(_) => panic!("T-02 violation: dotdot escape was allowed to read"),
+        other => panic!("expected PathOutsideVault, got {other:?}"),
+    }
+}
+
+#[test]
+fn write_with_dotdot_escape_is_blocked() {
+    let outer = TempDir::new().unwrap();
+    let vault_dir = outer.path().join("vault");
+    std::fs::create_dir(&vault_dir).unwrap();
+    let canonical = std::fs::canonicalize(&vault_dir).unwrap();
+    let storage = PosixStorage::new(canonical);
+
+    // The parent of `../escape.md` (after canonicalize) is `outer`,
+    // which does NOT start with `vault_dir` — guard fires.
+    match storage.write_file("../escape.md", b"pwn") {
+        Err(VaultError::PathOutsideVault { path }) => {
+            assert_eq!(path, "../escape.md");
+        }
+        Ok(_) => panic!("T-02 violation: dotdot escape was allowed to write"),
+        other => panic!("expected PathOutsideVault, got {other:?}"),
+    }
+    // And confirm nothing actually landed on disk outside the vault.
+    assert!(!outer.path().join("escape.md").exists());
+}
+
+#[test]
+fn create_dir_with_dotdot_escape_is_blocked() {
+    let outer = TempDir::new().unwrap();
+    let vault_dir = outer.path().join("vault");
+    std::fs::create_dir(&vault_dir).unwrap();
+    let canonical = std::fs::canonicalize(&vault_dir).unwrap();
+    let storage = PosixStorage::new(canonical);
+
+    match storage.create_dir("../sibling") {
+        Err(VaultError::PathOutsideVault { path }) => {
+            assert_eq!(path, "../sibling");
+        }
+        Ok(_) => panic!("T-02 violation: dotdot escape was allowed to mkdir"),
+        other => panic!("expected PathOutsideVault, got {other:?}"),
+    }
+    assert!(!outer.path().join("sibling").exists());
+}
+
+#[test]
+fn rename_to_dotdot_escape_is_blocked() {
+    let outer = TempDir::new().unwrap();
+    let vault_dir = outer.path().join("vault");
+    std::fs::create_dir(&vault_dir).unwrap();
+    let canonical = std::fs::canonicalize(&vault_dir).unwrap();
+    let storage = PosixStorage::new(canonical);
+    storage.write_file("inside.md", b"x").unwrap();
+
+    match storage.rename("inside.md", "../escaped.md") {
+        Err(VaultError::PathOutsideVault { .. }) => {}
+        Ok(_) => panic!("T-02 violation: rename leaked file out of vault"),
+        other => panic!("expected PathOutsideVault, got {other:?}"),
+    }
+    // Source still in place.
+    assert!(storage.exists("inside.md"));
+    assert!(!outer.path().join("escaped.md").exists());
+}
+
+#[test]
+fn exists_returns_false_for_dotdot_escape() {
+    let outer = TempDir::new().unwrap();
+    std::fs::write(outer.path().join("secret.txt"), b"x").unwrap();
+    let vault_dir = outer.path().join("vault");
+    std::fs::create_dir(&vault_dir).unwrap();
+    let canonical = std::fs::canonicalize(&vault_dir).unwrap();
+    let storage = PosixStorage::new(canonical);
+
+    // The file exists physically, but `../secret.txt` resolves outside
+    // the vault → guard returns Err, we map to false.
+    assert!(!storage.exists("../secret.txt"));
 }

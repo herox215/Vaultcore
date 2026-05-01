@@ -142,25 +142,15 @@ pub async fn open_vault(
         VaultError::Io(std::io::Error::other(e.to_string()))
     })?;
 
-    // Persist as the active vault (files commands read from here).
-    // #392 PR-A: also construct + stash a `PosixStorage` in the new
-    // `state.storage` slot. PR-A doesn't read from the slot anywhere
-    // yet — file commands still go through `ensure_inside_vault` +
-    // `std::fs::*` directly. PR-B will route file commands through the
-    // storage trait and add the Android `ContentUri` arm.
-    {
-        let mut guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-        *guard = Some(crate::storage::VaultHandle::Posix(canonical.clone()));
-    }
-    {
-        let mut storage_guard = state
-            .storage
-            .write()
-            .map_err(|_| VaultError::LockPoisoned)?;
-        *storage_guard = Some(std::sync::Arc::new(crate::storage::PosixStorage::new(
-            canonical.clone(),
-        )));
-    }
+    // #392 PR-A: atomically persist the active vault + storage handle.
+    // `set_open_vault` takes both locks in a fixed order so a
+    // concurrent reader never sees `current_vault` and `storage`
+    // pointing at different vaults — relevant to PR-B which reads both
+    // during file commands.
+    state.set_open_vault(
+        crate::storage::VaultHandle::Posix(canonical.clone()),
+        std::sync::Arc::new(crate::storage::PosixStorage::new(canonical.clone())),
+    )?;
 
     // Push to recent-vaults.json
     let canonical_str = canonical.to_string_lossy().into_owned();

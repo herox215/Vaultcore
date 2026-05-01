@@ -61,8 +61,9 @@ impl WriteIgnoreList {
 pub struct VaultState {
     /// #392: VaultHandle wraps a canonicalized POSIX path on desktop and
     /// will gain a `ContentUri(String)` arm in PR-B for Android. Today's
-    /// callers use `posix_path()` to access the inner `&Path`; PR-B
-    /// migrates the file-command surface to the storage trait.
+    /// callers use `expect_posix()` (panics on non-POSIX) to access the
+    /// inner `&Path`; PR-B migrates each call site to either a storage
+    /// trait call or a cfg-gated branch.
     pub current_vault: Mutex<Option<VaultHandle>>,
     /// #392 PR-A: storage abstraction populated by `open_vault`. PR-A
     /// constructs a `PosixStorage` and stashes it here, but no commands
@@ -99,6 +100,36 @@ pub struct VaultState {
     // vault close; the cache is refreshed on every manifest mutation.
     pub pending_queue: Arc<encryption::PendingEncryptionQueue>,
     pub manifest_cache: Arc<encryption::ManifestCache>,
+}
+
+impl VaultState {
+    /// #392 PR-A: atomically populate `current_vault` and `storage` for a
+    /// freshly opened vault. Both fields describe the same vault and PR-B
+    /// will read both during file commands; updating them in separate
+    /// scopes leaves a window where a concurrent reader sees mismatched
+    /// state. A single helper that takes both locks in a deterministic
+    /// order is the canonical fix.
+    ///
+    /// Lock ordering: `current_vault` (Mutex) before `storage` (RwLock).
+    /// Used consistently by the only caller (`open_vault`); any future
+    /// caller must follow the same order to avoid deadlock.
+    pub fn set_open_vault(
+        &self,
+        handle: storage::VaultHandle,
+        store: std::sync::Arc<dyn storage::VaultStorage>,
+    ) -> Result<(), error::VaultError> {
+        let mut handle_guard = self
+            .current_vault
+            .lock()
+            .map_err(|_| error::VaultError::LockPoisoned)?;
+        let mut storage_guard = self
+            .storage
+            .write()
+            .map_err(|_| error::VaultError::LockPoisoned)?;
+        *handle_guard = Some(handle);
+        *storage_guard = Some(store);
+        Ok(())
+    }
 }
 
 impl Default for VaultState {
