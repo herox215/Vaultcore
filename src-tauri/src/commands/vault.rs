@@ -143,9 +143,23 @@ pub async fn open_vault(
     })?;
 
     // Persist as the active vault (files commands read from here).
+    // #392 PR-A: also construct + stash a `PosixStorage` in the new
+    // `state.storage` slot. PR-A doesn't read from the slot anywhere
+    // yet — file commands still go through `ensure_inside_vault` +
+    // `std::fs::*` directly. PR-B will route file commands through the
+    // storage trait and add the Android `ContentUri` arm.
     {
         let mut guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-        *guard = Some(canonical.clone());
+        *guard = Some(crate::storage::VaultHandle::Posix(canonical.clone()));
+    }
+    {
+        let mut storage_guard = state
+            .storage
+            .write()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        *storage_guard = Some(std::sync::Arc::new(crate::storage::PosixStorage::new(
+            canonical.clone(),
+        )));
     }
 
     // Push to recent-vaults.json
@@ -456,14 +470,17 @@ pub(crate) async fn merge_external_change_impl(
     use crate::merge::{three_way_merge, MergeOutcome};
 
     // T-02-18 mitigation: validate path is inside vault
-    let vault_path = {
+    let vault_path: PathBuf = {
         let guard = state
             .current_vault
             .lock()
             .map_err(|_| crate::error::VaultError::LockPoisoned)?;
-        guard.clone().ok_or_else(|| crate::error::VaultError::VaultUnavailable {
-            path: path.clone(),
-        })?
+        guard
+            .as_ref()
+            .map(|h| h.expect_posix().to_path_buf())
+            .ok_or_else(|| crate::error::VaultError::VaultUnavailable {
+                path: path.clone(),
+            })?
     };
 
     let target = PathBuf::from(&path);

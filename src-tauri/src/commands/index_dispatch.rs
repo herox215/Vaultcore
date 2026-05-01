@@ -91,7 +91,7 @@ pub(crate) async fn dispatch_self_write(state: &VaultState, abs_path: &Path, con
             return;
         };
         match guard.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return,
         }
     };
@@ -144,7 +144,7 @@ pub(crate) async fn dispatch_self_delete(state: &VaultState, abs_path: &Path) {
             return;
         };
         match guard.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return,
         }
     };
