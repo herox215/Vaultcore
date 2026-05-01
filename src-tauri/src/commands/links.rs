@@ -56,8 +56,8 @@ impl LockedRelChecker {
         if snapshot.is_empty() {
             return Self { prefixes: Vec::new() };
         }
-        let vault = match state.current_vault.lock() {
-            Ok(g) => g.clone(),
+        let vault: Option<std::path::PathBuf> = match state.current_vault.lock() {
+            Ok(g) => g.as_ref().map(|h| h.expect_posix().to_path_buf()),
             Err(_) => None,
         };
         let Some(vault_root) = vault else {
@@ -411,7 +411,7 @@ pub async fn update_links_after_rename(
             path: String::new(),
         })?;
         match vp.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return Err(VaultError::VaultUnavailable { path: String::from("(none)") }),
         }
     };
@@ -671,7 +671,7 @@ pub async fn get_resolved_links(
             .current_vault
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
-        guard.clone()
+        guard.as_ref().map(|h| h.expect_posix().to_path_buf())
     };
     if let Some(vp) = vault_path {
         paths.extend(crate::indexer::collect_canvas_rel_paths(&vp));
@@ -765,7 +765,7 @@ pub async fn get_resolved_attachments(
             .lock()
             .map_err(|_| VaultError::IndexCorrupt)?;
         match guard.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => return Ok(HashMap::new()),
         }
     };

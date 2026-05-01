@@ -24,9 +24,12 @@ fn bookmarks_path_for(state: &VaultState, vault_path: &str) -> Result<PathBuf, V
         _ => VaultError::Io(e),
     })?;
     let guard = state.current_vault.lock().map_err(|_| VaultError::LockPoisoned)?;
-    let vault = guard.as_ref().ok_or_else(|| VaultError::VaultUnavailable {
-        path: vault_path.to_string(),
-    })?;
+    let vault = guard
+        .as_ref()
+        .ok_or_else(|| VaultError::VaultUnavailable {
+            path: vault_path.to_string(),
+        })?
+        .expect_posix();
     if canonical != *vault {
         return Err(VaultError::PermissionDenied { path: canonical.display().to_string() });
     }

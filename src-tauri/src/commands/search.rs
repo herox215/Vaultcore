@@ -236,8 +236,8 @@ pub async fn search_filename(
         if snap.is_empty() {
             Vec::new()
         } else {
-            let vault = match state.current_vault.lock() {
-                Ok(g) => g.clone(),
+            let vault: Option<std::path::PathBuf> = match state.current_vault.lock() {
+                Ok(g) => g.as_ref().map(|h| h.expect_posix().to_path_buf()),
                 Err(_) => None,
             };
             match vault {
@@ -356,7 +356,7 @@ pub async fn rebuild_index(
             .lock()
             .map_err(|_| VaultError::VaultUnavailable { path: String::new() })?;
         match vp.as_ref() {
-            Some(p) => p.clone(),
+            Some(h) => h.expect_posix().to_path_buf(),
             None => {
                 return Err(VaultError::VaultUnavailable {
                     path: String::from("(none)"),

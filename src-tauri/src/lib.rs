@@ -5,6 +5,7 @@ pub mod watcher;
 pub mod merge;
 pub mod indexer;
 pub mod encryption;
+pub mod storage;
 
 #[cfg(test)]
 mod tests;
@@ -17,6 +18,7 @@ use notify_debouncer_full::{Debouncer, RecommendedCache};
 use notify_debouncer_full::notify::RecommendedWatcher;
 
 use indexer::memory::FileIndex;
+use storage::{VaultHandle, VaultStorage};
 
 /// Write-ignore-list: records own-write events so the file watcher can
 /// suppress spurious self-triggered events (D-12).
@@ -57,7 +59,16 @@ impl WriteIgnoreList {
 /// and replaced on vault re-open. Debouncer has no Default impl so we
 /// use a manual Default that initializes the Option to None.
 pub struct VaultState {
-    pub current_vault: Mutex<Option<std::path::PathBuf>>,
+    /// #392: VaultHandle wraps a canonicalized POSIX path on desktop and
+    /// will gain a `ContentUri(String)` arm in PR-B for Android. Today's
+    /// callers use `posix_path()` to access the inner `&Path`; PR-B
+    /// migrates the file-command surface to the storage trait.
+    pub current_vault: Mutex<Option<VaultHandle>>,
+    /// #392 PR-A: storage abstraction populated by `open_vault`. PR-A
+    /// constructs a `PosixStorage` and stashes it here, but no commands
+    /// route through the trait yet — the slot exists so PR-B can plug
+    /// `AndroidStorage` in without re-wiring `VaultState`.
+    pub storage: Arc<RwLock<Option<Arc<dyn VaultStorage>>>>,
     pub write_ignore: Arc<Mutex<WriteIgnoreList>>,
     /// Shared vault reachability flag (ERR-03 / D-14).
     /// Wrapped in Arc so it can be shared with the watcher's reconnect-poll task.
@@ -94,6 +105,7 @@ impl Default for VaultState {
     fn default() -> Self {
         Self {
             current_vault: Mutex::new(None),
+            storage: Arc::new(RwLock::new(None)),
             write_ignore: Arc::new(Mutex::new(WriteIgnoreList::default())),
             vault_reachable: Arc::new(Mutex::new(false)),
             watcher_handle: Arc::new(Mutex::new(None)),
