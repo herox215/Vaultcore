@@ -26,4 +26,5 @@ mod export_decrypted;
 mod legacy_semantic_cleanup;
 mod picker;
 mod storage_posix;
+mod storage_validate_rel;
 mod vault_handle;
