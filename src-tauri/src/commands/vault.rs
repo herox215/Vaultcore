@@ -285,20 +285,30 @@ async fn open_vault_android(
     use crate::storage::AndroidStorage;
     use crate::storage::VaultHandle;
 
-    // Stale-bookmark UX: if the user revoked the SAF grant via Settings
-    // or reinstalled the app, the URI is in recent-vaults.json but no
-    // longer in contentResolver.persistedUriPermissions. The frontend
-    // listens for VaultPermissionRevoked in the loadVault error path
-    // and routes through pickVaultFolder() to re-grant.
-    if !AndroidStorage::has_persisted_permission(&app, &uri)? {
-        return Err(VaultError::VaultPermissionRevoked { uri });
+    // Permission acquisition strategy. Two scenarios feed this path:
+    //
+    // 1. First-time open from a fresh Document Picker result: the URI
+    //    has a TRANSIENT grant that hasn't been promoted to persisted
+    //    yet. `getPersistedUriPermissions` does NOT list it. `take`
+    //    succeeds, promoting it.
+    // 2. Re-open from recent-vaults.json: URI already persisted on a
+    //    previous run. `take` is idempotent (Android docs recommend
+    //    re-taking to extend lifetime).
+    // 3. Revoked grant (Settings or reinstall): URI not in persisted
+    //    list AND `take` throws SecurityException because the
+    //    transient grant from the original pick is gone too.
+    //
+    // We attempt `take` first. If it succeeds, the URI is persisted
+    // and usable. If it throws, fall back to `has` to distinguish the
+    // revoked case from a rare transient SAF error. The previous
+    // ordering (has → take) failed scenario 1: `has` returned false
+    // on the very first open because the grant wasn't persisted yet.
+    if let Err(take_err) = AndroidStorage::take_persistable_uri_permission(&app, &uri) {
+        if !AndroidStorage::has_persisted_permission(&app, &uri).unwrap_or(false) {
+            return Err(VaultError::VaultPermissionRevoked { uri });
+        }
+        return Err(take_err);
     }
-
-    // Idempotent re-grant: Android docs recommend taking the permission
-    // every time you re-open a URI, even if a grant exists, to extend
-    // its lifetime. Failure here is rare but possible (security
-    // exception) — let it propagate as Io.
-    AndroidStorage::take_persistable_uri_permission(&app, &uri)?;
 
     let app_local_data = app
         .path()
