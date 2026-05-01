@@ -144,6 +144,20 @@ describe("MobileBurgerSheet (#397)", () => {
     expect(toastInfo).not.toHaveBeenCalled();
   });
 
+  it("Settings row calls onClose BEFORE onOpenSettings (focus-race regression)", async () => {
+    // Aristotle iter 1 #394 finding #2: opening the target sheet first
+    // schedules its focus-to-first-focusable microtask, but the burger's
+    // synchronous wasOpen latch then yanks focus to the More tab when
+    // the close fires after — race lost. Closing first lets the latch
+    // resolve synchronously, then the target sheet's microtask wins.
+    const order: string[] = [];
+    const onClose = vi.fn(() => { order.push("close"); });
+    const onOpenSettings = vi.fn(() => { order.push("open"); });
+    const { container } = renderSheet({ onClose, onOpenSettings });
+    await fireEvent.click(container.querySelector<HTMLButtonElement>('[data-row-id="settings"]')!);
+    expect(order).toEqual(["close", "open"]);
+  });
+
   it("clicking the scrim calls onClose", async () => {
     const onClose = vi.fn();
     const { container } = renderSheet({ onClose });

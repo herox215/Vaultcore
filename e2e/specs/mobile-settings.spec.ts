@@ -53,7 +53,10 @@ describe("Mobile settings sheet (#394)", () => {
     if (await isSheetOpen()) {
       await browser.keys(["Escape"]); // detail → master, or master → close
       await browser.keys(["Escape"]); // safety: ensure close
-      await browser.waitUntil(async () => !(await isSheetOpen()), { timeout: 3000 }).catch(() => {});
+      // No .catch() — let cleanup failures propagate. If a test leaves
+      // the sheet stuck open, that's a real bug worth seeing rather
+      // than silently swallowing.
+      await browser.waitUntil(async () => !(await isSheetOpen()), { timeout: 3000 });
     }
   });
 
