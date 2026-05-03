@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { X, RefreshCw, Keyboard, RotateCcw } from "lucide-svelte";
+  import { X, RefreshCw, Keyboard, RotateCcw, Copy } from "lucide-svelte";
   import { themeStore, type Theme } from "../../store/themeStore";
   import {
     settingsStore,
@@ -27,6 +27,18 @@
     hotkeyFromEvent,
     validateHotKey,
   } from "../../lib/commands/hotkeyOverrides";
+  import {
+    selfIdentity,
+    discoverable,
+    pairedPeers,
+    discoveredPeers,
+    setDiscoverable,
+    setDeviceName,
+    revokePeer,
+  } from "../../store/syncStore";
+  import { openPairingModal } from "../../store/pairingModalStore";
+  import { relativeTime } from "../../lib/relativeTime";
+  import type { DiscoveredPeer } from "../../ipc/commands";
 
   let { open, onClose, onSwitchVault }: {
     open: boolean;
@@ -235,7 +247,85 @@
     }
   }
 
-  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); });
+  // ── SYNCHRONISIERUNG ───────────────────────────────────────────────────
+  // Editable device name commits on blur or Enter. We track the "baseline"
+  // value so an unchanged blur (user clicked away without editing) does not
+  // dispatch a no-op IPC call.
+  let deviceNameDraft = $state<string>("");
+  let deviceNameBaseline = $state<string>("");
+  const unsubSelfIdentity = selfIdentity.subscribe((id) => {
+    if (!id) return;
+    // If the user is mid-edit (draft differs from baseline) preserve their
+    // typing across remote-driven identity refreshes.
+    if (deviceNameDraft === deviceNameBaseline) {
+      deviceNameDraft = id.device_name;
+    }
+    deviceNameBaseline = id.device_name;
+  });
+
+  async function commitDeviceName(): Promise<void> {
+    const next = deviceNameDraft.trim();
+    if (!next || next === deviceNameBaseline) return;
+    try {
+      await setDeviceName(next);
+      deviceNameBaseline = next;
+    } catch (e) {
+      // Roll the draft back to the baseline on error so the input
+      // visibly snaps to the still-effective name.
+      deviceNameDraft = deviceNameBaseline;
+      if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
+      else toastStore.error("Gerätename konnte nicht gespeichert werden");
+    }
+  }
+
+  function onDeviceNameKeydown(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      (e.currentTarget as HTMLInputElement).blur();
+    }
+  }
+
+  async function onDiscoverableToggle(e: Event): Promise<void> {
+    const on = (e.target as HTMLInputElement).checked;
+    try {
+      await setDiscoverable(on);
+    } catch (err) {
+      if (isVaultError(err)) toastStore.error(vaultErrorCopy(err));
+      else toastStore.error("Sichtbarkeit konnte nicht geändert werden");
+    }
+  }
+
+  async function onCopy(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard blocked (permissions / non-secure context). Stay silent —
+      // the copy buttons are convenience; user can still select-and-copy.
+    }
+  }
+
+  async function onRevokePeer(deviceId: string, deviceName: string): Promise<void> {
+    const ok = window.confirm(
+      `Synchronisierung mit "${deviceName}" wirklich widerrufen? Dieses Gerät erhält keine Updates mehr.`,
+    );
+    if (!ok) return;
+    try {
+      await revokePeer(deviceId);
+    } catch (e) {
+      if (isVaultError(e)) toastStore.error(vaultErrorCopy(e));
+      else toastStore.error("Widerruf fehlgeschlagen");
+    }
+  }
+
+  function onPairDiscovered(peer: DiscoveredPeer): void {
+    openPairingModal(peer);
+  }
+
+  function onPairNew(): void {
+    openPairingModal();
+  }
+
+  onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); unsubSelfIdentity(); });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -271,6 +361,140 @@
             onclick={onSwitchVault}
             data-testid="settings-switch-vault"
           >Vault wechseln…</button>
+        </div>
+      </section>
+
+      <!-- Section — Synchronisierung (UI-2) -->
+      <section class="vc-settings-section" data-testid="settings-sync">
+        <h3 class="vc-settings-section-title">SYNCHRONISIERUNG</h3>
+
+        <!-- This-device card: editable name + device id + pubkey fingerprint -->
+        <div class="vc-settings-row">
+          <label for="sync-device-name">Gerätename</label>
+          <input
+            id="sync-device-name"
+            class="vc-settings-text"
+            type="text"
+            value={deviceNameDraft}
+            oninput={(e) => (deviceNameDraft = (e.target as HTMLInputElement).value)}
+            onblur={commitDeviceName}
+            onkeydown={onDeviceNameKeydown}
+            data-testid="settings-sync-device-name"
+            aria-label="Gerätename"
+          />
+        </div>
+        <div class="vc-settings-row">
+          <span>Geräte-ID</span>
+          <span class="vc-sync-id-wrap">
+            <code class="vc-sync-id">{$selfIdentity?.device_id ?? "—"}</code>
+            <button
+              type="button"
+              class="vc-shortcut-btn"
+              onclick={() => onCopy($selfIdentity?.device_id ?? "")}
+              disabled={!$selfIdentity}
+              aria-label="Geräte-ID kopieren"
+              title="Geräte-ID kopieren"
+            ><Copy size={14} /></button>
+          </span>
+        </div>
+        <div class="vc-settings-row">
+          <span>Schlüssel-Fingerabdruck</span>
+          <span class="vc-sync-id-wrap">
+            <code class="vc-sync-id">{$selfIdentity?.pubkey_fingerprint ?? "—"}</code>
+            <button
+              type="button"
+              class="vc-shortcut-btn"
+              onclick={() => onCopy($selfIdentity?.pubkey_fingerprint ?? "")}
+              disabled={!$selfIdentity}
+              aria-label="Schlüssel-Fingerabdruck kopieren"
+              title="Schlüssel-Fingerabdruck kopieren"
+            ><Copy size={14} /></button>
+          </span>
+        </div>
+
+        <!-- Discoverable toggle (reuse the snippets toggle skin verbatim). -->
+        <div class="vc-settings-row">
+          <span>Im Netzwerk sichtbar</span>
+          <label class="vc-snippets-toggle">
+            <input
+              type="checkbox"
+              checked={$discoverable}
+              onchange={onDiscoverableToggle}
+              aria-label="Dieses Gerät im Netzwerk sichtbar machen"
+              data-testid="settings-sync-discoverable"
+            />
+            <span class="vc-snippets-toggle-track" aria-hidden="true">
+              <span class="vc-snippets-toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+        <p class="vc-settings-hint">
+          Andere Geräte in diesem Netzwerk können dieses Gerät sehen und eine
+          Kopplung anfragen. Aus, wenn keine Kopplung läuft.
+        </p>
+
+        <!-- Paired devices -->
+        <h4 class="vc-sync-subhead">Gekoppelte Geräte</h4>
+        {#if $pairedPeers.length === 0}
+          <p class="vc-settings-hint">Noch keine gekoppelten Geräte.</p>
+        {:else}
+          <ul class="vc-security-list" role="list" data-testid="settings-sync-paired">
+            {#each $pairedPeers as peer (peer.device_id)}
+              <li class="vc-security-row">
+                <span class="vc-sync-peer-name">{peer.device_name}</span>
+                <span class="vc-sync-peer-meta">{relativeTime(peer.last_seen)}</span>
+                <span class="vc-sync-peer-meta">
+                  {#if peer.grants.length === 0}
+                    keine Freigaben
+                  {:else}
+                    {peer.grants.map((g) => g.vault_name).join(", ")}
+                  {/if}
+                </span>
+                <button
+                  type="button"
+                  class="vc-settings-btn vc-sync-revoke-btn"
+                  onclick={() => onRevokePeer(peer.device_id, peer.device_name)}
+                  aria-label={`Synchronisierung mit ${peer.device_name} widerrufen`}
+                >Widerrufen</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <!-- Discovered (ambient — no rescan button per user decision 5) -->
+        <h4 class="vc-sync-subhead">In diesem Netzwerk gesehen</h4>
+        {#if $discoveredPeers.length === 0}
+          <p class="vc-settings-hint">
+            {#if $discoverable}
+              Suche nach Geräten…
+            {:else}
+              Aktiviere "Im Netzwerk sichtbar", um Geräte zu finden.
+            {/if}
+          </p>
+        {:else}
+          <ul class="vc-security-list" role="list" data-testid="settings-sync-discovered">
+            {#each $discoveredPeers as peer (peer.device_id)}
+              <li class="vc-security-row">
+                <span class="vc-sync-peer-name">{peer.device_name}</span>
+                <span class="vc-sync-peer-meta">{peer.addr || "—"}</span>
+                <button
+                  type="button"
+                  class="vc-settings-btn"
+                  onclick={() => onPairDiscovered(peer)}
+                  aria-label={`Mit ${peer.device_name} koppeln`}
+                >Koppeln…</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <div class="vc-settings-row vc-sync-pair-row">
+          <button
+            type="button"
+            class="vc-vault-switch-btn"
+            onclick={onPairNew}
+            data-testid="settings-sync-pair-new"
+          >Neues Gerät koppeln…</button>
         </div>
       </section>
 
@@ -809,6 +1033,51 @@
     opacity: 0.55;
     cursor: not-allowed;
   }
+
+  /* Section — Synchronisierung (UI-2) */
+  .vc-sync-id-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .vc-sync-id {
+    font-family: var(--vc-font-mono);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    user-select: text;
+    padding: 2px 6px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+  }
+  .vc-sync-subhead {
+    margin: 16px 0 8px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .vc-sync-peer-name {
+    font-size: 13px;
+    color: var(--color-text);
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vc-sync-peer-meta {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+  /* Vitruvius constraint: revoke is destructive but visually muted —
+     border colour shifts to error on hover; never a red fill. */
+  .vc-sync-revoke-btn:hover:not(:disabled) {
+    border-color: var(--color-error);
+    color: var(--color-error);
+    background: var(--color-surface);
+  }
+  .vc-sync-pair-row { justify-content: flex-end; margin-top: 12px; margin-bottom: 0; }
 
   /* Section — CSS-Snippets */
   .vc-snippets-head {
