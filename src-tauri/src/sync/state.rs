@@ -191,6 +191,128 @@ impl SyncState {
         Tombstones::new(self)
     }
 
+    // ─── Peer trust store (sync_peers) ────────────────────────────────────
+
+    /// Insert or update a peer record. Used by the pairing flow on
+    /// successful PAKE + key-confirmation to persist the peer's
+    /// long-term Ed25519 pubkey.
+    pub fn upsert_peer(
+        &self,
+        peer_device_id: &str,
+        peer_pubkey: &[u8; 32],
+        peer_name: &str,
+        trust_state: PeerTrust,
+    ) -> Result<(), VaultError> {
+        let now = self.clock.now_secs();
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO sync_peers (peer_device_id, peer_pubkey, peer_name, paired_at, last_seen, trust_state, superseded_by)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL)
+             ON CONFLICT(peer_device_id) DO UPDATE SET
+                 peer_pubkey = excluded.peer_pubkey,
+                 peer_name = excluded.peer_name,
+                 trust_state = excluded.trust_state",
+            rusqlite::params![peer_device_id, &peer_pubkey[..], peer_name, now, trust_state.as_str()],
+        )
+        .map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    /// Look up the peer's pubkey for capability-signature verification.
+    /// Returns `None` if the peer is unknown or revoked.
+    pub fn peer_pubkey(&self, peer_device_id: &str) -> Result<Option<[u8; 32]>, VaultError> {
+        let conn = self.lock_conn()?;
+        let row: Option<(Vec<u8>, String)> = conn
+            .query_row(
+                "SELECT peer_pubkey, trust_state FROM sync_peers WHERE peer_device_id = ?1",
+                rusqlite::params![peer_device_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(sqlite_err)?;
+        let Some((bytes, trust)) = row else {
+            return Ok(None);
+        };
+        if trust != PeerTrust::Trusted.as_str() {
+            return Ok(None);
+        }
+        if bytes.len() != 32 {
+            return Err(VaultError::SyncState {
+                msg: format!("peer_pubkey wrong length: {}", bytes.len()),
+            });
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        Ok(Some(out))
+    }
+
+    // ─── Capability grants (sync_vault_grants) ────────────────────────────
+
+    /// Persist a signed `Capability` as a row in `sync_vault_grants`.
+    /// `local_vault_id` and `peer_device_id` are the primary key —
+    /// re-issuing replaces the prior token.
+    pub fn upsert_vault_grant(
+        &self,
+        capability: &super::capability::Capability,
+    ) -> Result<(), VaultError> {
+        let body = bincode::deserialize::<super::capability::CapabilityBody>(&capability.body)
+            .map_err(|e| VaultError::SyncState {
+                msg: format!("capability body decode: {e}"),
+            })?;
+        let token_bytes = capability.to_bytes();
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO sync_vault_grants (
+                local_vault_id, peer_device_id, peer_vault_id, scope,
+                capability_token, format_version, requires_unlock, wrapped_key, enabled
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+             ON CONFLICT(local_vault_id, peer_device_id) DO UPDATE SET
+                 peer_vault_id = excluded.peer_vault_id,
+                 scope = excluded.scope,
+                 capability_token = excluded.capability_token,
+                 format_version = excluded.format_version,
+                 requires_unlock = excluded.requires_unlock,
+                 wrapped_key = excluded.wrapped_key,
+                 enabled = 1",
+            rusqlite::params![
+                body.local_vault_id,
+                body.peer_device_id,
+                body.peer_vault_id,
+                body.scope.as_str(),
+                token_bytes,
+                body.format_version,
+                body.requires_unlock,
+                body.wrapped_key,
+            ],
+        )
+        .map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    /// Fetch the `Capability` for a `(local_vault_id, peer_device_id)` pair
+    /// if one is enabled. Returns `None` if the grant is missing or
+    /// disabled — caller treats that as "no access".
+    pub fn vault_grant(
+        &self,
+        local_vault_id: &str,
+        peer_device_id: &str,
+    ) -> Result<Option<super::capability::Capability>, VaultError> {
+        let conn = self.lock_conn()?;
+        let row: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT capability_token FROM sync_vault_grants
+                 WHERE local_vault_id = ?1 AND peer_device_id = ?2 AND enabled = 1",
+                rusqlite::params![local_vault_id, peer_device_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err)?;
+        let Some(bytes) = row else {
+            return Ok(None);
+        };
+        Ok(Some(super::capability::Capability::from_bytes(&bytes)?))
+    }
+
     // ─── Read APIs ───────────────────────────────────────────────────────
 
     /// Fetch the `(content_hash, vv)` for a tracked file, if any.
@@ -379,7 +501,24 @@ impl SyncState {
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
     }
+}
 
+/// `sync_peers.trust_state` values per epic schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerTrust {
+    Trusted,
+    Revoked,
+    Superseded,
+}
+
+impl PeerTrust {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::Revoked => "revoked",
+            Self::Superseded => "superseded",
+        }
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

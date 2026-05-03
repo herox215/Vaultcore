@@ -10,10 +10,12 @@
 //! live in this module so identity / pairing / transport sub-modules can
 //! depend on them without circular references.
 
+pub mod capability;
 pub mod clock;
 pub mod discovery;
 pub mod history;
 pub mod identity;
+pub mod pairing;
 pub mod state;
 pub mod tombstone;
 pub mod vault_id;
