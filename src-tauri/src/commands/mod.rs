@@ -12,3 +12,4 @@ pub mod export;
 pub mod encryption;
 pub mod picker;
 pub mod sync;
+pub mod sync_cmds;
