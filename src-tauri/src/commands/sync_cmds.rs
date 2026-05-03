@@ -331,8 +331,19 @@ pub struct SyncRuntime {
 
 impl SyncRuntime {
     /// Build with the OS keychain backing the identity. Used by `lib.rs`.
+    ///
+    /// Honors `VAULTCORE_KEYCHAIN_ACCOUNT` if set — overrides the keychain
+    /// account name so two dev instances on the same host can pull
+    /// distinct device identities (two-on-one-host UAT). Production users
+    /// never set this; default behavior is unchanged.
     pub fn new() -> Result<Self, VaultError> {
-        Self::with_keystore(Box::new(OsKeychainStore::default()))
+        let store: Box<dyn KeyStore> = match std::env::var("VAULTCORE_KEYCHAIN_ACCOUNT") {
+            Ok(account) if !account.is_empty() => {
+                Box::new(OsKeychainStore::with_account(account))
+            }
+            _ => Box::new(OsKeychainStore::default()),
+        };
+        Self::with_keystore(store)
     }
 
     /// Test constructor. Drops the OS keychain in favor of an in-memory

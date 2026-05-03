@@ -81,6 +81,19 @@ impl Default for OsKeychainStore {
     }
 }
 
+impl OsKeychainStore {
+    /// Construct with a custom keychain account name. Used by
+    /// `SyncRuntime::new` when `VAULTCORE_KEYCHAIN_ACCOUNT` is set —
+    /// lets two dev instances on the same host pull distinct device
+    /// identities for two-on-one-host UAT.
+    pub fn with_account(account: impl Into<String>) -> Self {
+        Self {
+            service: KEYCHAIN_SERVICE.to_string(),
+            account: account.into(),
+        }
+    }
+}
+
 impl KeyStore for OsKeychainStore {
     fn get(&self) -> Result<Option<[u8; 32]>, VaultError> {
         let entry = keyring::Entry::new(&self.service, &self.account).map_err(keyring_err)?;
