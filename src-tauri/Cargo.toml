@@ -55,6 +55,22 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # sync_files / sync_history. Pinned to 1.x — bincode 2 changed the API.
 bincode = "1"
 
+# #417: identity + discovery.
+# Ed25519 signing — used for device keys and (later) capability tokens.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+# Pure-Rust mDNS for `_vaultcore._tcp.local.` advertise + browse.
+mdns-sd = "0.13"
+# Cross-platform OS keychain (Keychain / CredMgr / Secret Service).
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+# Default device name = OS hostname.
+hostname = "0.4"
+# Per-vault UUIDv4 written to `.vaultcore/vault-id`.
+uuid = { version = "1", features = ["v4"] }
+# RFC4648 base32 encoding for `device_id = base32(SHA-256(pubkey)[..16])`.
+data-encoding = "2"
+# Cryptographic RNG for ed25519-dalek 2.x keygen (OsRng implements RngCore).
+rand_core = { version = "0.6", features = ["getrandom"] }
+
 [dev-dependencies]
 tempfile = "3"
 # Enable `tauri::test::mock_app()` so unit tests can feed a dummy AppHandle

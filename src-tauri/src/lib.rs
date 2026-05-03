@@ -225,6 +225,8 @@ pub fn run() {
             commands::encryption::export_decrypted_file,
             commands::picker::pick_vault_folder,
             commands::picker::pick_save_path,
+            commands::sync::sync_set_discoverable,
+            commands::sync::sync_get_discoverable,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

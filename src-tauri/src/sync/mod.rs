@@ -11,9 +11,12 @@
 //! depend on them without circular references.
 
 pub mod clock;
+pub mod discovery;
 pub mod history;
+pub mod identity;
 pub mod state;
 pub mod tombstone;
+pub mod vault_id;
 
 #[cfg(test)]
 pub mod tests;
