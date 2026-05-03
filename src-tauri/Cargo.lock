@@ -1487,8 +1487,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1731,6 +1733,21 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
+
+[[package]]
+name = "hmac-sha512"
+version = "1.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "019ece39bbefc17f13f677a690328cb978dbf6790e141a3c24e66372cb38588b"
 
 [[package]]
 name = "hostname"
@@ -2917,6 +2934,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fbd56f7631767e61784dc43f8580f403f4475bd4aaa4da003e6295e1bab4a7e"
 dependencies = [
  "stable_deref_trait",
+]
+
+[[package]]
+name = "pake-cpace"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd8ddcfdd79e296ea68ae1cd38285d74f5bac469fe547a5f8d37cdde57234a5a"
+dependencies = [
+ "curve25519-dalek",
+ "getrandom 0.2.17",
+ "hmac-sha512",
 ]
 
 [[package]]
@@ -5342,12 +5370,14 @@ dependencies = [
  "data-encoding",
  "ed25519-dalek",
  "env_logger",
+ "hmac",
  "hostname",
  "keyring",
  "log",
  "mdns-sd",
  "notify-debouncer-full",
  "nucleo-matcher",
+ "pake-cpace",
  "pulldown-cmark",
  "rand 0.8.5",
  "rand_core 0.6.4",

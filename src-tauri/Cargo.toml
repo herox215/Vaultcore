@@ -71,6 +71,14 @@ data-encoding = "2"
 # Cryptographic RNG for ed25519-dalek 2.x keygen (OsRng implements RngCore).
 rand_core = { version = "0.6", features = ["getrandom"] }
 
+# #418: PAKE pairing.
+# CPace (libsodium-author Frank Denis / jedisct1) — spec PASSED 2026-05-03.
+pake-cpace = "0.1.7"
+# RFC 2104 HMAC-SHA256 for the post-PAKE key-confirmation step (A2
+# design note: PAKE itself does NOT error on wrong PIN — keys silently
+# diverge — so an explicit MAC exchange is required).
+hmac = "0.12"
+
 [dev-dependencies]
 tempfile = "3"
 # Enable `tauri::test::mock_app()` so unit tests can feed a dummy AppHandle
