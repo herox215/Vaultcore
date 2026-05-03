@@ -42,7 +42,10 @@
 //! exclusively from the four events above. See `src/store/syncStore.ts`.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -54,10 +57,17 @@ use crate::sync::capability::{Capability, CapabilityBody, Scope};
 use crate::sync::discovery::{Discovery, MdnsDiscovery, PeerAd, PROTO_VERSION};
 use crate::sync::identity::{Identity, KeyStore, MemoryKeyStore, OsKeychainStore};
 use crate::sync::pairing::{
-    finalize_with_confirmation, key_confirmation_mac, validate_pin, ConfirmedKeys,
+    finalize_with_confirmation, key_confirmation_mac, respond, start_initiator, validate_pin,
     PairingSession, RawSharedKeys, LOCKOUT_AFTER_ATTEMPTS, PIN_EXPIRY_SECS,
 };
-use crate::sync::state::{PeerTrust, SyncState};
+use crate::sync::pairing_engine::{
+    drive_initiator_after_pake, drive_responder_after_pake, exchange_vault_grant_initiator,
+    exchange_vault_grant_responder, PostPairingSession,
+};
+use crate::sync::state::SyncState;
+#[cfg(test)]
+use crate::sync::state::PeerTrust;
+use crate::sync::transport::{generate_static_keypair, NoiseKeypair};
 
 // ─── Event names ─────────────────────────────────────────────────────────
 
@@ -76,6 +86,33 @@ pub const PEERS_DEBOUNCE_MS: u64 = 250;
 /// publish so peers can resolve us. Picked from IANA's user-port range
 /// to avoid `_vaultcore`-vs-`_<other>` collisions on the same network.
 pub const DEFAULT_SYNC_PORT: u16 = 17091;
+
+/// Pairing-handshake port. The initiator binds a TCP listener here for
+/// the duration of an active pairing flow; the responder dials the peer
+/// IP it picked from `sync_list_discovered_peers` on this port. Distinct
+/// from [`DEFAULT_SYNC_PORT`] so the steady-state Noise listener and the
+/// pairing listener can run concurrently. We use a fixed port (rather
+/// than ephemeral + mDNS-TXT advertisement) because:
+///  - Only one pairing flow runs at a time per device, so port
+///    contention is bounded to "two VaultCore instances racing on the
+///    same machine" — rare and cleanly detected as a bind failure.
+///  - It avoids a TXT-record schema change to broadcast the port,
+///    which would ripple through every PeerAd consumer including the
+///    in-tree e2e fixture.
+/// The trade-off (one pairing at a time per host) is documented as the
+/// pragmatic "fixed pairing port" choice from the UI-1.6 task brief.
+pub const DEFAULT_PAIRING_PORT: u16 = 17092;
+
+/// Hard ceiling on how long the pairing worker waits for the peer to
+/// connect / dial / drive PAKE through. Mirrors the PIN expiry (60s) so
+/// a stale flow can't pin a port forever.
+const PAIRING_WORKER_TIMEOUT: Duration = Duration::from_secs(PIN_EXPIRY_SECS as u64);
+
+/// Wall-clock budget for individual socket reads/writes during the PAKE
+/// hello + step exchange. PAKE round-trip is sub-second; 5 s is generous
+/// even on a saturated LAN. Without this a malformed responder could
+/// stall the worker thread indefinitely.
+const PAKE_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ─── DTOs (shape matches `src/store/syncStore.ts`) ───────────────────────
 
@@ -151,26 +188,65 @@ pub struct PeerPairedEventDto {
 /// On `confirm` or `cancel` the entry is removed.
 struct PairingFlow {
     session: PairingSession,
-    #[allow(dead_code)]
     role: PairingRole,
-    /// Peer device id, if known. The initiator learns it from the
-    /// step1 reply payload; the responder learns it from the step1
-    /// packet sent by the initiator.
+    /// Peer device id, if known. The initiator learns it from the hello
+    /// packet exchanged at the top of the PAKE socket; the responder
+    /// receives it from the IPC arg or learns it from the same hello.
     peer_device_id: Option<String>,
     /// Once PAKE step1+step2 have been driven, the raw shared keys
     /// land here awaiting key-confirmation. `None` means PAKE is not
-    /// yet finished. `id_a` / `id_b` on the `RawSharedKeys` carry the
-    /// device id pair, so we don't need a separate `self_device_id`.
+    /// yet finished. Kept around mostly for the test-injection path
+    /// — production code reaches `awaiting_confirmation` only after
+    /// `drive_*_after_pake` has consumed `k2` to derive the long-term
+    /// attestation.
     raw_keys: Option<RawSharedKeys>,
     /// Cached fingerprint we display to the user during confirmation.
-    /// Populated alongside `raw_keys`. Eight base32 chars per spec.
+    /// Computed from the peer's persisted Ed25519 pubkey: the existing
+    /// 8-char base32 prefix used everywhere else in the identity layer.
     peer_fingerprint: Option<String>,
+    /// Worker-thread state. Updated by the worker via the runtime's
+    /// `pairing_sessions` mutex; read by `pairing_step` to render the
+    /// UI.
+    state_kind: PairingState,
+    /// Last PAKE/engine error. Surfaced to the UI when `state_kind ==
+    /// Failed` so the user sees "wrong PIN" vs "network error" copy.
+    error: Option<String>,
+    /// Active post-pairing session — populated when the engine drive
+    /// completes successfully. Held under the same mutex so
+    /// `pairing_grant_vault` can borrow it for the grant exchange.
+    post_pairing: Option<PostPairingSession>,
+    /// Initiator-only: handle to the bound TCP listener so we can drop
+    /// it on cancel. The listener is consumed by the worker once a
+    /// connection arrives. Read in tests to recover the bound port; in
+    /// production it's only kept alive for cleanup ordering.
+    #[allow(dead_code)]
+    listener_handle: Option<Arc<TcpListener>>,
+    /// Worker thread handle. Detaching is fine on cancel — the thread
+    /// observes the dropped session via channel disconnect / socket
+    /// close and exits.
+    worker_handle: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PairingRole {
     Initiator,
     Responder,
+}
+
+/// Coarse-grained pairing state surfaced through `pairing_step`. Mirrors
+/// the four UI screens (`PairingStepDto::kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PairingState {
+    /// Worker hasn't completed PAKE+attestation yet.
+    AwaitingPeer,
+    /// PAKE+attestation done; UI shows fingerprint and waits for the
+    /// user to click "Bestätigen".
+    AwaitingConfirmation,
+    /// User confirmed; peer row + capability rows persisted.
+    Complete,
+    /// PAKE/attestation/grant exchange failed. Retry requires starting
+    /// a fresh session.
+    Failed,
 }
 
 // ─── Discovery emission task ──────────────────────────────────────────────
@@ -226,6 +302,11 @@ fn peer_ad_to_dto(ad: &PeerAd) -> DiscoveredPeerDto {
 /// hence `Arc<SyncRuntime>` storage in Tauri's `manage()`.
 pub struct SyncRuntime {
     identity: Identity,
+    /// Per-process Noise static keypair. Generated lazily at runtime
+    /// construction — separate from the Ed25519 long-term identity (Noise
+    /// is happier with native Curve25519 keys, see
+    /// `pairing_engine.rs` module docs).
+    noise_kp: NoiseKeypair,
     /// Mutable display name override. The OS hostname is the default;
     /// users can override via `sync_set_device_name`.
     device_name: Mutex<String>,
@@ -262,6 +343,9 @@ impl SyncRuntime {
 
     fn with_keystore(store: Box<dyn KeyStore>) -> Result<Self, VaultError> {
         let identity = Identity::load_or_create(&*store)?;
+        let noise_kp = generate_static_keypair().map_err(|e| VaultError::SyncState {
+            msg: format!("noise keypair init: {e:?}"),
+        })?;
         let device_name = hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
@@ -269,6 +353,7 @@ impl SyncRuntime {
         let discovery = Arc::new(MdnsDiscovery::new()?);
         Ok(Self {
             identity,
+            noise_kp,
             device_name: Mutex::new(device_name),
             discovery,
             discoverable: Mutex::new(false),
@@ -395,8 +480,52 @@ impl SyncRuntime {
     /// Test-only: peek at the active state slot without going through
     /// the IPC layer.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn active_sync_state(&self) -> Option<Arc<SyncState>> {
         self.active_state.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Test-only: read back the bound port of an initiator session's
+    /// pairing listener. Tests pass `bind_port_override = Some(0)` (so
+    /// each test gets an ephemeral port and can run in parallel), then
+    /// use this to learn what port the responder should dial.
+    #[cfg(test)]
+    pub fn pairing_listener_port_for_test(&self, session_id: &str) -> Option<u16> {
+        let sessions = self.pairing_sessions.lock().ok()?;
+        let flow = sessions.get(session_id)?;
+        let listener = flow.listener_handle.as_ref()?;
+        listener.local_addr().ok().map(|a| a.port())
+    }
+
+    /// Test-only: drive the underlying `PairingSession` to lockout
+    /// without going through PAKE. The IPC-layer lockout test asserts
+    /// that `pairing_step` correctly surfaces a locked-out session as
+    /// `{ kind: failed, attempts_remaining: 0 }`; the *mechanism* by
+    /// which the session reaches that state (3 wire failures vs 3
+    /// in-process record_failure calls) is exercised in
+    /// `pairing_tests::three_failed_attempts_locks_out`. Bypassing the
+    /// wire keeps this layer's test focused on the IPC surface.
+    #[cfg(test)]
+    pub fn force_lockout_for_test(&self, session_id: &str) -> Result<(), VaultError> {
+        use crate::sync::pairing::{finalize_with_confirmation, RawSharedKeys};
+        let sessions = self
+            .pairing_sessions
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        let flow = sessions.get(session_id).ok_or_else(|| VaultError::SyncState {
+            msg: format!("unknown pairing session: {session_id}"),
+        })?;
+        let raw = RawSharedKeys {
+            k1: [0u8; 32],
+            k2: [0u8; 32],
+            id_a: "A".into(),
+            id_b: "B".into(),
+        };
+        let bad_mac = [0xFFu8; 32];
+        for _ in 0..LOCKOUT_AFTER_ATTEMPTS {
+            let _ = finalize_with_confirmation(&raw, &bad_mac, &flow.session);
+        }
+        Ok(())
     }
 
     pub fn grant_vault(
@@ -491,26 +620,70 @@ impl SyncRuntime {
 
     // ─── Pairing flow helpers ─────────────────────────────────────────────
 
-    pub fn pairing_start_initiator(&self) -> Result<PairingStartInitiatorDto, VaultError> {
+    /// Initiator entry: bind the pairing listener, generate a PIN, and
+    /// spawn the worker thread that drives PAKE+attestation when the
+    /// responder dials in. Returns immediately with the PIN to display.
+    pub fn pairing_start_initiator(
+        self: &Arc<Self>,
+        pin_override: Option<String>,
+        bind_port_override: Option<u16>,
+    ) -> Result<PairingStartInitiatorDto, VaultError> {
         let session_id = Uuid::new_v4().to_string();
-        let pin = generate_pin_6_digit();
+        let pin = pin_override.unwrap_or_else(generate_pin_6_digit);
         let session = PairingSession::new();
         session.issue_pin()?;
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
+
+        // Bind the pairing listener up-front so any port-conflict error
+        // surfaces synchronously rather than asynchronously inside the
+        // worker (where the UI would only see "awaiting_peer" → time out).
+        let bind_port = bind_port_override.unwrap_or(DEFAULT_PAIRING_PORT);
+        let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], bind_port)))
+            .map_err(|e| VaultError::SyncState {
+                msg: format!("bind pairing listener on :{bind_port}: {e}"),
+            })?;
+        listener
+            .set_nonblocking(false)
+            .map_err(|e| VaultError::SyncState {
+                msg: format!("listener configure: {e}"),
+            })?;
+        let listener_arc = Arc::new(listener);
+
         let flow = PairingFlow {
             session,
             role: PairingRole::Initiator,
             peer_device_id: None,
             raw_keys: None,
             peer_fingerprint: None,
+            state_kind: PairingState::AwaitingPeer,
+            error: None,
+            post_pairing: None,
+            listener_handle: Some(Arc::clone(&listener_arc)),
+            worker_handle: None,
         };
         self.pairing_sessions
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?
             .insert(session_id.clone(), flow);
+
+        // Spawn the worker. Holds an Arc<SyncRuntime> so the cleanup +
+        // result-write paths can reach back through the mutex.
+        let runtime = Arc::clone(self);
+        let session_id_for_worker = session_id.clone();
+        let pin_for_worker = pin.clone();
+        let listener_for_worker = listener_arc;
+        let handle = std::thread::spawn(move || {
+            initiator_worker(runtime, session_id_for_worker, listener_for_worker, pin_for_worker);
+        });
+        if let Ok(mut sessions) = self.pairing_sessions.lock() {
+            if let Some(flow) = sessions.get_mut(&session_id) {
+                flow.worker_handle = Some(handle);
+            }
+        }
+
         Ok(PairingStartInitiatorDto {
             session_id,
             pin,
@@ -518,35 +691,101 @@ impl SyncRuntime {
         })
     }
 
+    /// Responder entry: validate PIN, resolve the peer's address, spawn
+    /// the dial+handshake worker. `peer_device_id` selects which
+    /// discovered peer to dial; `peer_addr_override` is a test-only
+    /// shortcut so unit tests can inject a loopback address without
+    /// running mDNS.
     pub fn pairing_start_responder(
-        &self,
+        self: &Arc<Self>,
         pin: &str,
+        peer_device_id: Option<String>,
+        peer_addr_override: Option<SocketAddr>,
     ) -> Result<PairingStartResponderDto, VaultError> {
         validate_pin(pin).map_err(VaultError::from)?;
         let session_id = Uuid::new_v4().to_string();
         let session = PairingSession::new();
         session.issue_pin()?;
+
+        // Address resolution: if the caller didn't pass an override,
+        // we pull the peer's IP from the live discovery snapshot and
+        // dial DEFAULT_PAIRING_PORT (the initiator's bound port). The
+        // override path is for tests; production UI always passes a
+        // peer_device_id and lets discovery resolve.
+        let dial_addr = match peer_addr_override {
+            Some(a) => Some(a),
+            None => match peer_device_id.as_deref() {
+                Some(id) => Some(self.resolve_peer_pairing_addr(id)?),
+                None => None,
+            },
+        };
+
         let flow = PairingFlow {
             session,
             role: PairingRole::Responder,
-            peer_device_id: None,
+            peer_device_id: peer_device_id.clone(),
             raw_keys: None,
             peer_fingerprint: None,
+            state_kind: PairingState::AwaitingPeer,
+            error: None,
+            post_pairing: None,
+            listener_handle: None,
+            worker_handle: None,
         };
         self.pairing_sessions
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?
             .insert(session_id.clone(), flow);
+
+        // The dial+PAKE flow only runs when we have a target address.
+        // Without one (e.g., the legacy frontend that doesn't pass
+        // peer_device_id yet), the session sits in `awaiting_peer`
+        // until cancelled — matches the prior UI-1 stub semantics so
+        // existing PairingModal callers don't regress.
+        if let Some(addr) = dial_addr {
+            let runtime = Arc::clone(self);
+            let session_id_for_worker = session_id.clone();
+            let pin_for_worker = pin.to_string();
+            let handle = std::thread::spawn(move || {
+                responder_worker(runtime, session_id_for_worker, addr, pin_for_worker);
+            });
+            if let Ok(mut sessions) = self.pairing_sessions.lock() {
+                if let Some(flow) = sessions.get_mut(&session_id) {
+                    flow.worker_handle = Some(handle);
+                }
+            }
+        }
+
         Ok(PairingStartResponderDto { session_id })
     }
 
-    /// Drive the PAKE state machine. Today's UI-1 plumbing is a stub
-    /// that returns `awaiting_peer` until transport (#419) carries the
-    /// step packets between devices. Once transport lands, this method
-    /// will accept a base64 payload and dispatch to
-    /// [`start_initiator`] / [`respond`] / [`InitiatorAfterStep1::step3`].
-    /// The method exists today so the IPC contract is stable and UI-3
-    /// can render the spinner while waiting on the peer.
+    /// Map a discovered peer's `device_id` → `SocketAddr` for dialing.
+    /// Uses the first IPv4 address from the mDNS snapshot, paired with
+    /// [`DEFAULT_PAIRING_PORT`]. Returns an error if the peer is not
+    /// currently visible — surfaces as a clear UI message rather than
+    /// a silent worker timeout.
+    fn resolve_peer_pairing_addr(&self, peer_device_id: &str) -> Result<SocketAddr, VaultError> {
+        let snapshot = self.discovery.peers()?;
+        let peer = snapshot
+            .peers
+            .iter()
+            .find(|p| p.device_id == peer_device_id)
+            .ok_or_else(|| VaultError::SyncState {
+                msg: format!("peer not visible in discovery: {peer_device_id}"),
+            })?;
+        let ip = peer
+            .addrs
+            .first()
+            .copied()
+            .ok_or_else(|| VaultError::SyncState {
+                msg: format!("peer has no resolved address: {peer_device_id}"),
+            })?;
+        Ok(SocketAddr::new(ip, DEFAULT_PAIRING_PORT))
+    }
+
+    /// Poll the pairing flow's worker-set state. The UI calls this on a
+    /// short interval after `pairing_start_*` to learn when to advance
+    /// from the spinner to the fingerprint card.
     pub fn pairing_step(
         &self,
         session_id: &str,
@@ -559,6 +798,8 @@ impl SyncRuntime {
         let flow = sessions.get(session_id).ok_or_else(|| VaultError::SyncState {
             msg: format!("unknown pairing session: {session_id}"),
         })?;
+        // Lockout / PIN-expiry trump the worker state — they're the
+        // canonical "fail fast" surfaces.
         if flow.session.is_locked()? {
             return Ok(PairingStepDto {
                 kind: "failed".into(),
@@ -566,73 +807,140 @@ impl SyncRuntime {
                 attempts_remaining: Some(0),
             });
         }
-        if !flow.session.pin_valid()? {
-            return Ok(PairingStepDto {
-                kind: "failed".into(),
-                peer_fingerprint: None,
-                attempts_remaining: Some(0),
-            });
-        }
-        let attempts_remaining = LOCKOUT_AFTER_ATTEMPTS - flow.session.failed_count()?;
+        let attempts_remaining = LOCKOUT_AFTER_ATTEMPTS
+            .saturating_sub(flow.session.failed_count()?);
+        let kind = match flow.state_kind {
+            PairingState::AwaitingPeer => "awaiting_peer",
+            PairingState::AwaitingConfirmation => "awaiting_confirmation",
+            PairingState::Complete => "complete",
+            PairingState::Failed => "failed",
+        };
         Ok(PairingStepDto {
-            kind: "awaiting_peer".into(),
+            kind: kind.into(),
             peer_fingerprint: flow.peer_fingerprint.clone(),
             attempts_remaining: Some(attempts_remaining),
         })
     }
 
-    /// Final confirmation step: persist the peer to `sync_peers` and emit
-    /// `sync://peer-paired`. UI-1 stub: in production this is gated on
-    /// the user clicking "Confirm" after seeing the matching fingerprint;
-    /// transport-layer code (#419) will drive `raw_keys` into the flow
-    /// before this is callable. For UI-1 we accept calls when raw_keys
-    /// is present (from a future transport hook) and otherwise return a
-    /// PairError-shaped error so the UI surfaces a clear failure.
+    /// User confirmed the fingerprint. The engine has already persisted
+    /// the peer row + transitioned the trust state — this just flips the
+    /// UI state to `Complete` and returns the peer's identity for the
+    /// `sync://peer-paired` event. The post-pairing session stays in
+    /// the table so subsequent `pairing_grant_vault` calls can reach the
+    /// open Noise channel.
     pub fn pairing_confirm(&self, session_id: &str) -> Result<PeerPairedEventDto, VaultError> {
         let mut sessions = self
             .pairing_sessions
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
-        let Some(flow) = sessions.remove(session_id) else {
+        let flow = sessions.get_mut(session_id).ok_or_else(|| VaultError::SyncState {
+            msg: format!("unknown pairing session: {session_id}"),
+        })?;
+        if flow.state_kind != PairingState::AwaitingConfirmation {
             return Err(VaultError::SyncState {
-                msg: format!("unknown pairing session: {session_id}"),
+                msg: format!(
+                    "pairing not at confirmation step (state: {:?})",
+                    flow.state_kind
+                ),
             });
-        };
-        let raw = flow.raw_keys.ok_or_else(|| VaultError::SyncState {
-            msg: "pairing not yet at confirmation step (no shared keys)".into(),
-        })?;
-        let peer_id = flow.peer_device_id.ok_or_else(|| VaultError::SyncState {
-            msg: "pairing has no peer device id".into(),
-        })?;
-        let _role = flow.role;
-        // Build our local MAC and feed both into the canonical
-        // confirmation helper so any future change to the MAC layout
-        // doesn't have to be mirrored here. The peer's MAC is delivered
-        // through the transport layer; UI-1 doesn't have that wired yet,
-        // so we self-confirm against our own MAC bytes — once transport
-        // lands, replace the `&local_mac` arg below with the bytes from
-        // the incoming step3/finalize packet.
-        let local_mac = key_confirmation_mac(&raw.k2, &raw.id_a, &raw.id_b);
-        let _confirmed: ConfirmedKeys =
-            finalize_with_confirmation(&raw, &local_mac, &flow.session)
-                .map_err(|e| VaultError::from(e))?;
-        // Persist trust to the active vault's SyncState. If no vault is
-        // open we still return success so the UI flow completes (the
-        // engine wiring task may extend this to defer peer persistence
-        // until vault open) — but typical UAT pairs while a vault is open.
-        let device_name = format!("Peer {peer_id}");
-        if let Ok(active) = self.require_active_state() {
-            active.upsert_peer(
-                &peer_id,
-                &[0u8; 32], // placeholder — transport supplies the long-term pubkey via the noise XX exchange (#419)
-                &device_name,
-                PeerTrust::Trusted,
-            )?;
         }
+        let peer_id = flow
+            .peer_device_id
+            .clone()
+            .ok_or_else(|| VaultError::SyncState {
+                msg: "pairing has no peer device id".into(),
+            })?;
+        flow.state_kind = PairingState::Complete;
+        let device_name = format!("Peer {peer_id}");
         Ok(PeerPairedEventDto {
             device_id: peer_id,
             device_name,
         })
+    }
+
+    /// Vault-grant phase. Borrows the live `PostPairingSession` from the
+    /// flow, runs the role-appropriate `exchange_vault_grant_*`, and
+    /// returns. Capability rows are persisted on both sides as part of
+    /// the engine call.
+    pub fn pairing_grant_vault(
+        &self,
+        session_id: &str,
+        vault_id: &str,
+        scope: Scope,
+    ) -> Result<(), VaultError> {
+        let mut sessions = self
+            .pairing_sessions
+            .lock()
+            .map_err(|_| VaultError::LockPoisoned)?;
+        let flow = sessions.get_mut(session_id).ok_or_else(|| VaultError::SyncState {
+            msg: format!("unknown pairing session: {session_id}"),
+        })?;
+        if flow.state_kind != PairingState::Complete
+            && flow.state_kind != PairingState::AwaitingConfirmation
+        {
+            return Err(VaultError::SyncState {
+                msg: format!(
+                    "pairing not ready for vault grant (state: {:?})",
+                    flow.state_kind
+                ),
+            });
+        }
+        let role = flow.role;
+        let peer_id = flow
+            .peer_device_id
+            .clone()
+            .ok_or_else(|| VaultError::SyncState {
+                msg: "pairing has no peer device id".into(),
+            })?;
+        let mut session = flow.post_pairing.take().ok_or_else(|| VaultError::SyncState {
+            msg: "no live post-pairing session (engine never finished)".into(),
+        })?;
+        // Drop the lock while we drive the (potentially blocking) Noise
+        // I/O — releasing this lets `pairing_step` polls keep working
+        // and avoids a deadlock if the peer takes its time on the wire.
+        drop(sessions);
+
+        // The capability body names the issuer's own device id in
+        // `peer_device_id` per the engine's "peer-self-signed" model.
+        let body = CapabilityBody::issue_v1(
+            vault_id.to_string(),
+            self.identity.device_id().to_string(),
+            vault_id.to_string(),
+            scope,
+        );
+        let state = self.require_active_state()?;
+        let signing_key = self.identity.signing_key();
+        let result = match role {
+            PairingRole::Initiator => exchange_vault_grant_initiator(
+                &mut session,
+                signing_key,
+                &body,
+                &peer_id,
+                &state,
+            ),
+            PairingRole::Responder => exchange_vault_grant_responder(
+                &mut session,
+                signing_key,
+                &body,
+                &peer_id,
+                &state,
+            ),
+        };
+
+        // Restore the session so a follow-up grant for a different
+        // vault can reuse the same channel.
+        let put_back = match self.pairing_sessions.lock() {
+            Ok(mut s) => s.get_mut(session_id).map(|flow| {
+                flow.post_pairing = Some(session);
+            }),
+            Err(_) => None,
+        };
+        let _ = put_back;
+
+        result.map_err(|e| VaultError::SyncState {
+            msg: format!("grant exchange failed: {e:?}"),
+        })?;
+        Ok(())
     }
 
     pub fn pairing_cancel(&self, session_id: &str) -> Result<(), VaultError> {
@@ -640,7 +948,21 @@ impl SyncRuntime {
             .pairing_sessions
             .lock()
             .map_err(|_| VaultError::LockPoisoned)?;
-        sessions.remove(session_id);
+        if let Some(flow) = sessions.remove(session_id) {
+            // Drop the post-pairing TcpStream first so the worker thread
+            // (if still in flight) sees EOF and exits promptly. The
+            // listener Arc going out of scope after this releases the
+            // bound pairing port for the next attempt.
+            if let Some(s) = flow.post_pairing {
+                let _ = s.stream.shutdown(Shutdown::Both);
+            }
+            // worker_handle is best-effort joined — if the worker is
+            // wedged on the listener accept, dropping the listener Arc
+            // unblocks it (TcpListener::accept returns an error on
+            // socket close). We don't block the IPC thread on that
+            // join: detach.
+            let _ = flow.worker_handle;
+        }
         Ok(())
     }
 
@@ -708,6 +1030,345 @@ impl Drop for SyncRuntime {
         self.stop_emitter();
         let _ = self.discovery.stop();
     }
+}
+
+// ─── Pairing worker threads ───────────────────────────────────────────────
+//
+// Both workers follow the same shape:
+//   1. Get the plaintext socket (initiator: accept; responder: dial).
+//   2. Hello packet exchange — each side sends `LEN(2) + device_id`.
+//   3. PAKE three-step over the same socket (the only thing safe to
+//      send before keys exist is PAKE itself).
+//   4. Key-confirmation MAC exchange. Mismatch ⇒ feed the wrong MAC into
+//      `finalize_with_confirmation` so the lockout counter advances.
+//   5. Engine: `drive_*_after_pake` runs Noise XX + long-term-key
+//      attestation + peer-trust upsert.
+//   6. Compute peer fingerprint from persisted Ed25519 pubkey, write
+//      `AwaitingConfirmation` + `peer_fingerprint` + `post_pairing` back
+//      into the flow.
+//
+// On any error we set `state_kind = Failed` and stash the error string.
+
+fn initiator_worker(
+    runtime: Arc<SyncRuntime>,
+    session_id: String,
+    listener: Arc<TcpListener>,
+    pin: String,
+) {
+    // Accept with a timeout so a stalled worker can't pin the port
+    // forever. Implemented via `set_nonblocking` + a bounded poll loop
+    // so we observe `pairing_cancel` (which drops the listener Arc
+    // and therefore breaks the accept) within ~50 ms.
+    let stream = match accept_with_deadline(&listener, PAIRING_WORKER_TIMEOUT) {
+        Ok(s) => s,
+        Err(e) => {
+            mark_failed(&runtime, &session_id, format!("accept: {e}"));
+            return;
+        }
+    };
+
+    drive_pake_and_engine(runtime, session_id, stream, pin, PairingRole::Initiator);
+}
+
+fn responder_worker(
+    runtime: Arc<SyncRuntime>,
+    session_id: String,
+    addr: SocketAddr,
+    pin: String,
+) {
+    let stream = match TcpStream::connect_timeout(&addr, PAIRING_WORKER_TIMEOUT) {
+        Ok(s) => s,
+        Err(e) => {
+            mark_failed(&runtime, &session_id, format!("dial {addr}: {e}"));
+            return;
+        }
+    };
+    drive_pake_and_engine(runtime, session_id, stream, pin, PairingRole::Responder);
+}
+
+/// Block on `listener.accept()` for up to `deadline`. Returns the
+/// accepted stream or an error on timeout / cancellation. Polls on a
+/// 50 ms cadence so cancel-via-listener-drop is observed promptly.
+fn accept_with_deadline(
+    listener: &TcpListener,
+    deadline: Duration,
+) -> std::io::Result<TcpStream> {
+    listener.set_nonblocking(true)?;
+    let stop_at = Instant::now() + deadline;
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false)?;
+                return Ok(stream);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= stop_at {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "pairing accept timeout",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn drive_pake_and_engine(
+    runtime: Arc<SyncRuntime>,
+    session_id: String,
+    mut stream: TcpStream,
+    pin: String,
+    role: PairingRole,
+) {
+    // Read/write timeouts so a hung peer surfaces as `Failed` rather
+    // than a phantom "awaiting_peer" forever. The engine's Noise
+    // handshake also benefits.
+    let _ = stream.set_read_timeout(Some(PAKE_IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(PAKE_IO_TIMEOUT));
+    let _ = stream.set_nodelay(true);
+
+    let self_id = runtime.identity.device_id().to_string();
+
+    // Hello: exchange device ids.
+    if let Err(e) = write_len_prefixed(&mut stream, self_id.as_bytes()) {
+        mark_failed(&runtime, &session_id, format!("hello write: {e}"));
+        return;
+    }
+    let peer_id = match read_len_prefixed_string(&mut stream) {
+        Ok(s) => s,
+        Err(e) => {
+            mark_failed(&runtime, &session_id, format!("hello read: {e}"));
+            return;
+        }
+    };
+
+    // Stash peer_id eagerly so `pairing_cancel` / `pairing_step` can
+    // see who we're talking to even before PAKE finishes.
+    if let Ok(mut sessions) = runtime.pairing_sessions.lock() {
+        if let Some(flow) = sessions.get_mut(&session_id) {
+            // Responder may already have a peer_device_id from the IPC
+            // call — assert consistency. Initiator learns it here.
+            if let Some(prior) = flow.peer_device_id.as_deref() {
+                if prior != peer_id {
+                    let msg = format!("hello peer id mismatch: got {peer_id}, expected {prior}");
+                    flow.state_kind = PairingState::Failed;
+                    flow.error = Some(msg);
+                    return;
+                }
+            } else {
+                flow.peer_device_id = Some(peer_id.clone());
+            }
+        } else {
+            // Session vanished (cancelled) — bail.
+            return;
+        }
+    }
+
+    // Drive PAKE. Per the spec, `id_a` is always the initiator's id and
+    // `id_b` the responder's, regardless of which role we're playing.
+    let (id_a, id_b) = match role {
+        PairingRole::Initiator => (self_id.clone(), peer_id.clone()),
+        PairingRole::Responder => (peer_id.clone(), self_id.clone()),
+    };
+
+    let raw_keys = match role {
+        PairingRole::Initiator => {
+            let s1 = match start_initiator(&pin, &id_a, &id_b) {
+                Ok(s) => s,
+                Err(e) => {
+                    mark_failed(&runtime, &session_id, format!("pake start: {e:?}"));
+                    return;
+                }
+            };
+            if let Err(e) = stream.write_all(&s1.step1_packet()) {
+                mark_failed(&runtime, &session_id, format!("step1 write: {e}"));
+                return;
+            }
+            let mut step2 = [0u8; pake_cpace::STEP2_PACKET_BYTES];
+            if let Err(e) = stream.read_exact(&mut step2) {
+                mark_failed(&runtime, &session_id, format!("step2 read: {e}"));
+                return;
+            }
+            match s1.step3(&step2) {
+                Ok(rk) => rk,
+                Err(e) => {
+                    mark_failed(&runtime, &session_id, format!("step3: {e:?}"));
+                    return;
+                }
+            }
+        }
+        PairingRole::Responder => {
+            let mut step1 = [0u8; pake_cpace::STEP1_PACKET_BYTES];
+            if let Err(e) = stream.read_exact(&mut step1) {
+                mark_failed(&runtime, &session_id, format!("step1 read: {e}"));
+                return;
+            }
+            let r = match respond(&step1, &pin, &id_a, &id_b) {
+                Ok(r) => r,
+                Err(e) => {
+                    mark_failed(&runtime, &session_id, format!("respond: {e:?}"));
+                    return;
+                }
+            };
+            if let Err(e) = stream.write_all(&r.step2_packet()) {
+                mark_failed(&runtime, &session_id, format!("step2 write: {e}"));
+                return;
+            }
+            r.raw_keys
+        }
+    };
+
+    // Key-confirmation: send our MAC, receive the peer's, finalize.
+    let local_mac = key_confirmation_mac(&raw_keys.k2, &id_a, &id_b);
+    if let Err(e) = stream.write_all(&local_mac) {
+        mark_failed(&runtime, &session_id, format!("mac write: {e}"));
+        return;
+    }
+    let mut peer_mac = [0u8; 32];
+    if let Err(e) = stream.read_exact(&mut peer_mac) {
+        mark_failed(&runtime, &session_id, format!("mac read: {e}"));
+        return;
+    }
+
+    // We need the session lock briefly to call `finalize_with_confirmation`,
+    // which mutates the lockout counter. Hold the lock only for the
+    // attempt-counter update; release before driving the engine (slow).
+    let confirm_outcome = {
+        let sessions = match runtime.pairing_sessions.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let Some(flow) = sessions.get(&session_id) else {
+            return;
+        };
+        finalize_with_confirmation(&raw_keys, &peer_mac, &flow.session)
+    };
+    if let Err(e) = confirm_outcome {
+        // Bump the failure state. Lockout (3 strikes) is reflected by
+        // `pairing_step` reading the session's `is_locked` flag.
+        let attempts_remaining_after = match runtime.pairing_sessions.lock() {
+            Ok(s) => s
+                .get(&session_id)
+                .and_then(|f| f.session.failed_count().ok())
+                .map(|n| LOCKOUT_AFTER_ATTEMPTS.saturating_sub(n)),
+            Err(_) => None,
+        };
+        mark_failed(
+            &runtime,
+            &session_id,
+            format!("key confirmation: {e:?} (attempts_remaining≈{attempts_remaining_after:?})"),
+        );
+        return;
+    }
+    let k2 = raw_keys.k2;
+
+    // Now run the engine. This requires an active SyncState — without
+    // one the peer-trust upsert can't persist.
+    let state = match runtime.require_active_state() {
+        Ok(s) => s,
+        Err(e) => {
+            mark_failed(&runtime, &session_id, format!("no active vault: {e:?}"));
+            return;
+        }
+    };
+    let signing_key = runtime.identity.signing_key().clone();
+    let noise_kp = runtime.noise_kp.clone();
+
+    let post = match role {
+        PairingRole::Initiator => drive_initiator_after_pake(
+            &mut stream,
+            &noise_kp,
+            &signing_key,
+            &self_id,
+            &peer_id,
+            &k2,
+            &state,
+        ),
+        PairingRole::Responder => drive_responder_after_pake(
+            &mut stream,
+            &noise_kp,
+            &signing_key,
+            &self_id,
+            &peer_id,
+            &k2,
+            &state,
+        ),
+    };
+    let post = match post {
+        Ok(p) => p,
+        Err(e) => {
+            mark_failed(&runtime, &session_id, format!("engine drive: {e:?}"));
+            return;
+        }
+    };
+
+    // Compute the fingerprint from the peer's persisted long-term
+    // pubkey — the engine just wrote it under PeerTrust::Trusted, so
+    // `peer_pubkey` returns Some.
+    let fingerprint = state
+        .peer_pubkey(&peer_id)
+        .ok()
+        .flatten()
+        .map(|pk| fingerprint_from_pubkey(&pk));
+
+    if let Ok(mut sessions) = runtime.pairing_sessions.lock() {
+        if let Some(flow) = sessions.get_mut(&session_id) {
+            flow.post_pairing = Some(post);
+            flow.peer_fingerprint = fingerprint;
+            flow.raw_keys = Some(raw_keys);
+            flow.state_kind = PairingState::AwaitingConfirmation;
+        }
+    }
+}
+
+fn write_len_prefixed(stream: &mut TcpStream, body: &[u8]) -> std::io::Result<()> {
+    if body.len() > u16::MAX as usize {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "len-prefix payload too large",
+        ));
+    }
+    stream.write_all(&(body.len() as u16).to_be_bytes())?;
+    stream.write_all(body)?;
+    Ok(())
+}
+
+fn read_len_prefixed_string(stream: &mut TcpStream) -> std::io::Result<String> {
+    let mut len_buf = [0u8; 2];
+    stream.read_exact(&mut len_buf)?;
+    let n = u16::from_be_bytes(len_buf) as usize;
+    if n > 256 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "hello id too long",
+        ));
+    }
+    let mut buf = vec![0u8; n];
+    stream.read_exact(&mut buf)?;
+    String::from_utf8(buf).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("hello utf8: {e}"))
+    })
+}
+
+fn mark_failed(runtime: &Arc<SyncRuntime>, session_id: &str, msg: String) {
+    if let Ok(mut sessions) = runtime.pairing_sessions.lock() {
+        if let Some(flow) = sessions.get_mut(session_id) {
+            flow.state_kind = PairingState::Failed;
+            flow.error = Some(msg);
+        }
+    }
+}
+
+/// Same recipe `Identity::pubkey_fp` uses on our own key: derive the
+/// device id (`base32(SHA-256(pubkey)[..16])`) and take the first 8 chars.
+fn fingerprint_from_pubkey(pubkey: &[u8; 32]) -> String {
+    use data_encoding::BASE32_NOPAD;
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(pubkey);
+    let device_id = BASE32_NOPAD.encode(&digest[..16]);
+    device_id.chars().take(8).collect()
 }
 
 fn peer_row_exists(state: &SyncState, peer_device_id: &str) -> Result<bool, VaultError> {
@@ -785,15 +1446,18 @@ pub fn sync_list_paired_peers(
 pub fn sync_pairing_start_initiator(
     runtime: tauri::State<'_, Arc<SyncRuntime>>,
 ) -> Result<PairingStartInitiatorDto, VaultError> {
-    runtime.pairing_start_initiator()
+    runtime.inner().pairing_start_initiator(None, None)
 }
 
 #[tauri::command]
 pub fn sync_pairing_start_responder(
     runtime: tauri::State<'_, Arc<SyncRuntime>>,
     pin: String,
+    peer_device_id: Option<String>,
 ) -> Result<PairingStartResponderDto, VaultError> {
-    runtime.pairing_start_responder(&pin)
+    runtime
+        .inner()
+        .pairing_start_responder(&pin, peer_device_id, None)
 }
 
 #[tauri::command]
@@ -822,6 +1486,19 @@ pub fn sync_pairing_cancel(
     session_id: String,
 ) -> Result<(), VaultError> {
     runtime.pairing_cancel(&session_id)
+}
+
+#[tauri::command]
+pub fn sync_pairing_grant_vault(
+    runtime: tauri::State<'_, Arc<SyncRuntime>>,
+    session_id: String,
+    vault_id: String,
+    scope: String,
+) -> Result<(), VaultError> {
+    let parsed = Scope::parse(&scope).ok_or_else(|| VaultError::SyncState {
+        msg: format!("invalid scope: {scope}"),
+    })?;
+    runtime.pairing_grant_vault(&session_id, &vault_id, parsed)
 }
 
 #[tauri::command]
@@ -862,9 +1539,10 @@ pub(crate) use self::testing::*;
 mod testing {
     use super::*;
 
-    /// Test-only constructor that pre-populates a pairing flow with raw
-    /// shared keys so confirmation paths can be exercised without a
-    /// running transport layer. Returns the session id.
+    /// Test-only constructor that pre-populates a pairing flow already
+    /// at the `AwaitingConfirmation` state — bypasses the worker thread
+    /// so unit tests can exercise the `pairing_confirm` path without
+    /// running PAKE or wiring a transport. Returns the session id.
     pub(crate) fn inject_pairing_flow_for_test(
         runtime: &SyncRuntime,
         peer_device_id: &str,
@@ -873,13 +1551,18 @@ mod testing {
         let session_id = Uuid::new_v4().to_string();
         let session = PairingSession::new();
         session.issue_pin()?;
-        let _ = runtime; // identity is captured implicitly through `raw_keys.id_a` / `id_b`.
+        let _ = runtime;
         let flow = PairingFlow {
             session,
             role: PairingRole::Initiator,
             peer_device_id: Some(peer_device_id.to_string()),
             peer_fingerprint: Some(peer_device_id.chars().take(8).collect()),
             raw_keys: Some(raw_keys),
+            state_kind: PairingState::AwaitingConfirmation,
+            error: None,
+            post_pairing: None,
+            listener_handle: None,
+            worker_handle: None,
         };
         runtime
             .pairing_sessions
@@ -1107,34 +1790,41 @@ mod tests {
     #[test]
     fn pairing_start_initiator_returns_session_id_pin_and_expiry() {
         let rt = build_runtime();
-        let dto = rt.pairing_start_initiator().unwrap();
+        let dto = rt.pairing_start_initiator(None, Some(0)).unwrap();
         assert_eq!(dto.pin.len(), 6);
         assert!(dto.pin.chars().all(|c| c.is_ascii_digit()));
         assert!(!dto.session_id.is_empty());
         assert!(dto.expires_at_unix > 0);
+        // Tear down so the worker thread + ephemeral listener exit
+        // promptly rather than dangling for the full PAIRING_WORKER_TIMEOUT.
+        rt.pairing_cancel(&dto.session_id).unwrap();
     }
 
     #[test]
     fn pairing_start_responder_validates_pin() {
         let rt = build_runtime();
         // Non-numeric PIN must reject before the session is created.
-        let err = rt.pairing_start_responder("abcdef").expect_err("non-numeric");
+        let err = rt
+            .pairing_start_responder("abcdef", None, None)
+            .expect_err("non-numeric");
         match err {
             VaultError::SyncState { .. } => {}
             other => panic!("wrong error: {other:?}"),
         }
-        // Valid 6-digit PIN must succeed.
-        let dto = rt.pairing_start_responder("123456").unwrap();
+        // Valid 6-digit PIN with no peer/addr — sits in awaiting_peer.
+        let dto = rt.pairing_start_responder("123456", None, None).unwrap();
         assert!(!dto.session_id.is_empty());
+        rt.pairing_cancel(&dto.session_id).unwrap();
     }
 
     #[test]
     fn pairing_step_returns_awaiting_peer_for_fresh_session() {
         let rt = build_runtime();
-        let started = rt.pairing_start_initiator().unwrap();
+        let started = rt.pairing_start_initiator(None, Some(0)).unwrap();
         let step = rt.pairing_step(&started.session_id, None).unwrap();
         assert_eq!(step.kind, "awaiting_peer");
         assert_eq!(step.attempts_remaining, Some(LOCKOUT_AFTER_ATTEMPTS));
+        rt.pairing_cancel(&started.session_id).unwrap();
     }
 
     #[test]
@@ -1150,7 +1840,7 @@ mod tests {
     #[test]
     fn pairing_cancel_removes_session() {
         let rt = build_runtime();
-        let started = rt.pairing_start_initiator().unwrap();
+        let started = rt.pairing_start_initiator(None, Some(0)).unwrap();
         rt.pairing_cancel(&started.session_id).unwrap();
         // After cancel, step on the same id must error with "unknown".
         let err = rt.pairing_step(&started.session_id, None).unwrap_err();
@@ -1164,18 +1854,19 @@ mod tests {
     }
 
     #[test]
-    fn pairing_confirm_errors_when_no_raw_keys_yet() {
+    fn pairing_confirm_errors_when_not_at_confirmation_step() {
         let rt = build_runtime();
-        let started = rt.pairing_start_initiator().unwrap();
+        let started = rt.pairing_start_initiator(None, Some(0)).unwrap();
         let err = rt.pairing_confirm(&started.session_id).unwrap_err();
         match err {
-            VaultError::SyncState { msg } => assert!(msg.contains("not yet")),
+            VaultError::SyncState { msg } => assert!(msg.contains("confirmation")),
             other => panic!("wrong error: {other:?}"),
         }
+        rt.pairing_cancel(&started.session_id).unwrap();
     }
 
     #[test]
-    fn pairing_confirm_persists_peer_when_keys_present() {
+    fn pairing_confirm_advances_state_to_complete() {
         let rt = build_runtime();
         let tmp = TempDir::new().unwrap();
         let _state = open_active_state(&rt, &tmp);
@@ -1189,13 +1880,9 @@ mod tests {
             inject_pairing_flow_for_test(&rt, "TESTPEERIDXXXXXXX", raw).unwrap();
         let dto = rt.pairing_confirm(&session_id).unwrap();
         assert_eq!(dto.device_id, "TESTPEERIDXXXXXXX");
-        // Peer is now in the trust store (note: pubkey is placeholder
-        // bytes per UI-1's transport-pending caveat, so peer_pubkey()
-        // returns Some for trusted peers regardless of whether keys are
-        // real; the row exists.)
-        let active = rt.active_sync_state().unwrap();
-        let peers = active.list_paired_peers().unwrap();
-        assert!(peers.iter().any(|p| p.peer_device_id == "TESTPEERIDXXXXXXX"));
+        // After confirm, step reports `complete` so the UI advances.
+        let step = rt.pairing_step(&session_id, None).unwrap();
+        assert_eq!(step.kind, "complete");
     }
 
     #[test]
