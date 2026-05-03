@@ -1,0 +1,21 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "VaultCore (B)",
+  "identifier": "com.vaultcore.app.uat-b",
+  "build": {
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "pnpm dev:b"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "VaultCore (B)",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}
