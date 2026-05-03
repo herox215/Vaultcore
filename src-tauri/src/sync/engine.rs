@@ -209,6 +209,15 @@ impl SyncEngine {
             ChangeKind::Deleted => {
                 let abs = self.absolute_path(&event.path)?;
                 self.register_write_ignore(&abs)?;
+                // Symmetry with `apply_remote_write`: the engine persists
+                // sync-state on inbound. The matching tombstone row keeps
+                // `is_tombstoned` consistent across peers and lets GC
+                // expire it after `TOMBSTONE_TTL_SECS`.
+                self.state.tombstones().record_delete(
+                    &event.vault_id,
+                    &path_str,
+                    &event.version_vector,
+                )?;
                 Ok(InboundDecision::Delete { path: abs })
             }
         }
