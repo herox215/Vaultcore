@@ -844,6 +844,29 @@ export async function syncPairingCancel(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * Issue a vault grant inside an active pairing session. Unlike
+ * `syncGrantVault`, which targets an already-paired peer in the
+ * persisted DB, this one routes through the pairing engine's open
+ * Noise channel so the grant is exchanged with the peer in-flight
+ * during step 4 of the pairing flow.
+ */
+export async function syncPairingGrantVault(
+  sessionId: string,
+  vaultId: string,
+  scope: "read" | "read+write",
+): Promise<void> {
+  try {
+    await invoke<void>("sync_pairing_grant_vault", {
+      sessionId,
+      vaultId,
+      scope,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 export async function syncGrantVault(
   peerDeviceId: string,
   vaultId: string,

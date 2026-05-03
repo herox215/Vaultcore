@@ -36,6 +36,7 @@ import {
   syncPairingConfirm,
   syncPairingCancel,
   syncGrantVault,
+  syncPairingGrantVault,
   syncRevokePeer,
   syncRevokeVaultGrant,
   type SelfIdentity,
@@ -350,6 +351,24 @@ export async function grantVault(
   scope: "read" | "read+write",
 ): Promise<void> {
   await syncGrantVault(peerDeviceId, vaultId, scope);
+  await refreshPairedPeers();
+}
+
+/**
+ * Issue a vault grant inside an active pairing session. Routes through
+ * the pairing engine's open Noise channel — both sides must be in step
+ * 4 of their respective PairingModal flows simultaneously, since the
+ * underlying engine call is symmetric and blocks waiting for the peer.
+ */
+export async function pairingGrantVault(
+  vaultId: string,
+  scope: "read" | "read+write",
+): Promise<void> {
+  const session = get(internal).pendingPairingSession;
+  if (!session) {
+    throw new Error("pairingGrantVault: no active pairing session");
+  }
+  await syncPairingGrantVault(session.session_id, vaultId, scope);
   await refreshPairedPeers();
 }
 

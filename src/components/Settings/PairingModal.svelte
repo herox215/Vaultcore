@@ -30,7 +30,7 @@
     stepPairing,
     confirmPairing,
     cancelPairing,
-    grantVault,
+    pairingGrantVault,
   } from "../../store/syncStore";
   import type { VaultRef, PairingStep } from "../../ipc/commands";
 
@@ -247,15 +247,11 @@
     if (grantedVaultIds.size === 0 || submitting) return;
     submitting = true;
     try {
-      // Issue grants for the checked vaults. We don't know the peer's
-      // device_id from the modal scope alone — confirm has just landed,
-      // so the freshly-paired peer is the most-recently-paired entry.
-      // To keep this self-contained we read `lastStep.peer_fingerprint`
-      // as a stable handle the syncStore can map; in the integration
-      // (UI-1.5) this resolves to a real device_id.
-      const peerHandle = lastStep?.peer_fingerprint ?? "";
+      // Issue grants over the active pairing session's open Noise
+      // channel. Both sides must be in step 4 simultaneously — the
+      // engine call is symmetric and blocks waiting for the peer.
       for (const vaultId of grantedVaultIds) {
-        await grantVault(peerHandle, vaultId, "read+write");
+        await pairingGrantVault(vaultId, "read+write");
       }
       finishAndClose();
     } catch (e) {
