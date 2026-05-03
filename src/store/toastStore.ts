@@ -1,15 +1,40 @@
-// toastStore — UI-04 unified error surface.
+// toastStore — UI-04 unified error surface, extended in UI-5.
 // Classic Svelte `writable` per D-06 / RC-01. Caps at 3 stacked toasts
-// (oldest evicted) and auto-dismisses each toast after 5000ms.
+// (oldest evicted) and auto-dismisses each toast after 5000ms unless
+// the caller passes `persist: true` (UI-5: stale-peer resurrect must
+// never auto-dismiss — user decision 3).
 
 import { writable } from "svelte/store";
 
 export type ToastVariant = "error" | "conflict" | "clean-merge" | "info" | "warning";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: number;
   variant: ToastVariant;
   message: string;
+  /** UI-5: when true the toast stays until explicitly dismissed. */
+  persist?: boolean;
+  /** UI-5: optional inline action button rendered next to the message. */
+  action?: ToastAction;
+  /** UI-5: override the default ARIA role ("status"). Use "alert" for
+   *  toasts that demand immediate attention (resurrect prompt). */
+  role?: "status" | "alert";
+  /** UI-5: override the default aria-live ("polite"). */
+  ariaLive?: "polite" | "assertive";
+}
+
+export interface PushToastArgs {
+  variant: ToastVariant;
+  message: string;
+  persist?: boolean;
+  action?: ToastAction;
+  role?: "status" | "alert";
+  ariaLive?: "polite" | "assertive";
 }
 
 const MAX_TOASTS = 3;
@@ -35,9 +60,17 @@ function scheduleDismiss(id: number): void {
   timers.set(id, t);
 }
 
-function pushToast(args: { variant: ToastVariant; message: string }): number {
+function pushToast(args: PushToastArgs): number {
   const id = nextId++;
-  const toast: Toast = { id, variant: args.variant, message: args.message };
+  const toast: Toast = {
+    id,
+    variant: args.variant,
+    message: args.message,
+    persist: args.persist ?? false,
+  };
+  if (args.action !== undefined) toast.action = args.action;
+  if (args.role !== undefined) toast.role = args.role;
+  if (args.ariaLive !== undefined) toast.ariaLive = args.ariaLive;
   _store.update((toasts) => {
     const next = [...toasts, toast];
     while (next.length > MAX_TOASTS) {
@@ -46,7 +79,7 @@ function pushToast(args: { variant: ToastVariant; message: string }): number {
     }
     return next;
   });
-  scheduleDismiss(id);
+  if (!toast.persist) scheduleDismiss(id);
   return id;
 }
 
