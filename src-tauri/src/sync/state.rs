@@ -327,6 +327,112 @@ impl SyncState {
         Ok(Some(super::capability::Capability::from_bytes(&bytes)?))
     }
 
+    /// Enumerate every `Trusted` peer with its display name + last-seen
+    /// timestamp. Used by the IPC bridge's `sync_list_paired_peers`
+    /// command to populate the Settings → Sync paired-devices list.
+    /// Revoked / superseded peers are excluded from the response.
+    pub fn list_paired_peers(&self) -> Result<Vec<PairedPeerRecord>, VaultError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT peer_device_id, peer_name, last_seen
+                 FROM sync_peers
+                 WHERE trust_state = ?1
+                 ORDER BY peer_device_id",
+            )
+            .map_err(sqlite_err)?;
+        let rows = stmt
+            .query_map(rusqlite::params![PeerTrust::Trusted.as_str()], |r| {
+                Ok(PairedPeerRecord {
+                    peer_device_id: r.get(0)?,
+                    peer_name: r.get(1)?,
+                    last_seen: r.get::<_, Option<i64>>(2)?,
+                })
+            })
+            .map_err(sqlite_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(sqlite_err)?);
+        }
+        Ok(out)
+    }
+
+    /// All enabled grants issued to `peer_device_id` across every
+    /// `local_vault_id` tracked by this DB. Returns `(local_vault_id,
+    /// peer_vault_id, scope)` triples in stable lexicographic order.
+    pub fn list_grants_for_peer(
+        &self,
+        peer_device_id: &str,
+    ) -> Result<Vec<GrantRecord>, VaultError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT local_vault_id, peer_vault_id, scope
+                 FROM sync_vault_grants
+                 WHERE peer_device_id = ?1 AND enabled = 1
+                 ORDER BY local_vault_id",
+            )
+            .map_err(sqlite_err)?;
+        let rows = stmt
+            .query_map(rusqlite::params![peer_device_id], |r| {
+                Ok(GrantRecord {
+                    local_vault_id: r.get(0)?,
+                    peer_vault_id: r.get(1)?,
+                    scope: r.get(2)?,
+                })
+            })
+            .map_err(sqlite_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(sqlite_err)?);
+        }
+        Ok(out)
+    }
+
+    /// Disable the grant for `(local_vault_id, peer_device_id)`. The row
+    /// stays in the table so re-grant retains the previous wrapped_key
+    /// (if any) without needing a new key-exchange round-trip; capability
+    /// validation skips disabled rows via the `enabled = 1` predicate
+    /// already in `vault_grant`.
+    pub fn disable_vault_grant(
+        &self,
+        local_vault_id: &str,
+        peer_device_id: &str,
+    ) -> Result<bool, VaultError> {
+        let conn = self.lock_conn()?;
+        let n = conn
+            .execute(
+                "UPDATE sync_vault_grants SET enabled = 0
+                 WHERE local_vault_id = ?1 AND peer_device_id = ?2 AND enabled = 1",
+                rusqlite::params![local_vault_id, peer_device_id],
+            )
+            .map_err(sqlite_err)?;
+        Ok(n > 0)
+    }
+
+    /// Mark a peer's trust state as `Revoked` and disable every grant
+    /// row for that peer in one transaction. Used by
+    /// `sync_revoke_peer` when the user removes a paired device entirely
+    /// rather than per-vault. Returns the number of grants affected.
+    pub fn revoke_peer(&self, peer_device_id: &str) -> Result<usize, VaultError> {
+        let conn = self.lock_conn()?;
+        let tx = conn_transaction(&conn)?;
+        tx.execute(
+            "UPDATE sync_peers SET trust_state = ?1
+             WHERE peer_device_id = ?2",
+            rusqlite::params![PeerTrust::Revoked.as_str(), peer_device_id],
+        )
+        .map_err(sqlite_err)?;
+        let n = tx
+            .execute(
+                "UPDATE sync_vault_grants SET enabled = 0 WHERE peer_device_id = ?1",
+                rusqlite::params![peer_device_id],
+            )
+            .map_err(sqlite_err)?;
+        tx.commit().map_err(sqlite_err)?;
+        Ok(n)
+    }
+
     // ─── Read APIs ───────────────────────────────────────────────────────
 
     /// Fetch the `(content_hash, vv)` for a tracked file, if any.
@@ -515,6 +621,27 @@ impl SyncState {
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
     }
+}
+
+/// Row returned by [`SyncState::list_paired_peers`]. Shape mirrors the
+/// columns the IPC bridge cares about (id, display name, last-seen) —
+/// the long-term pubkey isn't needed by the UI and is kept off the wire
+/// to avoid accidentally surfacing it through frontend-side logging.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairedPeerRecord {
+    pub peer_device_id: String,
+    pub peer_name: String,
+    pub last_seen: Option<i64>,
+}
+
+/// Row returned by [`SyncState::list_grants_for_peer`]. Carries the raw
+/// `scope` string straight from the column so the IPC layer can pass it
+/// to `Scope::parse` without re-deserializing the full capability blob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantRecord {
+    pub local_vault_id: String,
+    pub peer_vault_id: String,
+    pub scope: String,
 }
 
 /// `sync_peers.trust_state` values per epic schema.

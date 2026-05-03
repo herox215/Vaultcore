@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use snow::TransportState;
 use tempfile::TempDir;
 
-use vaultcore_lib::sync::capability::{Capability, CapabilityBody, Scope};
+use vaultcore_lib::sync::capability::{CapabilityBody, Scope};
 use vaultcore_lib::sync::clock::SystemClock;
 use vaultcore_lib::sync::conflict::{conflict_copy_path, resolve, ResolveOutcome};
 use vaultcore_lib::sync::engine::{InboundDecision, SyncEngine};
@@ -37,8 +37,12 @@ use vaultcore_lib::sync::merkle::{diff_paths, MerkleTree};
 use vaultcore_lib::sync::pairing::{
     finalize_with_confirmation, key_confirmation_mac, respond, start_initiator, PairingSession,
 };
+use vaultcore_lib::sync::pairing_engine::{
+    drive_initiator_after_pake, drive_responder_after_pake, exchange_vault_grant_initiator,
+    exchange_vault_grant_responder,
+};
 use vaultcore_lib::sync::protocol::{ChangeEvent, ChangeKind, SyncFrame, MAX_FRAME_BYTES};
-use vaultcore_lib::sync::state::{PeerTrust, SyncState};
+use vaultcore_lib::sync::state::SyncState;
 use vaultcore_lib::sync::transport::{
     drive_handshake, generate_static_keypair, xx_initiator, xx_responder, NoiseKeypair,
 };
@@ -229,6 +233,9 @@ fn split_link(stream: TcpStream, state: TransportState) -> std::io::Result<(Peer
 /// working-tree side effects (write file, delete file, write conflict
 /// copy).
 struct Device {
+    /// Display label, kept around for log messages even when the engine
+    /// derives peer names from device ids post-UI-1.5.
+    #[allow(dead_code)]
     name: &'static str,
     self_peer_id: String,
     /// Ed25519 long-term key — used to sign capability grants.
@@ -431,9 +438,18 @@ impl Device {
 
 // ─── Trust + capability bootstrapping ─────────────────────────────────
 
-/// Mutually pair A and B in-process via PAKE + key-confirmation, persist
-/// the trust + grants on both sides, then open a Noise-encrypted TCP
-/// channel + register reader threads.
+/// Mutually pair A and B in-process via PAKE + key-confirmation, then
+/// drive the engine integration layer (`pairing_engine`) end-to-end:
+/// Noise XX bootstrap, long-term key attestation under k2 →
+/// `state.upsert_peer(.., Trusted)` on both sides, vault-grant exchange
+/// → `state.upsert_vault_grant(..)` on both sides. Returns the open
+/// noise channel A→B so the test's `peers` map can pick up where the
+/// engine left off.
+///
+/// This is the regression check for UI-1.5: the manual upsert calls
+/// have been replaced by `drive_*_after_pake` + `exchange_vault_grant_*`,
+/// and any drift between the engine's persistence and what the e2e
+/// scenarios expect would surface as the test breaking.
 fn pair_and_connect(a: &Arc<Device>, b: &Arc<Device>, addr_b_listening: SocketAddr) {
     // ─── Step 1: PAKE round-trip (matching PIN, in-process). ──────────
     let session_a = PairingSession::new();
@@ -451,50 +467,87 @@ fn pair_and_connect(a: &Arc<Device>, b: &Arc<Device>, addr_b_listening: SocketAd
     let mac_a = key_confirmation_mac(&raw_a.k2, &a.self_peer_id, &b.self_peer_id);
     finalize_with_confirmation(&raw_a, &mac_b, &session_a).expect("a finalize");
     finalize_with_confirmation(&raw_b, &mac_a, &session_b).expect("b finalize");
+    let k2_a = raw_a.k2;
+    let k2_b = raw_b.k2;
 
-    // ─── Step 2: persist peer trust on both sides. ────────────────────
-    a.state
-        .upsert_peer(
-            &b.self_peer_id,
-            &b.signing_key.verifying_key().to_bytes(),
-            b.name,
-            PeerTrust::Trusted,
+    // ─── Step 2: drive the engine on B (responder thread). ────────────
+    // The accept_loop on B is purposely *not* used during pairing — it
+    // only kicks in for steady-state IK reconnects. Pairing wants a
+    // dedicated listener so the engine controls both sides of the XX
+    // handshake without racing the steady-state acceptor.
+    let pairing_listener =
+        TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), 0)).expect("pairing bind");
+    let pairing_addr = pairing_listener.local_addr().expect("pairing addr");
+    let b_for_thread = Arc::clone(b);
+    let a_id_for_thread = a.self_peer_id.clone();
+    let pair_thread = thread::spawn(move || {
+        let (mut stream, _) = pairing_listener
+            .accept()
+            .expect("pairing accept");
+        stream.set_nodelay(true).ok();
+        let mut session = drive_responder_after_pake(
+            &mut stream,
+            &b_for_thread.noise_kp,
+            &b_for_thread.signing_key,
+            &b_for_thread.self_peer_id,
+            &a_id_for_thread,
+            &k2_b,
+            &b_for_thread.state,
         )
-        .expect("a upsert peer");
-    b.state
-        .upsert_peer(
-            &a.self_peer_id,
-            &a.signing_key.verifying_key().to_bytes(),
-            a.name,
-            PeerTrust::Trusted,
+        .expect("b drive responder");
+        let body_b = CapabilityBody::issue_v1(
+            VAULT_ID,
+            &b_for_thread.self_peer_id,
+            VAULT_ID,
+            Scope::ReadWrite,
+        );
+        exchange_vault_grant_responder(
+            &mut session,
+            &b_for_thread.signing_key,
+            &body_b,
+            &a_id_for_thread,
+            &b_for_thread.state,
         )
-        .expect("b upsert peer");
+        .expect("b grant exchange");
+    });
 
-    // ─── Step 3: cross-issue ReadWrite capability grants. ────────────
-    // Engine semantics (see `engine_tests::pair_peer_with_grant`): each
-    // side stores a capability *signed by the peer*, with body.peer_device_id
-    // equal to that peer's own device id. The row PK lands at
-    // `(vault_id, peer_id)` and verifies under the peer's pubkey from
-    // `sync_peers`.
-    let cap_b_self = Capability::sign(
-        &CapabilityBody::issue_v1(VAULT_ID, &b.self_peer_id, VAULT_ID, Scope::ReadWrite),
-        &b.signing_key,
-    );
-    let cap_a_self = Capability::sign(
-        &CapabilityBody::issue_v1(VAULT_ID, &a.self_peer_id, VAULT_ID, Scope::ReadWrite),
+    // ─── Step 3: drive the engine on A (initiator). ──────────────────
+    let mut stream = TcpStream::connect(pairing_addr).expect("pairing connect");
+    stream.set_nodelay(true).ok();
+    let mut session = drive_initiator_after_pake(
+        &mut stream,
+        &a.noise_kp,
         &a.signing_key,
+        &a.self_peer_id,
+        &b.self_peer_id,
+        &k2_a,
+        &a.state,
+    )
+    .expect("a drive initiator");
+    let body_a = CapabilityBody::issue_v1(
+        VAULT_ID,
+        &a.self_peer_id,
+        VAULT_ID,
+        Scope::ReadWrite,
     );
-    a.state
-        .upsert_vault_grant(&cap_b_self)
-        .expect("a store cap_b_self");
-    b.state
-        .upsert_vault_grant(&cap_a_self)
-        .expect("b store cap_a_self");
+    exchange_vault_grant_initiator(
+        &mut session,
+        &a.signing_key,
+        &body_a,
+        &b.self_peer_id,
+        &a.state,
+    )
+    .expect("a grant exchange");
+    pair_thread.join().expect("pairing thread");
+    // The pairing socket is no longer needed for sync — we close it and
+    // open a fresh sync connection through the steady-state accept loop
+    // below. (Reusing the pairing socket would require teaching the
+    // accept loop on B to skip the XX dance for already-bootstrapped
+    // peers; out of scope for this layer.)
+    drop(session);
 
-    // ─── Step 4: Noise XX TCP handshake A→B + register reader. ───────
+    // ─── Step 4: open the steady-state Noise channel A→B + register reader. ───
     open_outbound(a, b, addr_b_listening);
-    // Wait for B's accept loop to register the inbound side under A's
-    // device id. This is bounded — accept_loop runs hot.
     let _ = wait_until(Duration::from_secs(2), || {
         b.peers
             .lock()

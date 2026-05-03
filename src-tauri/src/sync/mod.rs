@@ -19,6 +19,7 @@ pub mod history;
 pub mod identity;
 pub mod merkle;
 pub mod pairing;
+pub mod pairing_engine;
 pub mod protocol;
 pub mod state;
 pub mod tombstone;
