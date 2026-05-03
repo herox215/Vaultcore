@@ -115,6 +115,13 @@ pub enum VaultError {
     /// prose into a `PermissionDenied { path }` field.
     #[error("Operation '{operation}' is not yet supported on Android.")]
     OperationUnsupportedOnAndroid { operation: String },
+
+    /// #416: sync-state SQLite / serialization / blob-store failure.
+    /// Catch-all for the sync metadata layer; carries a plain message
+    /// because the frontend never routes on it (sync runs in the
+    /// background and surfaces a status bar, not a per-error toast).
+    #[error("Sync state error: {msg}")]
+    SyncState { msg: String },
 }
 
 impl VaultError {
@@ -139,6 +146,7 @@ impl VaultError {
             Self::VaultPermissionRevoked { .. } => "VaultPermissionRevoked",
             Self::EncryptionUnsupportedOnAndroid => "EncryptionUnsupportedOnAndroid",
             Self::OperationUnsupportedOnAndroid { .. } => "OperationUnsupportedOnAndroid",
+            Self::SyncState { .. } => "SyncState",
         }
     }
 
@@ -178,7 +186,8 @@ impl VaultError {
             | Self::WrongPassword
             | Self::CryptoError { .. }
             | Self::PickerFailed { .. }
-            | Self::EncryptionUnsupportedOnAndroid => None,
+            | Self::EncryptionUnsupportedOnAndroid
+            | Self::SyncState { .. } => None,
         }
     }
 }

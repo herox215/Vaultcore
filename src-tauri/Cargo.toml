@@ -47,6 +47,14 @@ argon2 = "0.5"
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.8"
 
+# #416: sync-state metadata store. `bundled` ships SQLite with the binary
+# so target machines need no system sqlite, matching the "zero external
+# deps" stance for the offline P2P sync stack.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Compact binary serialization for version vectors stored as BLOBs in
+# sync_files / sync_history. Pinned to 1.x — bincode 2 changed the API.
+bincode = "1"
+
 [dev-dependencies]
 tempfile = "3"
 # Enable `tauri::test::mock_app()` so unit tests can feed a dummy AppHandle

@@ -6,6 +6,7 @@ pub mod merge;
 pub mod indexer;
 pub mod encryption;
 pub mod storage;
+pub mod sync;
 
 #[cfg(test)]
 mod tests;
