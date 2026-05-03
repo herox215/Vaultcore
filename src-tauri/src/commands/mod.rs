@@ -11,3 +11,4 @@ pub mod templates;
 pub mod export;
 pub mod encryption;
 pub mod picker;
+pub mod sync;
