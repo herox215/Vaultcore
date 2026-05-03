@@ -14,6 +14,8 @@
   import MobileSettingsSheet from "./MobileSettingsSheet.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
+  import SyncStatusPill from "../Statusbar/SyncStatusPill.svelte";
+  import { settingsModalRequest } from "../../store/settingsModalStore";
   import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
   import { tabSupportsReading } from "../../lib/tabKind";
   import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
@@ -90,6 +92,34 @@
   let commandPaletteOpen = $state(false);
   let templatePickerOpen = $state(false);
   let settingsOpen = $state(false);
+  /** UI-4 hook: cross-component opener for the Settings modal — the
+   *  SyncStatusPill error click pushes a request into
+   *  `settingsModalStore`; we forward it to the local flag here. The
+   *  pending anchor is used by SettingsModal to scroll to that section
+   *  after open. */
+  let pendingSettingsAnchor = $state<"sync" | null>(null);
+  let lastSettingsRequestSeq = 0;
+  const unsubSettingsRequest = settingsModalRequest.subscribe((req) => {
+    if (!req) return;
+    if (req.seq === lastSettingsRequestSeq) return;
+    lastSettingsRequestSeq = req.seq;
+    pendingSettingsAnchor = req.anchor;
+    settingsOpen = true;
+  });
+
+  // After Settings opens with a pending anchor, scroll the matching
+  // section into view via the agreed-on `data-testid="settings-<anchor>"`
+  // contract (see UI-2 / UI-4). queueMicrotask gives the modal a tick
+  // to mount before we look up the node.
+  $effect(() => {
+    if (!settingsOpen || !pendingSettingsAnchor) return;
+    const anchor = pendingSettingsAnchor;
+    queueMicrotask(() => {
+      const el = document.querySelector(`[data-testid="settings-${anchor}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      pendingSettingsAnchor = null;
+    });
+  });
   let dragStartX = 0;
   let dragStartWidth = 0;
 
@@ -392,6 +422,7 @@
 
   onDestroy(() => {
     unsubTab();
+    unsubSettingsRequest();
     // #395 Boy Scout — `unsubBacklinks` (line ~782) was previously module-level
     // and never torn down, leaking a backlinksStore subscriber on every
     // VaultLayout unmount (vault switch, HMR). Cleaned up here.
@@ -1133,6 +1164,10 @@
 
 <!-- #357: auto-encrypt-on-drop live progress pill. Self-hides while idle. -->
 <EncryptionStatusbar />
+
+<!-- UI-4: ambient sync status pill — stacked at bottom: 84px above the
+     encryption pill (48). Self-hides while idle/healthy. -->
+<SyncStatusPill />
 
 <!-- #389 — mobile bottom-tab-bar. Parent gates on `isMobile`; the component
      itself doesn't subscribe to viewportStore. -->
