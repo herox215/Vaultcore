@@ -12,10 +12,12 @@
 
 pub mod capability;
 pub mod clock;
+pub mod conflict;
 pub mod discovery;
 pub mod engine;
 pub mod history;
 pub mod identity;
+pub mod merkle;
 pub mod pairing;
 pub mod protocol;
 pub mod state;

@@ -81,6 +81,20 @@ CREATE TABLE IF NOT EXISTS sync_tombstones (
 
 CREATE INDEX IF NOT EXISTS idx_tombstones_expires ON sync_tombstones(expires_at);
 CREATE INDEX IF NOT EXISTS idx_history_retained ON sync_history(vault_id, path, retained_at);
+
+-- #420: per-vault Merkle hash tree backing catch-up reconciliation.
+-- One row per node: `node_path = ""` is the root folder. `parent_path`
+-- is the index used by the descent protocol to fetch direct children
+-- in O(children).
+CREATE TABLE IF NOT EXISTS sync_merkle_nodes (
+  vault_id TEXT NOT NULL,
+  node_path TEXT NOT NULL,
+  parent_path TEXT NOT NULL,
+  kind TEXT NOT NULL,                   -- 'file' | 'folder'
+  hash BLOB NOT NULL,
+  PRIMARY KEY (vault_id, node_path)
+);
+CREATE INDEX IF NOT EXISTS idx_merkle_parent ON sync_merkle_nodes(vault_id, parent_path);
 "#;
 
 /// Per-file row from `sync_files`. Returned by the read APIs the sync
