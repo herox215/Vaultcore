@@ -152,3 +152,67 @@ export function listenEncryptDropProgress(
     handler(event.payload),
   );
 }
+
+// ── UI-1 — sync events ────────────────────────────────────────────────────
+//
+// Four typed event channels emitted by `commands::sync_cmds::SyncRuntime`.
+// `peers-discovered` is debounced 250 ms server-side; everything else
+// fires once per state transition. Frontend stores must not poll any
+// `sync_*` command on a timer — the contract is event-driven.
+
+import type { DiscoveredPeer } from "./commands";
+
+export interface PeerPairedPayload {
+  device_id: string;
+  device_name: string;
+}
+
+/** Per-vault sync status. `error` is populated on the first transport
+ *  failure for a vault; cleared on the next successful sync. */
+export interface SyncStatusPayload {
+  vault_id: string;
+  peer_count: number;
+  in_flight_files: number;
+  error: string | null;
+}
+
+/** Stale-peer resurrection: a previously paired peer reappears with
+ *  pending changes. UI-5 surfaces this as a persistent toast. */
+export interface StalePeerResurrectPayload {
+  peer_device_id: string;
+  peer_name: string;
+  pending_change_count: number;
+}
+
+export const PEERS_DISCOVERED_EVENT = "sync://peers-discovered";
+export const PEER_PAIRED_EVENT = "sync://peer-paired";
+export const SYNC_STATUS_EVENT = "sync://sync-status";
+export const STALE_PEER_RESURRECT_EVENT = "sync://stale-peer-resurrect";
+
+export function listenPeersDiscovered(
+  handler: (payload: DiscoveredPeer[]) => void,
+): Promise<UnlistenFn> {
+  return listen<DiscoveredPeer[]>(PEERS_DISCOVERED_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+export function listenPeerPaired(
+  handler: (payload: PeerPairedPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<PeerPairedPayload>(PEER_PAIRED_EVENT, (event) => handler(event.payload));
+}
+
+export function listenSyncStatus(
+  handler: (payload: SyncStatusPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<SyncStatusPayload>(SYNC_STATUS_EVENT, (event) => handler(event.payload));
+}
+
+export function listenStalePeerResurrect(
+  handler: (payload: StalePeerResurrectPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<StalePeerResurrectPayload>(STALE_PEER_RESURRECT_EVENT, (event) =>
+    handler(event.payload),
+  );
+}

@@ -679,3 +679,202 @@ export async function listEncryptedFolders(): Promise<EncryptedFolderView[]> {
     throw normalizeError(e);
   }
 }
+
+// ── UI-1 — sync IPC bridge ────────────────────────────────────────────────
+//
+// Thin wrappers over the `commands::sync_cmds` Rust module. Every command
+// returns a normalized `VaultError` on failure so `syncStore` can route
+// rollback logic the same way other stores do (see `encryptedFoldersStore`).
+// No polling: the store subscribes to `sync://*` events for state updates;
+// commands are user-driven actions only (toggle discoverable, start
+// pairing, grant a vault, etc).
+
+export interface SelfIdentity {
+  device_id: string;
+  device_name: string;
+  pubkey_fingerprint: string;
+}
+
+export interface VaultRef {
+  id: string;
+  name: string;
+}
+
+export interface DiscoveredPeer {
+  device_id: string;
+  device_name: string;
+  vaults: VaultRef[];
+  /** `host:port` rendered server-side; empty string when no address yet. */
+  addr: string;
+}
+
+export interface Grant {
+  vault_id: string;
+  vault_name: string;
+  /** Backend uses `read+write` literal (not `read_write`) — matches the
+   *  capability scope serialization. */
+  scope: "read" | "read+write";
+}
+
+export interface PairedPeer {
+  device_id: string;
+  device_name: string;
+  /** Unix seconds; null when never reachable post-pair. */
+  last_seen: number | null;
+  grants: Grant[];
+}
+
+export interface PairingStartInitiator {
+  session_id: string;
+  pin: string;
+  expires_at_unix: number;
+}
+
+export interface PairingStartResponder {
+  session_id: string;
+}
+
+export type PairingStepKind =
+  | "awaiting_peer"
+  | "awaiting_confirmation"
+  | "failed"
+  | "complete";
+
+export interface PairingStep {
+  kind: PairingStepKind;
+  peer_fingerprint: string | null;
+  attempts_remaining: number | null;
+}
+
+export async function syncGetSelfIdentity(): Promise<SelfIdentity> {
+  try {
+    return await invoke<SelfIdentity>("sync_get_self_identity");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncSetDeviceName(name: string): Promise<void> {
+  try {
+    await invoke<void>("sync_set_device_name", { name });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncGetDiscoverable(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("sync_get_discoverable");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncSetDiscoverable(on: boolean): Promise<void> {
+  try {
+    await invoke<void>("sync_set_discoverable", { on });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncListDiscoveredPeers(): Promise<DiscoveredPeer[]> {
+  try {
+    return await invoke<DiscoveredPeer[]>("sync_list_discovered_peers");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncListPairedPeers(): Promise<PairedPeer[]> {
+  try {
+    return await invoke<PairedPeer[]>("sync_list_paired_peers");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncPairingStartInitiator(): Promise<PairingStartInitiator> {
+  try {
+    return await invoke<PairingStartInitiator>("sync_pairing_start_initiator");
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncPairingStartResponder(
+  pin: string,
+): Promise<PairingStartResponder> {
+  try {
+    return await invoke<PairingStartResponder>("sync_pairing_start_responder", {
+      pin,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncPairingStep(
+  sessionId: string,
+  payload?: string,
+): Promise<PairingStep> {
+  try {
+    return await invoke<PairingStep>("sync_pairing_step", {
+      sessionId,
+      payload: payload ?? null,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncPairingConfirm(sessionId: string): Promise<void> {
+  try {
+    await invoke<void>("sync_pairing_confirm", { sessionId });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncPairingCancel(sessionId: string): Promise<void> {
+  try {
+    await invoke<void>("sync_pairing_cancel", { sessionId });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncGrantVault(
+  peerDeviceId: string,
+  vaultId: string,
+  scope: "read" | "read+write",
+): Promise<void> {
+  try {
+    await invoke<void>("sync_grant_vault", {
+      peerDeviceId,
+      vaultId,
+      scope,
+    });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncRevokePeer(peerDeviceId: string): Promise<void> {
+  try {
+    await invoke<void>("sync_revoke_peer", { peerDeviceId });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
+export async function syncRevokeVaultGrant(
+  peerDeviceId: string,
+  vaultId: string,
+): Promise<void> {
+  try {
+    await invoke<void>("sync_revoke_vault_grant", { peerDeviceId, vaultId });
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
