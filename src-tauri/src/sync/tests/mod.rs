@@ -1,4 +1,6 @@
 pub mod discovery_tests;
+pub mod engine_tests;
 pub mod identity_tests;
 pub mod pairing_tests;
 pub mod state_tests;
+pub mod transport_tests;

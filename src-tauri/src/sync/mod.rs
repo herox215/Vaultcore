@@ -13,11 +13,14 @@
 pub mod capability;
 pub mod clock;
 pub mod discovery;
+pub mod engine;
 pub mod history;
 pub mod identity;
 pub mod pairing;
+pub mod protocol;
 pub mod state;
 pub mod tombstone;
+pub mod transport;
 pub mod vault_id;
 
 #[cfg(test)]
