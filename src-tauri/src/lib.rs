@@ -260,6 +260,7 @@ pub fn run() {
             commands::sync_cmds::sync_pairing_step,
             commands::sync_cmds::sync_pairing_confirm,
             commands::sync_cmds::sync_pairing_cancel,
+            commands::sync_cmds::sync_pairing_grant_vault,
             commands::sync_cmds::sync_grant_vault,
             commands::sync_cmds::sync_revoke_peer,
             commands::sync_cmds::sync_revoke_vault_grant,

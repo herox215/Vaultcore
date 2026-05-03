@@ -178,6 +178,14 @@ impl Identity {
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying
     }
+
+    /// Borrow the underlying `SigningKey` for callers that need to hand
+    /// it to crypto APIs (capability signing, `pairing_engine::drive_*`).
+    /// Stays inside the crate — outside callers should go through
+    /// [`Identity::sign`] for opaque signing.
+    pub(crate) fn signing_key(&self) -> &SigningKey {
+        &self.signing
+    }
 }
 
 /// `device_id = base32(SHA-256(pubkey)[..16])` per the epic. Returned in
