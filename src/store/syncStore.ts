@@ -291,8 +291,12 @@ export async function startInitiator(): Promise<PairingStartInitiator> {
   return dto;
 }
 
-export async function startResponder(pin: string): Promise<PairingStartResponder> {
-  const dto = await syncPairingStartResponder(pin);
+export async function startResponder(
+  pin: string,
+  peerDeviceId?: string,
+  peerAddr?: string,
+): Promise<PairingStartResponder> {
+  const dto = await syncPairingStartResponder(pin, peerDeviceId, peerAddr);
   patch({
     pendingPairingSession: {
       session_id: dto.session_id,

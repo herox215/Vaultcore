@@ -36,7 +36,7 @@
     setDeviceName,
     revokePeer,
   } from "../../store/syncStore";
-  import { openPairingModal } from "../../store/pairingModalStore";
+  import { openPairingModal, openPairingModalWithAddr } from "../../store/pairingModalStore";
   import { relativeTime } from "../../lib/relativeTime";
   import type { DiscoveredPeer } from "../../ipc/commands";
 
@@ -325,6 +325,18 @@
     openPairingModal();
   }
 
+  /** Manual peer-address entry — used when mDNS isn't available
+   *  (Android pre-NSD bridge, multicast-blocked LANs). User types
+   *  the other device's IP (optionally with :port), modal opens in
+   *  responder mode and dials that address. */
+  let manualPeerAddr = $state("");
+  function onPairManual(): void {
+    const v = manualPeerAddr.trim();
+    if (!v) return;
+    openPairingModalWithAddr(v);
+    manualPeerAddr = "";
+  }
+
   onDestroy(() => { unsubTheme(); unsubSettings(); unsubVault(); unsubCommands(); unsubSnippets(); unsubSelfIdentity(); });
 </script>
 
@@ -495,6 +507,29 @@
             onclick={onPairNew}
             data-testid="settings-sync-pair-new"
           >Neues Gerät koppeln…</button>
+        </div>
+
+        <!-- Manual peer entry: used when mDNS discovery isn't available
+             (Android pre-NSD bridge, multicast-blocked LANs). Type the
+             other device's IP (optionally :port) and pair. Reuses
+             existing input + button styling. -->
+        <div class="vc-settings-row vc-sync-pair-row">
+          <input
+            type="text"
+            class="vc-settings-text"
+            placeholder="z.B. 192.168.1.42 oder 192.168.1.42:17092"
+            bind:value={manualPeerAddr}
+            onkeydown={(e) => { if (e.key === "Enter") onPairManual(); }}
+            data-testid="settings-sync-manual-addr"
+            aria-label="Peer-Adresse manuell eingeben"
+          />
+          <button
+            type="button"
+            class="vc-settings-btn"
+            disabled={!manualPeerAddr.trim()}
+            onclick={onPairManual}
+            data-testid="settings-sync-pair-manual"
+          >Mit IP koppeln</button>
         </div>
       </section>
 

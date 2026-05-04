@@ -804,10 +804,14 @@ export async function syncPairingStartInitiator(): Promise<PairingStartInitiator
 
 export async function syncPairingStartResponder(
   pin: string,
+  peerDeviceId?: string,
+  peerAddr?: string,
 ): Promise<PairingStartResponder> {
   try {
     return await invoke<PairingStartResponder>("sync_pairing_start_responder", {
       pin,
+      peerDeviceId: peerDeviceId ?? null,
+      peerAddr: peerAddr ?? null,
     });
   } catch (e) {
     throw normalizeError(e);
