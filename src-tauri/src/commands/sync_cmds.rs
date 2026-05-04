@@ -54,7 +54,7 @@ use uuid::Uuid;
 
 use crate::error::VaultError;
 use crate::sync::capability::{Capability, CapabilityBody, Scope};
-use crate::sync::discovery::{Discovery, MdnsDiscovery, PeerAd, PROTO_VERSION};
+use crate::sync::discovery::{Discovery, DiscoveryImpl, PeerAd, PROTO_VERSION};
 use crate::sync::identity::{Identity, KeyStore, MemoryKeyStore, OsKeychainStore};
 use crate::sync::pairing::{
     finalize_with_confirmation, key_confirmation_mac, respond, start_initiator, validate_pin,
@@ -310,7 +310,7 @@ pub struct SyncRuntime {
     /// Mutable display name override. The OS hostname is the default;
     /// users can override via `sync_set_device_name`.
     device_name: Mutex<String>,
-    discovery: Arc<MdnsDiscovery>,
+    discovery: Arc<DiscoveryImpl>,
     /// Whether the discovery daemon is currently running. Mirrors the
     /// `commands::sync::DISCOVERABLE` static for backwards-compat with
     /// the existing toggle.
@@ -361,7 +361,7 @@ impl SyncRuntime {
             .ok()
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "VaultCore".to_string());
-        let discovery = Arc::new(MdnsDiscovery::new()?);
+        let discovery = Arc::new(DiscoveryImpl::new()?);
         Ok(Self {
             identity,
             noise_kp,
@@ -1460,15 +1460,50 @@ pub fn sync_pairing_start_initiator(
     runtime.inner().pairing_start_initiator(None, None)
 }
 
+/// Manual peer entry parser (e.g. on Android pre-NSD bridge): the UI
+/// passes an explicit `host:port` (or just `host`, default port appended)
+/// and we dial that directly, bypassing mDNS-resolved discovery. Empty /
+/// whitespace-only strings are treated as `None` so the UI can pass an
+/// uninhabited input field through harmlessly.
+///
+/// Public for the IPC integration tests in `sync_cmds_pairing_tests.rs`
+/// that need to exercise the exact string path the Tauri command takes.
+pub fn parse_peer_addr_string(peer_addr: Option<&str>) -> Result<Option<SocketAddr>, VaultError> {
+    match peer_addr.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => {
+            // Bracketed IPv6 form `[::1]:1234` already contains ':' but the
+            // host portion does too — distinguish by trailing `]:port`.
+            let has_explicit_port = if s.starts_with('[') {
+                s.rsplit_once(']').map(|(_, rest)| rest.starts_with(':')).unwrap_or(false)
+            } else {
+                s.contains(':')
+            };
+            let with_port = if has_explicit_port {
+                s.to_string()
+            } else {
+                format!("{}:{}", s, DEFAULT_PAIRING_PORT)
+            };
+            Ok(Some(with_port.parse::<SocketAddr>().map_err(|e| {
+                VaultError::SyncState {
+                    msg: format!("invalid peer_addr: {e}"),
+                }
+            })?))
+        }
+    }
+}
+
 #[tauri::command]
 pub fn sync_pairing_start_responder(
     runtime: tauri::State<'_, Arc<SyncRuntime>>,
     pin: String,
     peer_device_id: Option<String>,
+    peer_addr: Option<String>,
 ) -> Result<PairingStartResponderDto, VaultError> {
+    let parsed = parse_peer_addr_string(peer_addr.as_deref())?;
     runtime
         .inner()
-        .pairing_start_responder(&pin, peer_device_id, None)
+        .pairing_start_responder(&pin, peer_device_id, parsed)
 }
 
 #[tauri::command]

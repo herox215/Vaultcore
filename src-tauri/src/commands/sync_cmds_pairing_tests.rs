@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
-use crate::commands::sync_cmds::SyncRuntime;
+use crate::commands::sync_cmds::{parse_peer_addr_string, SyncRuntime, DEFAULT_PAIRING_PORT};
 use crate::sync::capability::Scope;
 use crate::sync::clock::TestClock;
 use crate::sync::history::HistoryConfig;
@@ -288,4 +288,180 @@ fn grant_vault_after_pair_persists_capability_on_both_sides() {
 
     a.pairing_cancel(&sid_a).unwrap();
     b.pairing_cancel(&sid_b).unwrap();
+}
+
+// ─── UI-7: manual peer-addr entry path (Android pre-NSD bridge) ────────────
+//
+// The UI on Android can't see peers through mDNS today, so the user types
+// the other device's IP into a text field and hits "Mit IP koppeln". The
+// IPC command parses that string into a SocketAddr and dials. These tests
+// cover the parser plus a full pairing run that goes through that exact
+// string-keyed path — the manual UAT case the human couldn't drive on the
+// phone.
+
+#[test]
+fn parse_peer_addr_appends_default_port_when_only_host_supplied() {
+    let parsed = parse_peer_addr_string(Some("127.0.0.1")).unwrap();
+    assert_eq!(parsed, Some(SocketAddr::from(([127, 0, 0, 1], DEFAULT_PAIRING_PORT))));
+}
+
+#[test]
+fn parse_peer_addr_keeps_explicit_port() {
+    let parsed = parse_peer_addr_string(Some("192.168.1.42:9999")).unwrap();
+    assert_eq!(parsed, Some(SocketAddr::from(([192, 168, 1, 42], 9999))));
+}
+
+#[test]
+fn parse_peer_addr_treats_blank_as_none() {
+    assert!(parse_peer_addr_string(None).unwrap().is_none());
+    assert!(parse_peer_addr_string(Some("")).unwrap().is_none());
+    assert!(parse_peer_addr_string(Some("   ")).unwrap().is_none());
+}
+
+#[test]
+fn parse_peer_addr_trims_surrounding_whitespace() {
+    let parsed = parse_peer_addr_string(Some("  10.0.0.5  ")).unwrap();
+    assert_eq!(parsed, Some(SocketAddr::from(([10, 0, 0, 5], DEFAULT_PAIRING_PORT))));
+}
+
+#[test]
+fn parse_peer_addr_rejects_garbage() {
+    let err = parse_peer_addr_string(Some("not-an-ip:99999999")).unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(msg.contains("invalid peer_addr"), "got: {msg}");
+}
+
+#[test]
+fn parse_peer_addr_handles_bracketed_ipv6() {
+    let parsed = parse_peer_addr_string(Some("[::1]:1234")).unwrap();
+    let sa = parsed.expect("Some");
+    assert_eq!(sa.port(), 1234);
+    assert!(sa.is_ipv6());
+
+    let parsed_bare = parse_peer_addr_string(Some("[::1]")).unwrap();
+    let sa_bare = parsed_bare.expect("Some");
+    assert_eq!(sa_bare.port(), DEFAULT_PAIRING_PORT);
+    assert!(sa_bare.is_ipv6());
+}
+
+/// End-to-end repro of the Android-flow the human couldn't drive: the
+/// initiator binds an ephemeral port (substituting for a fixed
+/// `DEFAULT_PAIRING_PORT` since CI may run multiple cases in parallel),
+/// then the responder pairs by passing the address as a *string* through
+/// the same parser the Tauri command uses. This is the path the
+/// `MobileSettingsSheet` "Mit IP koppeln" button takes when the user
+/// types `127.0.0.1` (or `127.0.0.1:<port>`) and hits the button.
+#[test]
+fn manual_addr_string_path_completes_full_pairing() {
+    let a = build_runtime();
+    let b = build_runtime();
+    let tmp_a = TempDir::new().unwrap();
+    let tmp_b = TempDir::new().unwrap();
+    let _state_a = open_active_state(&a, &tmp_a);
+    let _state_b = open_active_state(&b, &tmp_b);
+
+    // Initiator side (Mac in the user's case): user clicked "Neues Gerät
+    // koppeln…" → "Dieses Gerät zeigt den PIN". The PIN renders, the
+    // listener binds.
+    let pin = "987654";
+    let init_dto = a
+        .pairing_start_initiator(Some(pin.into()), Some(0))
+        .expect("start initiator");
+    let port = a
+        .pairing_listener_port_for_test(&init_dto.session_id)
+        .expect("listener port available");
+
+    // Responder side (Phone in the user's case): user typed
+    // "127.0.0.1:<port>" into the manual field and hit "Mit IP koppeln".
+    // The Tauri command runs `parse_peer_addr_string` on that input, then
+    // calls `pairing_start_responder` with the parsed addr.
+    let typed_addr = format!("127.0.0.1:{port}");
+    let parsed_addr = parse_peer_addr_string(Some(&typed_addr))
+        .expect("string parses")
+        .expect("Some(addr)");
+    let resp_dto = b
+        .pairing_start_responder(pin, Some(a.self_identity().device_id), Some(parsed_addr))
+        .expect("start responder via manual addr");
+
+    // Both sides reach awaiting_confirmation — proves PAKE+attestation ran.
+    assert!(
+        wait_for_kind(&a, &init_dto.session_id, "awaiting_confirmation", PAIR_DEADLINE),
+        "initiator must reach awaiting_confirmation via manual-addr path"
+    );
+    assert!(
+        wait_for_kind(&b, &resp_dto.session_id, "awaiting_confirmation", PAIR_DEADLINE),
+        "responder must reach awaiting_confirmation via manual-addr path"
+    );
+
+    // User clicks "Bestätigen" on both sides → both go to complete.
+    let _ = a.pairing_confirm(&init_dto.session_id).unwrap();
+    let _ = b.pairing_confirm(&resp_dto.session_id).unwrap();
+    assert_eq!(
+        a.pairing_step(&init_dto.session_id, None).unwrap().kind,
+        "complete"
+    );
+    assert_eq!(
+        b.pairing_step(&resp_dto.session_id, None).unwrap().kind,
+        "complete"
+    );
+}
+
+/// Same as above but the responder supplies the host *without* a port,
+/// matching the user typing just `192.168.1.42` and relying on the
+/// `DEFAULT_PAIRING_PORT` default. Asserts the parser-side contract only —
+/// the full pairing path with 17092 is covered manually by the human UAT.
+#[test]
+fn host_only_string_falls_back_to_default_port() {
+    let parsed = parse_peer_addr_string(Some("127.0.0.1"))
+        .expect("parses")
+        .expect("Some");
+    assert_eq!(parsed.port(), DEFAULT_PAIRING_PORT);
+    assert_eq!(parsed.ip().to_string(), "127.0.0.1");
+}
+
+/// Wrong PIN entered in the manual-addr flow — the responder's PAKE step
+/// derives a different k2, the key-confirmation MAC mismatches, and
+/// `pairing_step` flips to `failed` with `attempts_remaining` decremented.
+/// Replicates the negative path UAT step 13 ("falscher PIN") that the
+/// human couldn't drive on the phone.
+#[test]
+fn manual_addr_wrong_pin_fails_at_key_confirmation() {
+    let a = build_runtime();
+    let b = build_runtime();
+    let tmp_a = TempDir::new().unwrap();
+    let tmp_b = TempDir::new().unwrap();
+    let _ = open_active_state(&a, &tmp_a);
+    let _ = open_active_state(&b, &tmp_b);
+
+    let init_dto = a
+        .pairing_start_initiator(Some("111111".into()), Some(0))
+        .expect("start initiator");
+    let port = a
+        .pairing_listener_port_for_test(&init_dto.session_id)
+        .expect("listener port");
+
+    let typed = format!("127.0.0.1:{port}");
+    let parsed = parse_peer_addr_string(Some(&typed)).unwrap().unwrap();
+
+    // Responder types the wrong PIN.
+    let resp_dto = b
+        .pairing_start_responder("222222", Some(a.self_identity().device_id), Some(parsed))
+        .expect("start responder with wrong pin");
+
+    // Engine surfaces failure on both sides.
+    assert!(
+        wait_for_kind(&b, &resp_dto.session_id, "failed", PAIR_DEADLINE),
+        "responder must surface 'failed' on PIN mismatch"
+    );
+    let step_b = b.pairing_step(&resp_dto.session_id, None).unwrap();
+    assert_eq!(step_b.kind, "failed");
+    assert_eq!(
+        step_b.attempts_remaining,
+        Some(LOCKOUT_AFTER_ATTEMPTS - 1),
+        "one failed attempt → N-1 remaining"
+    );
+
+    // Initiator listener may still be hanging; cancel both to clean up.
+    let _ = a.pairing_cancel(&init_dto.session_id);
+    let _ = b.pairing_cancel(&resp_dto.session_id);
 }

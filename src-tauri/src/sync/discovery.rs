@@ -69,6 +69,15 @@ pub trait Discovery: Send + Sync {
 #[cfg(not(target_os = "android"))]
 pub use desktop::MdnsDiscovery;
 
+/// Platform-default discovery implementation. Desktop targets get the
+/// real `mdns-sd` advertiser/browser; Android falls back to a no-op
+/// stub until the NSD JNI bridge ships (epic #73 follow-up). Lets
+/// `sync_cmds::SyncRuntime` hold one type across platforms.
+#[cfg(not(target_os = "android"))]
+pub type DiscoveryImpl = MdnsDiscovery;
+#[cfg(target_os = "android")]
+pub type DiscoveryImpl = AndroidDiscovery;
+
 #[cfg(not(target_os = "android"))]
 mod desktop {
     use super::*;
@@ -299,14 +308,18 @@ mod android {
     }
 
     impl Discovery for AndroidDiscovery {
+        // Stubs intentionally Ok-and-empty rather than `unimplemented!()`
+        // so the app boots, the Settings → SYNCHRONISIERUNG section
+        // renders, and the user can pair via manual peer entry while
+        // the NSD JNI bridge lands separately.
         fn start(&self, _self_ad: PeerAd) -> Result<(), VaultError> {
-            unimplemented!("Android NSD JNI bridge — follow-up ticket")
+            Ok(())
         }
         fn stop(&self) -> Result<(), VaultError> {
-            unimplemented!("Android NSD JNI bridge — follow-up ticket")
+            Ok(())
         }
         fn peers(&self) -> Result<PeerSnapshot, VaultError> {
-            unimplemented!("Android NSD JNI bridge — follow-up ticket")
+            Ok(PeerSnapshot::default())
         }
     }
 }
