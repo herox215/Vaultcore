@@ -6,6 +6,7 @@ pub mod merge;
 pub mod indexer;
 pub mod encryption;
 pub mod storage;
+pub mod sync;
 
 #[cfg(test)]
 mod tests;
@@ -163,15 +164,39 @@ pub fn run() {
     {
         builder = builder.plugin(commands::picker::android_init());
     }
+    // #UI-1: bring up the sync runtime (identity, mDNS, pairing sessions)
+    // before the Tauri builder consumes the closure. Identity load can
+    // genuinely fail (keychain locked) — log and skip the runtime in that
+    // case rather than aborting startup. The IPC commands all gate on
+    // `tauri::State<'_, Arc<SyncRuntime>>` so a missing manage() means
+    // those commands return a clean "state not found" error which the
+    // frontend renders as "sync unavailable". Non-sync features are
+    // unaffected.
+    let sync_runtime = match commands::sync_cmds::SyncRuntime::new() {
+        Ok(r) => Some(std::sync::Arc::new(r)),
+        Err(e) => {
+            log::warn!("sync runtime unavailable: {e}");
+            None
+        }
+    };
+
     builder
         .manage(VaultState::default())
-        .setup(|app| {
+        .setup(move |app| {
             // #353 one-shot: the removed semantic-search toggle persisted
             // its state in `<app_data_dir>/semantic-enabled.json`. Purge
             // that file on boot so upgraded installs leave no traces.
             // Best-effort — missing file is the common case.
             if let Ok(dir) = app.path().app_data_dir() {
                 commands::vault::purge_legacy_semantic_toggle_file(&dir);
+            }
+            // #UI-1: register the sync runtime in Tauri state and start
+            // the debounced peers-discovered emitter. The emitter
+            // observes `runtime.discoverable()` and only fires while
+            // mDNS is active, so it's safe to start unconditionally.
+            if let Some(rt) = sync_runtime.clone() {
+                rt.start_emitter(app.handle().clone());
+                app.manage(rt);
             }
             Ok(())
         })
@@ -224,6 +249,21 @@ pub fn run() {
             commands::encryption::export_decrypted_file,
             commands::picker::pick_vault_folder,
             commands::picker::pick_save_path,
+            commands::sync_cmds::sync_get_self_identity,
+            commands::sync_cmds::sync_set_device_name,
+            commands::sync_cmds::sync_get_discoverable,
+            commands::sync_cmds::sync_set_discoverable,
+            commands::sync_cmds::sync_list_discovered_peers,
+            commands::sync_cmds::sync_list_paired_peers,
+            commands::sync_cmds::sync_pairing_start_initiator,
+            commands::sync_cmds::sync_pairing_start_responder,
+            commands::sync_cmds::sync_pairing_step,
+            commands::sync_cmds::sync_pairing_confirm,
+            commands::sync_cmds::sync_pairing_cancel,
+            commands::sync_cmds::sync_pairing_grant_vault,
+            commands::sync_cmds::sync_grant_vault,
+            commands::sync_cmds::sync_revoke_peer,
+            commands::sync_cmds::sync_revoke_vault_grant,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

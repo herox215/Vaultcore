@@ -11,3 +11,8 @@ pub mod templates;
 pub mod export;
 pub mod encryption;
 pub mod picker;
+pub mod sync;
+pub mod sync_cmds;
+
+#[cfg(test)]
+mod sync_cmds_pairing_tests;
