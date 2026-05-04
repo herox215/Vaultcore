@@ -37,6 +37,7 @@
   import {
     selfIdentity,
     discoverable as discoverableStore,
+    discoveredPeers,
     pairedPeers,
     setDiscoverable,
     revokePeer,
@@ -198,6 +199,9 @@
   }
   function onPairNew(): void {
     openPairingModal();
+  }
+  function onPairDiscovered(peer: import("../../ipc/commands").DiscoveredPeer): void {
+    openPairingModal(peer);
   }
   async function onToggleDiscoverable(e: Event): Promise<void> {
     await setDiscoverable((e.target as HTMLInputElement).checked);
@@ -370,6 +374,31 @@
               onchange={onToggleDiscoverable}
             />
           </label>
+
+          <div class="vc-mobile-settings-field">
+            <span class="vc-mobile-settings-field-label">In diesem Netzwerk gesehen</span>
+            {#if $discoveredPeers.length === 0}
+              <div class="vc-mobile-settings-vault-path" style="opacity: 0.7;">
+                Keine Geräte gefunden
+              </div>
+            {:else}
+              {#each $discoveredPeers as p (p.device_id)}
+                <div class="vc-mobile-settings-field">
+                  <div class="vc-mobile-settings-vault-path">{p.device_name}</div>
+                  <div class="vc-mobile-settings-vault-path" style="font-size: 11px; opacity: 0.7;">
+                    {p.addr || "(keine Adresse)"}
+                  </div>
+                  <button
+                    type="button"
+                    class="vc-mobile-settings-action"
+                    onclick={() => onPairDiscovered(p)}
+                  >
+                    Koppeln…
+                  </button>
+                </div>
+              {/each}
+            {/if}
+          </div>
 
           <div class="vc-mobile-settings-field">
             <span class="vc-mobile-settings-field-label">Mit IP koppeln</span>

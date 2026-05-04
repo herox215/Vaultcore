@@ -64,21 +64,24 @@ pub trait Discovery: Send + Sync {
     fn peers(&self) -> Result<PeerSnapshot, VaultError>;
 }
 
-// ─── Desktop impl ─────────────────────────────────────────────────────
+// ─── mdns-sd impl (works on desktop + Android) ─────────────────────────
+//
+// `mdns-sd` is pure Rust over UDP multicast — no Avahi-on-Linux dep, no
+// platform service. On Android we additionally need a `WifiManager
+// .MulticastLock` (acquired in `MainActivity.onCreate`) plus the
+// `CHANGE_WIFI_MULTICAST_STATE` + `ACCESS_WIFI_STATE` manifest perms,
+// otherwise the OS silently drops multicast packets.
 
-#[cfg(not(target_os = "android"))]
 pub use desktop::MdnsDiscovery;
 
-/// Platform-default discovery implementation. Desktop targets get the
-/// real `mdns-sd` advertiser/browser; Android falls back to a no-op
-/// stub until the NSD JNI bridge ships (epic #73 follow-up). Lets
-/// `sync_cmds::SyncRuntime` hold one type across platforms.
-#[cfg(not(target_os = "android"))]
+/// Platform-default discovery implementation. Same `mdns-sd`-backed
+/// `MdnsDiscovery` everywhere — Android works as long as the activity
+/// holds a `MulticastLock`. The `AndroidDiscovery` no-op stub below
+/// stays compiled out unless the multicast path proves unworkable
+/// on a given device, in which case `DiscoveryImpl` can be flipped
+/// back to it as a graceful fallback.
 pub type DiscoveryImpl = MdnsDiscovery;
-#[cfg(target_os = "android")]
-pub type DiscoveryImpl = AndroidDiscovery;
 
-#[cfg(not(target_os = "android"))]
 mod desktop {
     use super::*;
     use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
@@ -287,18 +290,20 @@ mod desktop {
     }
 }
 
-// ─── Android stub ─────────────────────────────────────────────────────
+// ─── Android no-op fallback ───────────────────────────────────────────
+//
+// Compiled out by default — `DiscoveryImpl` resolves to `MdnsDiscovery`
+// universally now that the activity holds a `MulticastLock`. Kept around
+// in case a device proves to drop multicast even with the lock; flip
+// `DiscoveryImpl` to this type as the graceful fallback (the manual
+// peer-addr entry on the SYNCHRONISIERUNG screen still pairs without
+// discovery).
 
 #[cfg(target_os = "android")]
-pub use android::AndroidDiscovery;
-
-#[cfg(target_os = "android")]
+#[allow(dead_code)]
 mod android {
     use super::*;
 
-    /// Android NSD JNI bridge — integration-tested only on emulator
-    /// (epic #73 spec). Stubbed for now; the JNI bindings land in a
-    /// follow-up.
     pub struct AndroidDiscovery;
 
     impl AndroidDiscovery {
