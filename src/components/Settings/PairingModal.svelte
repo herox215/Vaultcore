@@ -43,6 +43,11 @@
     triggerEl?: HTMLElement | null;
     /** Local device name for the key-confirmation readout. */
     selfDeviceName?: string;
+    /** When set, the modal opens directly in responder mode, skips the
+     *  role-selection step, and dials this address instead of relying
+     *  on mDNS discovery. Used on Android (no NSD bridge yet) and any
+     *  LAN where multicast is blocked. Format: "host" or "host:port". */
+    manualPeerAddr?: string | null;
     onClose: () => void;
   }
 
@@ -51,6 +56,7 @@
     vaults,
     triggerEl = null,
     selfDeviceName = "",
+    manualPeerAddr = null,
     onClose,
   }: Props = $props();
 
@@ -128,8 +134,19 @@
 
   onMount(async () => {
     if (open) {
+      // Manual-peer flow skips role selection — go straight to step 2
+      // responder so the user enters the PIN that the other device is
+      // already showing.
+      if (manualPeerAddr) {
+        role = "responder";
+        step = 2;
+      }
       await tick();
-      firstRadioEl?.focus();
+      if (manualPeerAddr) {
+        pinFieldEls[0]?.focus();
+      } else {
+        firstRadioEl?.focus();
+      }
     }
     startCountdown();
   });
@@ -192,7 +209,7 @@
     if (joined.length !== 6 || lockedOut || submitting) return;
     submitting = true;
     try {
-      await startResponder(joined);
+      await startResponder(joined, undefined, manualPeerAddr ?? undefined);
       const result = await stepPairing(joined);
       handleStepResult(result);
     } catch (e) {

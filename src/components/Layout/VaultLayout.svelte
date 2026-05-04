@@ -13,9 +13,15 @@
   import MobilePropertiesSheet from "./MobilePropertiesSheet.svelte";
   import MobileSettingsSheet from "./MobileSettingsSheet.svelte";
   import SettingsModal from "../Settings/SettingsModal.svelte";
+  import PairingModal from "../Settings/PairingModal.svelte";
   import EncryptionStatusbar from "../Statusbar/EncryptionStatusbar.svelte";
   import SyncStatusPill from "../Statusbar/SyncStatusPill.svelte";
   import { settingsModalRequest } from "../../store/settingsModalStore";
+  import {
+    pairingModal,
+    closePairingModal,
+  } from "../../store/pairingModalStore";
+  import { selfIdentity } from "../../store/syncStore";
   import TopbarReadingToggle from "./TopbarReadingToggle.svelte";
   import { tabSupportsReading } from "../../lib/tabKind";
   import PasswordPromptModal from "../common/PasswordPromptModal.svelte";
@@ -1168,6 +1174,25 @@
 <!-- UI-4: ambient sync status pill — stacked at bottom: 84px above the
      encryption pill (48). Self-hides while idle/healthy. -->
 <SyncStatusPill />
+
+<!-- UI-3: PairingModal — subscribes to pairingModalStore. Opens when
+     a SettingsModal trigger or a "Mit IP koppeln" action sets the
+     store to non-null. Vaults list is synthesised from the currently-
+     open vault path so step 4 (vault grant) has at least one entry. -->
+{#if $pairingModal !== null}
+  {@const currentPath = $vaultStore.currentPath}
+  {@const vaultName = currentPath
+    ? currentPath.split(/[\\/]/).filter(Boolean).pop() ?? "Vault"
+    : "Vault"}
+  {@const vaultId = currentPath ?? "default"}
+  <PairingModal
+    open={true}
+    vaults={[{ id: vaultId, name: vaultName }]}
+    selfDeviceName={$selfIdentity?.device_name ?? ""}
+    manualPeerAddr={$pairingModal.manualPeerAddr}
+    onClose={closePairingModal}
+  />
+{/if}
 
 <!-- #389 — mobile bottom-tab-bar. Parent gates on `isMobile`; the component
      itself doesn't subscribe to viewportStore. -->

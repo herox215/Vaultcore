@@ -22,7 +22,7 @@
    * Auto-lock is included — it's a pure setting on settingsStore with no
    * encrypted-folders UI dependency.
    */
-  import { X, ChevronLeft, ChevronRight, Palette, Type, Calendar, ShieldCheck, FolderOpen } from "lucide-svelte";
+  import { X, ChevronLeft, ChevronRight, Palette, Type, Calendar, ShieldCheck, FolderOpen, Network } from "lucide-svelte";
   import { themeStore, type Theme } from "../../store/themeStore";
   import {
     settingsStore,
@@ -34,6 +34,14 @@
     type MonoFont,
   } from "../../store/settingsStore";
   import { vaultStore } from "../../store/vaultStore";
+  import {
+    selfIdentity,
+    discoverable as discoverableStore,
+    pairedPeers,
+    setDiscoverable,
+    revokePeer,
+  } from "../../store/syncStore";
+  import { openPairingModal, openPairingModalWithAddr } from "../../store/pairingModalStore";
   import { onDestroy } from "svelte";
 
   let {
@@ -46,7 +54,7 @@
     onSwitchVault: () => void;
   } = $props();
 
-  type CategoryId = "appearance" | "fonts" | "daily" | "security" | "vault";
+  type CategoryId = "appearance" | "fonts" | "daily" | "security" | "vault" | "sync";
   let activeCategory = $state<CategoryId | null>(null);
   // bind:this writes a live DOM node here — $state matches the drawer /
   // burger pattern so Svelte's reactive scope sees the binding writes
@@ -100,11 +108,12 @@
     label: string;
     icon: typeof Palette;
   }> = [
+    { id: "vault",      label: "Vault",            icon: FolderOpen },
+    { id: "sync",       label: "Synchronisieren",  icon: Network },
     { id: "appearance", label: "Erscheinungsbild", icon: Palette },
     { id: "fonts",      label: "Schrift",          icon: Type },
     { id: "daily",      label: "Tagesnotizen",     icon: Calendar },
     { id: "security",   label: "Sicherheit",       icon: ShieldCheck },
-    { id: "vault",      label: "Vault",            icon: FolderOpen },
   ];
 
   function onThemeChange(e: Event) {
@@ -176,7 +185,27 @@
     daily: "Tagesnotizen",
     security: "Sicherheit",
     vault: "Vault",
+    sync: "Synchronisieren",
   };
+
+  // ── Sync category state (UI-7) ─────────────────────────────────────────
+  let manualPeerAddr = $state("");
+  function onPairManual(): void {
+    const v = manualPeerAddr.trim();
+    if (!v) return;
+    openPairingModalWithAddr(v);
+    manualPeerAddr = "";
+  }
+  function onPairNew(): void {
+    openPairingModal();
+  }
+  async function onToggleDiscoverable(e: Event): Promise<void> {
+    await setDiscoverable((e.target as HTMLInputElement).checked);
+  }
+  async function onRevokePeer(deviceId: string, name: string): Promise<void> {
+    if (!confirm(`Synchronisierung mit ${name} widerrufen?`)) return;
+    await revokePeer(deviceId);
+  }
 </script>
 
 {#if open}
@@ -322,6 +351,73 @@
           >
             Vault wechseln…
           </button>
+        </section>
+      {:else if activeCategory === "sync"}
+        <section class="vc-mobile-settings-section" data-testid="settings-sync">
+          <div class="vc-mobile-settings-field">
+            <span class="vc-mobile-settings-field-label">Dieses Gerät</span>
+            <div class="vc-mobile-settings-vault-path">{$selfIdentity?.device_name ?? "—"}</div>
+            <div class="vc-mobile-settings-vault-path" style="font-size: 11px; opacity: 0.7;">
+              {$selfIdentity?.device_id ?? ""}
+            </div>
+          </div>
+
+          <label class="vc-mobile-settings-field">
+            <span class="vc-mobile-settings-field-label">Auf diesem Netzwerk sichtbar</span>
+            <input
+              type="checkbox"
+              checked={$discoverableStore}
+              onchange={onToggleDiscoverable}
+            />
+          </label>
+
+          <div class="vc-mobile-settings-field">
+            <span class="vc-mobile-settings-field-label">Mit IP koppeln</span>
+            <input
+              type="text"
+              placeholder="z.B. 192.168.1.42"
+              bind:value={manualPeerAddr}
+              data-testid="settings-sync-manual-addr"
+              aria-label="Peer-Adresse manuell eingeben"
+            />
+          </div>
+          <button
+            type="button"
+            class="vc-mobile-settings-action"
+            disabled={!manualPeerAddr.trim()}
+            onclick={onPairManual}
+            data-testid="settings-sync-pair-manual"
+          >
+            Mit IP koppeln
+          </button>
+
+          <button
+            type="button"
+            class="vc-mobile-settings-action"
+            onclick={onPairNew}
+            data-testid="settings-sync-pair-new"
+          >
+            Neues Gerät koppeln…
+          </button>
+
+          {#if $pairedPeers.length > 0}
+            <div class="vc-mobile-settings-field">
+              <span class="vc-mobile-settings-field-label">Gekoppelte Geräte</span>
+            </div>
+            {#each $pairedPeers as peer (peer.device_id)}
+              <div class="vc-mobile-settings-field">
+                <div class="vc-mobile-settings-vault-path">{peer.device_name}</div>
+                <button
+                  type="button"
+                  class="vc-mobile-settings-action"
+                  onclick={() => onRevokePeer(peer.device_id, peer.device_name)}
+                  aria-label={`Synchronisierung mit ${peer.device_name} widerrufen`}
+                >
+                  Widerrufen
+                </button>
+              </div>
+            {/each}
+          {/if}
         </section>
       {/if}
     </div>

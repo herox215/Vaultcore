@@ -15,12 +15,21 @@ import type { DiscoveredPeer } from "../ipc/commands";
 export type PairingModalRequest = {
   /** When set, pre-fill the responder/initiator UI with this peer. */
   peer?: DiscoveredPeer;
+  /** When set, the modal opens directly in responder mode and dials
+   *  this address — skipping mDNS discovery. Used on Android (no NSD
+   *  bridge yet) and any LAN where multicast is blocked. */
+  manualPeerAddr?: string;
 } | null;
 
 export const pairingModal = writable<PairingModalRequest>(null);
 
 export function openPairingModal(peer?: DiscoveredPeer): void {
   pairingModal.set(peer ? { peer } : {});
+}
+
+/** Open the modal in responder mode and dial `addr` (host or host:port). */
+export function openPairingModalWithAddr(addr: string): void {
+  pairingModal.set({ manualPeerAddr: addr });
 }
 
 export function closePairingModal(): void {
